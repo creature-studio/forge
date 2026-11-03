@@ -1,0 +1,21 @@
+[package]
+name = "forge-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Application state machine and event loop for forge"
+
+[dependencies]
+forge-model = { workspace = true }
+forge-ui = { workspace = true }
+forge-fs = { workspace = true }
+forge-git = { workspace = true }
+forge-jobs = { workspace = true }
+forge-config = { workspace = true }
+forge-theme = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+crossterm = { workspace = true }
+ratatui = { workspace = true }
+arboard = { workspace = true }

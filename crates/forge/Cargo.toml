@@ -1,0 +1,17 @@
+[package]
+name = "forge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "High-performance terminal git + file manager"
+default-run = "forge"
+
+[[bin]]
+name = "forge"
+path = "src/main.rs"
+
+[dependencies]
+forge-app = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }

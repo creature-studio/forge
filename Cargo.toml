@@ -1,0 +1,68 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/forge",
+    "crates/forge-app",
+    "crates/forge-ui",
+    "crates/forge-fs",
+    "crates/forge-git",
+    "crates/forge-git-gix",
+    "crates/forge-git-cli",
+    "crates/forge-jobs",
+    "crates/forge-config",
+    "crates/forge-theme",
+    "crates/forge-model",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/example/forge"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Internal crates
+forge-app = { path = "crates/forge-app" }
+forge-ui = { path = "crates/forge-ui" }
+forge-fs = { path = "crates/forge-fs" }
+forge-git = { path = "crates/forge-git" }
+forge-git-gix = { path = "crates/forge-git-gix" }
+forge-git-cli = { path = "crates/forge-git-cli" }
+forge-jobs = { path = "crates/forge-jobs" }
+forge-config = { path = "crates/forge-config" }
+forge-theme = { path = "crates/forge-theme" }
+forge-model = { path = "crates/forge-model" }
+
+# Async / runtime
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process"] }
+
+# TUI
+ratatui = "=0.28.1"  # 0.29+ needs rustc >= 1.88; box is 1.85
+crossterm = "=0.28.1"
+
+# Git (read path)
+gix = { version = "=0.87.0", default-features = false, features = ["max-performance-safe", "status", "sha1"] }
+# Transitive pin: gix-filter → encoding_rs; 0.8.40+ needs rustc 1.88 (box is 1.85).
+# Keep Cargo.lock on encoding_rs 0.8.35 via: cargo update -p encoding_rs --precise 0.8.35
+encoding_rs = "=0.8.35"
+
+
+# Errors / serde / config
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# FS / search / util
+notify = "6.1"
+nucleo = "0.5"
+walkdir = "2.5"
+ignore = "0.4"
+directories = "6.0"
+clap = { version = "4.5", features = ["derive"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tempfile = "3.10"
+arboard = { version = "=3.4.1", default-features = false }

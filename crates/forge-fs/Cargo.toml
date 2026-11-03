@@ -1,0 +1,16 @@
+[package]
+name = "forge-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Filesystem walk, watch, preview, and ops for forge"
+
+[dependencies]
+forge-model = { workspace = true }
+forge-jobs = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "forge-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Ratatui widgets and layout for forge"
+
+[dependencies]
+forge-model = { workspace = true }
+forge-theme = { workspace = true }
+ratatui = { workspace = true }

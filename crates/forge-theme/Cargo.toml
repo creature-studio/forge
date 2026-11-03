@@ -1,0 +1,10 @@
+[package]
+name = "forge-theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Theme tokens and palettes for forge TUI"
+
+[dependencies]
+forge-model = { workspace = true }

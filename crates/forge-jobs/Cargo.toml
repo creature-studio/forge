@@ -1,0 +1,12 @@
+[package]
+name = "forge-jobs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Cancellable priority job queue for forge"
+
+[dependencies]
+forge-model = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }

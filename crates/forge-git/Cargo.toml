@@ -1,0 +1,16 @@
+[package]
+name = "forge-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Git facade: gix reads + CLI writes"
+
+[dependencies]
+forge-model = { workspace = true }
+forge-git-gix = { workspace = true }
+forge-git-cli = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
