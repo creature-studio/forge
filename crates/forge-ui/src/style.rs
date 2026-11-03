@@ -180,13 +180,13 @@ pub fn draw_section_header(
     let header = chunks[0];
     let body = chunks[1];
 
-    // Active: solid cyan title block (accent bg + dark fg). Inactive: muted on panel.
+    // Active: soft slate/cyan chip (selection lift). Inactive: muted on panel.
     let chip = format!(" {title_text} ");
     let rest = header.width as usize;
     if focused {
         let chip_w = chip.chars().count().min(rest);
         let pad = rest.saturating_sub(chip_w);
-        let chip_style = fg_bg(theme.selection_fg, theme.selection_bg).add_modifier(Modifier::BOLD);
+        let chip_style = fg_bg(theme.accent, theme.selection_bg).add_modifier(Modifier::BOLD);
         let pad_style = fg_bg(theme.title_inactive, theme.panel_bg);
         let mut spans = vec![Span::styled(chip.chars().take(chip_w).collect::<String>(), chip_style)];
         if pad > 0 {

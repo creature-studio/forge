@@ -41,6 +41,9 @@ tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "ti
 ratatui = "=0.28.1"  # 0.29+ needs rustc >= 1.88; box is 1.85
 crossterm = "=0.28.1"
 
+# Terminal display width (CJK-aware column layout)
+unicode-width = "=0.1.14"
+
 # Git (read path)
 gix = { version = "=0.87.0", default-features = false, features = ["max-performance-safe", "status", "sha1"] }
 # Transitive pin: gix-filter → encoding_rs; 0.8.40+ needs rustc 1.88 (box is 1.85).

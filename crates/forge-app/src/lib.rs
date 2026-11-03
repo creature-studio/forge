@@ -25,11 +25,12 @@ use forge_git::{
 use forge_jobs::{JobError, JobHandle, JobPriority, JobScheduler};
 use forge_model::JobId;
 use forge_ui::{
-    build_scm_rows, diff_items, diff_render_hunk_start, file_list_items, find_parent_row,
-    flatten_tree, init_icons_from_env, list_index_at, preview_line_count, scm_entry, scm_index_at,
-    scm_jump_to_column, scroll_to_hunk, staging_items, set_color_mode, ActivityTab, ContextAction,
-    ContextMenu, ContextTarget, FileListState, IconMode, PaneFocus, PaneLayout, PreviewView, ScmRow,
-    ShellState, StagingColumn, StagingState, TextLang, TreeRow, UiShell,
+    build_scm_rows, diff_items, diff_render_hunk_start, expand_ancestors_for_path,
+    file_list_items, find_parent_row, find_scm_parent_row, flatten_tree, init_icons_from_env,
+    list_index_at, scm_entry, scm_index_at, scm_jump_to_column, scroll_to_hunk, staging_items,
+    set_color_mode, ActivityTab, ContextAction, ContextMenu, ContextTarget, FileListState,
+    PaneFocus, PaneLayout, PreviewView, ScmRow, ShellState, SplitRowsCache, StagingColumn,
+    StagingState, TextLang, TreeRow, UiShell,
 };
 use forge_theme::Theme;
 use ratatui::backend::CrosstermBackend;
@@ -103,6 +104,10 @@ struct App {
     selected: usize,
     scroll: usize,
     preview_scroll: usize,
+    /// Cached side-by-side diff rows (invalidated when `file_diff` changes).
+    split_cache: SplitRowsCache,
+    /// Cached `split_cache` length for the current `file_diff` (scroll math without rebuild).
+    diff_row_count: usize,
     restore_select: Option<String>,
     status: String,
     pending_lists: Vec<PendingList>,
@@ -122,6 +127,10 @@ struct App {
     /// Flat selection index into the SCM sidebar (`build_scm_rows`).
     scm_selected: usize,
     scroll_scm: usize,
+    /// Expanded folder paths in the CHANGES tree (repo-relative).
+    scm_expanded_unstaged: HashSet<String>,
+    /// Expanded folder paths in the STAGED tree (repo-relative).
+    scm_expanded_staged: HashSet<String>,
     /// `Some` means commit modal is open with the current buffer.
     commit_input: Option<String>,
     /// Floating right-click menu.
@@ -189,12 +198,9 @@ pub fn run_with_options(opts: RunOptions) -> Result<()> {
 
     let term = std::env::var("TERM").unwrap_or_default();
     let colorterm = std::env::var("COLORTERM").unwrap_or_default();
-    let icons = match forge_ui::icon_mode() {
-        IconMode::Nerd => "nerd",
-        IconMode::Ascii => "ascii",
-    };
+    let icons = forge_ui::icon_mode().as_str();
     eprintln!(
-        "forge: palette={}  icons={icons}  TERM={term:?}  COLORTERM={colorterm:?}  (flags: --force-ansi16|--force-ansi256|--force-truecolor|--demo-colors | FORGE_COLOR=16|256|truecolor | FORGE_ICONS=nerd|ascii)",
+        "forge: palette={}  icons={icons}  TERM={term:?}  COLORTERM={colorterm:?}  (default icons=builtin | FORGE_ICONS=nerd needs a Nerd Font | flags: --force-ansi16|--force-ansi256|--force-truecolor|--demo-colors | FORGE_COLOR=16|256|truecolor | FORGE_ICONS=builtin|nerd|ascii)",
         mode.as_str()
     );
 
@@ -334,6 +340,8 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
         selected: 0,
         scroll: 0,
         preview_scroll: 0,
+        split_cache: SplitRowsCache::default(),
+        diff_row_count: 0,
         restore_select: None,
         status: format!("modern-ide | palette:{}", color_mode.as_str()),
         pending_lists: Vec::new(),
@@ -351,6 +359,8 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
         hunk_index: None,
         scm_selected: 0,
         scroll_scm: 0,
+        scm_expanded_unstaged: HashSet::new(),
+        scm_expanded_staged: HashSet::new(),
         commit_input: None,
         context_menu: None,
         should_quit: false,
@@ -395,193 +405,228 @@ async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<Stdout>>,
     app: &mut App,
 ) -> Result<()> {
+    // Draw only when state changes (Ratatui buffer rebuild is the expensive part).
+    let mut needs_redraw = true;
     while !app.should_quit {
-        terminal.draw(|frame| {
-            let cwd = app.tree_root.display().to_string();
-            let git_label = match &app.git_status {
-                Some(snap) => {
-                    // Quiet header cue; detailed counts live in the bottom strip.
-                    let root = snap
-                        .repo_root
-                        .file_name()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "repo".into());
-                    format!("- {root}")
-                }
-                None => String::new(),
-            };
-            let in_repo = app.git_status.is_some();
-
-            let preview_title;
-            let preview_view;
-            match app.preview_mode {
-                PreviewMode::Diff => {
-                    if let Some(diff) = app.file_diff.as_ref() {
-                        // Basename for file-type label; chip draws muted side + cyan name.
-                        preview_title = diff
-                            .path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(diff.path.as_str())
-                            .to_string();
-                        let hunks = diff.hunks();
-                        let (hunk_start, hunk_end, hunk_idx) = match app.hunk_index {
-                            Some(i) if i < hunks.len() => (
-                                Some(hunks[i].start),
-                                Some(hunks[i].end),
-                                Some((i, hunks.len())),
-                            ),
-                            _ if !hunks.is_empty() => (None, None, Some((0, hunks.len()))),
-                            _ => (None, None, None),
-                        };
-                        preview_view = PreviewView::Diff {
-                            path: &diff.path,
-                            side: diff.side.label(),
-                            lines: &diff.lines,
-                            hunk_start,
-                            hunk_end,
-                            hunk_idx,
-                        };
-                    } else if app.preview_loading {
-                        preview_title = "diff".into();
-                        preview_view = PreviewView::Loading;
-                    } else {
-                        preview_title = String::new();
-                        let clean = app
-                            .git_status
-                            .as_ref()
-                            .is_some_and(|s| s.unstaged.is_empty() && s.staged.is_empty());
-                        preview_view = PreviewView::Hint {
-                            text: if clean {
-                                "Working tree clean"
-                            } else {
-                                "No changes selected"
-                            },
-                        };
+        if needs_redraw {
+            terminal.draw(|frame| {
+                let cwd = app.tree_root.display().to_string();
+                let git_label = match &app.git_status {
+                    Some(snap) => {
+                        // Quiet header cue; detailed counts live in the bottom strip.
+                        let root = snap
+                            .repo_root
+                            .file_name()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "repo".into());
+                        format!("- {root}")
                     }
-                }
-                PreviewMode::File => {
-                    if app.preview_loading {
-                        preview_title = app
-                            .visible
-                            .get(app.selected)
-                            .map(|r| {
-                                r.entry
-                                    .path
-                                    .strip_prefix(&app.tree_root)
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_else(|_| r.entry.name.clone())
-                            })
-                            .unwrap_or_default();
-                        preview_view = PreviewView::Loading;
-                    } else if let Some(preview) = app.preview.as_ref() {
-                        // Relative path so the preview title can show muted dirname + basename chip.
-                        preview_title = preview
-                            .path
-                            .strip_prefix(&app.tree_root)
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|_| {
-                                preview
-                                    .path
-                                    .file_name()
-                                    .map(|s| s.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| preview.path.display().to_string())
-                            });
-                        preview_view = match &preview.content {
-                            PreviewContent::Empty => PreviewView::Idle,
-                            PreviewContent::Directory {
-                name,
-                children,
-                truncated,
-            } => PreviewView::Directory {
-                name,
-                children,
-                truncated: *truncated,
-            },
-                            PreviewContent::Binary { notice, .. } => PreviewView::Binary { notice },
-                            PreviewContent::Error { message } => PreviewView::Error { message },
-                            PreviewContent::Text {
-                                lines,
-                                truncated,
-                                bytes_read,
-                            } => PreviewView::Text {
-                                lines,
-                                truncated: *truncated,
-                                bytes_read: *bytes_read,
-                                language: TextLang::from_name(
+                    None => String::new(),
+                };
+                let in_repo = app.git_status.is_some();
+
+                let preview_title;
+                let preview_view;
+                match app.preview_mode {
+                    PreviewMode::Diff => {
+                        if let Some(diff) = app.file_diff.as_ref() {
+                            // Basename for file-type label; chip draws muted side + cyan name.
+                            preview_title = diff
+                                .path
+                                .rsplit('/')
+                                .next()
+                                .unwrap_or(diff.path.as_str())
+                                .to_string();
+                            let hunks = diff.hunks();
+                            let (hunk_start, hunk_end, hunk_idx) = match app.hunk_index {
+                                Some(i) if i < hunks.len() => (
+                                    Some(hunks[i].start),
+                                    Some(hunks[i].end),
+                                    Some((i, hunks.len())),
+                                ),
+                                _ if !hunks.is_empty() => (None, None, Some((0, hunks.len()))),
+                                _ => (None, None, None),
+                            };
+                            preview_view = PreviewView::Diff {
+                                path: &diff.path,
+                                side: diff.side.label(),
+                                lines: &diff.lines,
+                                hunk_start,
+                                hunk_end,
+                                hunk_idx,
+                            };
+                        } else if app.preview_loading {
+                            preview_title = "diff".into();
+                            preview_view = PreviewView::Loading;
+                        } else {
+                            preview_title = String::new();
+                            let clean = app
+                                .git_status
+                                .as_ref()
+                                .is_some_and(|s| s.unstaged.is_empty() && s.staged.is_empty());
+                            preview_view = PreviewView::Hint {
+                                text: if clean {
+                                    "Working tree clean"
+                                } else {
+                                    "No changes selected"
+                                },
+                            };
+                        }
+                    }
+                    PreviewMode::File => {
+                        if app.preview_loading {
+                            preview_title = app
+                                .visible
+                                .get(app.selected)
+                                .map(|r| {
+                                    r.entry
+                                        .path
+                                        .strip_prefix(&app.tree_root)
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_else(|_| r.entry.name.clone())
+                                })
+                                .unwrap_or_default();
+                            preview_view = PreviewView::Loading;
+                        } else if let Some(preview) = app.preview.as_ref() {
+                            // Relative path so the preview title can show muted dirname + basename chip.
+                            preview_title = preview
+                                .path
+                                .strip_prefix(&app.tree_root)
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_else(|_| {
                                     preview
                                         .path
                                         .file_name()
-                                        .and_then(|s| s.to_str())
-                                        .unwrap_or(""),
-                                ),
-                            },
-                        };
-                    } else {
-                        preview_title = String::new();
-                        preview_view = PreviewView::Idle;
+                                        .map(|s| s.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| preview.path.display().to_string())
+                                });
+                            preview_view = match &preview.content {
+                                PreviewContent::Empty => PreviewView::Idle,
+                                PreviewContent::Directory {
+                                    name,
+                                    children,
+                                    truncated,
+                                } => PreviewView::Directory {
+                                    name,
+                                    children,
+                                    truncated: *truncated,
+                                },
+                                PreviewContent::Binary { notice, .. } => {
+                                    PreviewView::Binary { notice }
+                                }
+                                PreviewContent::Error { message } => {
+                                    PreviewView::Error { message }
+                                }
+                                PreviewContent::Text {
+                                    lines,
+                                    truncated,
+                                    bytes_read,
+                                } => PreviewView::Text {
+                                    lines,
+                                    truncated: *truncated,
+                                    bytes_read: *bytes_read,
+                                    language: TextLang::from_name(
+                                        preview
+                                            .path
+                                            .file_name()
+                                            .and_then(|s| s.to_str())
+                                            .unwrap_or(""),
+                                    ),
+                                },
+                            };
+                        } else {
+                            preview_title = String::new();
+                            preview_view = PreviewView::Idle;
+                        }
                     }
                 }
-            }
 
-            let (unstaged, staged) = match &app.git_status {
-                Some(snap) => (snap.unstaged.as_slice(), snap.staged.as_slice()),
-                None => (&[][..], &[][..]),
-            };
+                let (unstaged, staged) = match &app.git_status {
+                    Some(snap) => (snap.unstaged.as_slice(), snap.staged.as_slice()),
+                    None => (&[][..], &[][..]),
+                };
 
-            let focus = app.focus;
-            let commit_ref = app.commit_input.as_deref();
-            let branch = app.branch.as_str();
-            let activity = app.activity;
-            let mut shell = ShellState {
-                cwd: &cwd,
-                git_label: &git_label,
-                branch,
-                status: &app.status,
-                list: FileListState {
-                    rows: &app.visible,
-                    selected: app.selected,
-                    scroll: &mut app.scroll,
-                    git: app.git_status.as_ref(),
-                    focused: false,
-                },
-                preview_title: &preview_title,
-                preview: preview_view,
-                preview_scroll: &mut app.preview_scroll,
-                staging: StagingState {
-                    unstaged,
-                    staged,
-                    selected: app.scm_selected,
-                    scroll: &mut app.scroll_scm,
-                    focused: false,
-                },
-                focus,
-                commit_input: commit_ref,
-                context_menu: app.context_menu.as_mut(),
-                in_repo,
-                activity,
-            };
-            app.layout = app.ui.draw(frame, &mut shell);
-        })?;
+                let focus = app.focus;
+                let commit_ref = app.commit_input.as_deref();
+                let branch = app.branch.as_str();
+                let activity = app.activity;
+                let mut shell = ShellState {
+                    cwd: &cwd,
+                    git_label: &git_label,
+                    branch,
+                    status: &app.status,
+                    list: FileListState {
+                        rows: &app.visible,
+                        selected: app.selected,
+                        scroll: &mut app.scroll,
+                        git: app.git_status.as_ref(),
+                        focused: false,
+                    },
+                    preview_title: &preview_title,
+                    preview: preview_view,
+                    preview_scroll: &mut app.preview_scroll,
+                    split_cache: &mut app.split_cache,
+                    staging: StagingState {
+                        unstaged,
+                        staged,
+                        expanded_unstaged: &app.scm_expanded_unstaged,
+                        expanded_staged: &app.scm_expanded_staged,
+                        selected: app.scm_selected,
+                        scroll: &mut app.scroll_scm,
+                        focused: false,
+                    },
+                    focus,
+                    commit_input: commit_ref,
+                    context_menu: app.context_menu.as_mut(),
+                    in_repo,
+                    activity,
+                };
+                app.layout = app.ui.draw(frame, &mut shell);
+            })?;
+            needs_redraw = false;
+        }
 
-        app.poll_pending_list();
-        app.poll_pending_status();
-        app.poll_pending_preview();
-        app.poll_pending_diff();
-        app.poll_pending_write();
+        let mut progressed = false;
+        progressed |= app.poll_pending_list();
+        progressed |= app.poll_pending_status();
+        progressed |= app.poll_pending_preview();
+        progressed |= app.poll_pending_diff();
+        progressed |= app.poll_pending_write();
+        if progressed {
+            needs_redraw = true;
+        }
 
-        if event::poll(Duration::from_millis(16)).context("poll events")? {
-            match event::read().context("read event")? {
-                Event::Key(key) if key.kind == KeyEventKind::Press => {
-                    app.handle_key(key);
-                }
-                Event::Mouse(mouse) => {
-                    if app.commit_input.is_none() {
-                        app.handle_mouse(mouse);
+        // Short wait while jobs fly; longer when idle so we don't spin redraw/CPU.
+        let wait = if app.has_inflight_jobs() {
+            Duration::from_millis(16)
+        } else if needs_redraw {
+            Duration::ZERO
+        } else {
+            Duration::from_millis(50)
+        };
+
+        if event::poll(wait).context("poll events")? {
+            // Drain the burst (rapid j/k / wheel) into one redraw.
+            loop {
+                match event::read().context("read event")? {
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        app.handle_key(key);
+                        needs_redraw = true;
                     }
+                    Event::Mouse(mouse) => {
+                        if app.commit_input.is_none() {
+                            app.handle_mouse(mouse);
+                            needs_redraw = true;
+                        }
+                    }
+                    Event::Resize(_, _) => {
+                        needs_redraw = true;
+                    }
+                    _ => {}
                 }
-                Event::Resize(_, _) => {}
-                _ => {}
+                if !event::poll(Duration::ZERO).unwrap_or(false) {
+                    break;
+                }
             }
         }
 
@@ -611,12 +656,12 @@ impl App {
 
     fn scm_rows(&self) -> Vec<ScmRow> {
         let (u, s) = self.scm_slices();
-        build_scm_rows(u, s)
+        build_scm_rows(u, s, &self.scm_expanded_unstaged, &self.scm_expanded_staged)
     }
 
     fn selected_scm_entry(&self) -> Option<&forge_git::ChangeEntry> {
         let rows = self.scm_rows();
-        let row = *rows.get(self.scm_selected)?;
+        let row = rows.get(self.scm_selected)?;
         let (u, s) = self.scm_slices();
         scm_entry(row, u, s)
     }
@@ -626,12 +671,112 @@ impl App {
         rows.get(self.scm_selected).map(|r| r.column())
     }
 
+    fn selected_scm_row(&self) -> Option<ScmRow> {
+        self.scm_rows().get(self.scm_selected).cloned()
+    }
+
     fn clamp_scm_selection(&mut self) {
         let len = self.scm_rows().len();
         if len == 0 {
             self.scm_selected = 0;
         } else if self.scm_selected >= len {
             self.scm_selected = len - 1;
+        }
+    }
+
+    fn scm_expanded_mut(&mut self, column: StagingColumn) -> &mut HashSet<String> {
+        match column {
+            StagingColumn::Unstaged => &mut self.scm_expanded_unstaged,
+            StagingColumn::Staged => &mut self.scm_expanded_staged,
+        }
+    }
+
+    /// Toggle expand/collapse for the folder at `index` (no-op for other rows).
+    fn toggle_scm_expand_at(&mut self, index: usize) {
+        let rows = self.scm_rows();
+        let Some(ScmRow::Folder { column, path, .. }) = rows.get(index).cloned() else {
+            return;
+        };
+        let set = self.scm_expanded_mut(column);
+        if set.contains(&path) {
+            set.remove(&path);
+        } else {
+            set.insert(path.clone());
+        }
+        // Keep selection on the same folder after rebuild.
+        let rows = self.scm_rows();
+        if let Some(i) = rows.iter().position(|r| {
+            matches!(r, ScmRow::Folder { column: c, path: p, .. } if *c == column && *p == path)
+        }) {
+            self.scm_selected = i;
+        } else {
+            self.clamp_scm_selection();
+        }
+    }
+
+    /// Expand folder, or open diff for a file row.
+    fn scm_open_or_expand(&mut self) {
+        match self.selected_scm_row() {
+            Some(ScmRow::Folder { .. }) => {
+                self.toggle_scm_expand_at(self.scm_selected);
+            }
+            Some(ScmRow::Change { .. }) => {
+                self.request_diff_for_scm_selection();
+                self.focus = PaneFocus::Preview;
+            }
+            Some(ScmRow::Section { column, .. }) => {
+                // Jump into first change if present; else no-op.
+                let rows = self.scm_rows();
+                self.scm_selected = scm_jump_to_column(&rows, column);
+                if self.selected_scm_entry().is_some() {
+                    self.request_diff_for_scm_selection();
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// `h` / Left: collapse expanded folder, else select parent, else leave Git.
+    fn scm_tree_back(&mut self) {
+        let Some(row) = self.selected_scm_row() else {
+            self.leave_git_sidebar();
+            return;
+        };
+        match row {
+            ScmRow::Folder {
+                column,
+                path,
+                expanded,
+                ..
+            } if expanded => {
+                self.scm_expanded_mut(column).remove(&path);
+                // Reselect the same folder (now collapsed).
+                let rows = self.scm_rows();
+                if let Some(i) = rows.iter().position(|r| {
+                    matches!(
+                        r,
+                        ScmRow::Folder { column: c, path: p, .. } if *c == column && *p == path
+                    )
+                }) {
+                    self.scm_selected = i;
+                }
+            }
+            ScmRow::Folder { .. } | ScmRow::Change { .. } => {
+                let rows = self.scm_rows();
+                if let Some(parent) = find_scm_parent_row(&rows, self.scm_selected) {
+                    self.scm_selected = parent;
+                    if self.selected_scm_entry().is_none() {
+                        self.preview_mode = PreviewMode::Diff;
+                        self.clear_diff_view();
+                        self.preview_loading = false;
+                        self.jobs.cancel_key("git:diff");
+                        self.pending_diff = None;
+                    }
+                } else {
+                    self.leave_git_sidebar();
+                }
+            }
+            ScmRow::Section { .. } => self.leave_git_sidebar(),
         }
     }
 
@@ -652,8 +797,7 @@ impl App {
         self.preview_loading = false;
         self.preview_scroll = 0;
         self.preview_mode = PreviewMode::File;
-        self.file_diff = None;
-        self.hunk_index = None;
+        self.clear_diff_view();
         self.pending_preview = None;
         self.pending_diff = None;
         self.jobs.cancel_key("fs:preview");
@@ -724,7 +868,7 @@ impl App {
 
     fn request_preview_for_selection(&mut self) {
         self.preview_mode = PreviewMode::File;
-        self.file_diff = None;
+        self.clear_diff_view();
         self.jobs.cancel_key("git:diff");
         self.pending_diff = None;
 
@@ -756,8 +900,7 @@ impl App {
         self.preview_mode = PreviewMode::Diff;
         self.preview_loading = true;
         self.preview_scroll = 0;
-        self.file_diff = None;
-        self.hunk_index = None;
+        self.clear_diff_view();
         self.jobs.cancel_key("fs:preview");
         self.pending_preview = None;
 
@@ -782,9 +925,8 @@ impl App {
         let Some(entry) = self.selected_scm_entry().cloned() else {
             self.status = "no change selected".into();
             self.preview_mode = PreviewMode::Diff;
-            self.file_diff = None;
+            self.clear_diff_view();
             self.preview_loading = false;
-            self.hunk_index = None;
             return;
         };
         self.request_diff(entry.path, entry.side);
@@ -876,19 +1018,77 @@ impl App {
         });
     }
 
-    fn poll_pending_list(&mut self) {
+    fn has_inflight_jobs(&self) -> bool {
+        !self.pending_lists.is_empty()
+            || self.pending_status.is_some()
+            || self.pending_preview.is_some()
+            || self.pending_diff.is_some()
+            || self.pending_write.is_some()
+    }
+
+    fn clear_diff_view(&mut self) {
+        self.file_diff = None;
+        self.hunk_index = None;
+        self.split_cache.clear();
+        self.diff_row_count = 0;
+    }
+
+    fn set_file_diff(&mut self, diff: FileDiff) {
+        self.split_cache.clear();
+        let count = if diff.lines.is_empty() {
+            1
+        } else {
+            self.split_cache.ensure(&diff.lines).max(1)
+        };
+        self.diff_row_count = count;
+        self.file_diff = Some(diff);
+    }
+
+    /// Line count for preview scrolling — O(1) for diffs (cached), O(1) for text.
+    fn preview_total_lines(&self) -> usize {
+        match self.preview_mode {
+            PreviewMode::Diff => {
+                if self.file_diff.is_some() {
+                    self.diff_row_count.max(1)
+                } else {
+                    1
+                }
+            }
+            PreviewMode::File => match self.preview.as_ref().map(|p| &p.content) {
+                None | Some(PreviewContent::Empty) => 1,
+                Some(PreviewContent::Error { .. }) => 2,
+                Some(PreviewContent::Binary { .. }) => 4,
+                Some(PreviewContent::Directory { .. }) => 5,
+                Some(PreviewContent::Text {
+                    lines, truncated, ..
+                }) => {
+                    let base = if lines.is_empty() { 1 } else { lines.len() };
+                    if *truncated {
+                        base + 2
+                    } else {
+                        base
+                    }
+                }
+            },
+        }
+    }
+
+    fn poll_pending_list(&mut self) -> bool {
+        let mut progressed = false;
         let mut i = 0;
         while i < self.pending_lists.len() {
             if let Some(result) = self.pending_lists[i].handle.try_join() {
                 let pending = self.pending_lists.remove(i);
                 self.apply_list_result(pending.path, result);
+                progressed = true;
             } else {
                 i += 1;
             }
         }
+        progressed
     }
 
-    fn poll_pending_status(&mut self) {
+    fn poll_pending_status(&mut self) -> bool {
         let done = match self.pending_status.as_mut() {
             Some(pending) => pending
                 .handle
@@ -899,10 +1099,13 @@ impl App {
         if let Some((key, result)) = done {
             self.pending_status = None;
             self.apply_status_result(key, result);
+            true
+        } else {
+            false
         }
     }
 
-    fn poll_pending_preview(&mut self) {
+    fn poll_pending_preview(&mut self) -> bool {
         let done = match self.pending_preview.as_mut() {
             Some(pending) => pending
                 .handle
@@ -913,10 +1116,13 @@ impl App {
         if let Some((path, result)) = done {
             self.pending_preview = None;
             self.apply_preview_result(path, result);
+            true
+        } else {
+            false
         }
     }
 
-    fn poll_pending_diff(&mut self) {
+    fn poll_pending_diff(&mut self) -> bool {
         let done = match self.pending_diff.as_mut() {
             Some(pending) => pending
                 .handle
@@ -930,7 +1136,7 @@ impl App {
                 Ok(Ok(diff)) => {
                     let hunk_count = diff.hunks().len();
                     self.hunk_index = if hunk_count == 0 { None } else { Some(0) };
-                    self.file_diff = Some(diff);
+                    self.set_file_diff(diff);
                     self.preview_loading = false;
                     self.preview_mode = PreviewMode::Diff;
                     self.preview_scroll = 0;
@@ -944,10 +1150,13 @@ impl App {
                 }
                 Err(JobError::Cancelled) | Err(JobError::Shutdown) => {}
             }
+            true
+        } else {
+            false
         }
     }
 
-    fn poll_pending_write(&mut self) {
+    fn poll_pending_write(&mut self) -> bool {
         let done = match self.pending_write.as_mut() {
             Some(pending) => pending.handle.try_join().map(|result| {
                 let op = match &pending.op {
@@ -992,7 +1201,11 @@ impl App {
                             self.request_list();
                         }
                     } else {
-                        self.status = if detail.is_empty() { op } else { format!("{op} - {detail}") };
+                        self.status = if detail.is_empty() {
+                            op
+                        } else {
+                            format!("{op} - {detail}")
+                        };
                     }
                 }
                 Ok(Err(err)) => {
@@ -1000,6 +1213,9 @@ impl App {
                 }
                 Err(JobError::Cancelled) | Err(JobError::Shutdown) => {}
             }
+            true
+        } else {
+            false
         }
     }
 
@@ -1062,9 +1278,8 @@ impl App {
                     self.request_diff_for_scm_selection();
                 } else if self.in_git_sidebar() {
                     self.preview_mode = PreviewMode::Diff;
-                    self.file_diff = None;
+                    self.clear_diff_view();
                     self.preview_loading = false;
-                    self.hunk_index = None;
                 }
                 if self.pending_lists.is_empty() && !self.in_git_sidebar() {
                     self.status = self.hint_bar();
@@ -1136,12 +1351,20 @@ impl App {
         self.activity = ActivityTab::Git;
         self.focus = PaneFocus::List;
         self.clamp_scm_selection();
-        // Prefer first change row when landing on a section header.
-        let rows = self.scm_rows();
-        if let Some(ScmRow::Section { .. }) = rows.get(self.scm_selected) {
-            if let Some(i) = rows.iter().position(|r| r.is_change()) {
-                self.scm_selected = i;
+        // Prefer first file: expand its ancestors so the change row is visible.
+        if self.scm_expanded_unstaged.is_empty() && self.scm_expanded_staged.is_empty() {
+            let (u, s) = self.scm_slices();
+            let first_u = u.first().map(|e| e.path.clone());
+            let first_s = s.first().map(|e| e.path.clone());
+            if let Some(path) = first_u {
+                expand_ancestors_for_path(&mut self.scm_expanded_unstaged, &path);
+            } else if let Some(path) = first_s {
+                expand_ancestors_for_path(&mut self.scm_expanded_staged, &path);
             }
+        }
+        let rows = self.scm_rows();
+        if let Some(i) = rows.iter().position(|r| r.is_change()) {
+            self.scm_selected = i;
         }
         self.request_diff_for_scm_selection();
         self.status = "source control".into();
@@ -1151,8 +1374,7 @@ impl App {
         self.activity = ActivityTab::Files;
         self.focus = PaneFocus::List;
         self.preview_mode = PreviewMode::File;
-        self.file_diff = None;
-        self.hunk_index = None;
+        self.clear_diff_view();
         self.request_preview_for_selection();
         self.status = self.hint_bar();
     }
@@ -1194,7 +1416,7 @@ impl App {
         // Map column+index into flat SCM selection.
         let rows = self.scm_rows();
         if let Some(flat) = rows.iter().position(|r| {
-            matches!(r, ScmRow::Change { column: c, index: i } if *c == column && *i == index)
+            matches!(r, ScmRow::Change { column: c, index: i, .. } if *c == column && *i == index)
         }) {
             self.scm_selected = flat;
         }
@@ -1279,7 +1501,7 @@ impl App {
                 self.expand_staging();
                 let rows = self.scm_rows();
                 if let Some(flat) = rows.iter().position(|r| {
-                    matches!(r, ScmRow::Change { column: c, index: i } if *c == column && *i == index)
+                    matches!(r, ScmRow::Change { column: c, index: i, .. } if *c == column && *i == index)
                 }) {
                     self.scm_selected = flat;
                 }
@@ -1360,19 +1582,27 @@ impl App {
         let Some(idx) = self.hunk_index else {
             return;
         };
-        let Some(diff) = self.file_diff.as_ref() else {
+        let Some(diff) = self.file_diff.take() else {
             return;
         };
         let hunks = diff.hunks();
-        let Some(hunk) = hunks.get(idx) else {
+        let Some(hunk) = hunks.get(idx).cloned() else {
+            self.file_diff = Some(diff);
             return;
         };
         // Diff body starts at line 0 (title chip is outside the scroll area).
         // Map unified hunk index → split-row index (meta lines collapsed).
-        let rendered_start = diff_render_hunk_start(&diff.lines, hunk.start);
-        let total = preview_line_count(self.current_preview_view());
+        let rendered_start =
+            diff_render_hunk_start(&diff.lines, hunk.start, &mut self.split_cache);
+        let total = if diff.lines.is_empty() {
+            1
+        } else {
+            self.split_cache.ensure(&diff.lines).max(1)
+        };
+        self.diff_row_count = total;
         let viewport = self.layout.preview_inner.height as usize;
         scroll_to_hunk(&mut self.preview_scroll, viewport, total, rendered_start);
+        self.file_diff = Some(diff);
     }
 
     fn move_hunk(&mut self, delta: isize) {
@@ -1574,8 +1804,7 @@ impl App {
                     self.focus = PaneFocus::List;
                 } else if matches!(self.preview_mode, PreviewMode::Diff) {
                     self.preview_mode = PreviewMode::File;
-                    self.file_diff = None;
-                    self.hunk_index = None;
+                    self.clear_diff_view();
                     self.request_preview_for_selection();
                     self.focus = PaneFocus::List;
                 }
@@ -1628,6 +1857,10 @@ impl App {
             }
             KeyCode::Char('[') => {
                 self.expand_staging();
+                let first = self.scm_slices().0.first().map(|e| e.path.clone());
+                if let Some(path) = first {
+                    expand_ancestors_for_path(&mut self.scm_expanded_unstaged, &path);
+                }
                 let rows = self.scm_rows();
                 self.scm_selected = scm_jump_to_column(&rows, StagingColumn::Unstaged);
                 self.focus = PaneFocus::List;
@@ -1635,6 +1868,10 @@ impl App {
             }
             KeyCode::Char(']') => {
                 self.expand_staging();
+                let first = self.scm_slices().1.first().map(|e| e.path.clone());
+                if let Some(path) = first {
+                    expand_ancestors_for_path(&mut self.scm_expanded_staged, &path);
+                }
                 let rows = self.scm_rows();
                 self.scm_selected = scm_jump_to_column(&rows, StagingColumn::Staged);
                 self.focus = PaneFocus::List;
@@ -1663,23 +1900,25 @@ impl App {
                 }
             },
             KeyCode::Char(' ') => {
-                if matches!(self.focus, PaneFocus::List) && !self.in_git_sidebar() {
+                if matches!(self.focus, PaneFocus::List | PaneFocus::Staging) && self.in_git_sidebar()
+                {
+                    self.toggle_scm_expand_at(self.scm_selected);
+                } else if matches!(self.focus, PaneFocus::List) && !self.in_git_sidebar() {
                     self.toggle_expand_at(self.selected);
                 }
             }
-            KeyCode::Enter | KeyCode::Char('l') => {
+            KeyCode::Enter | KeyCode::Char('l') | KeyCode::Right => {
                 if self.in_git_sidebar() && self.sidebar_focused() {
-                    self.request_diff_for_scm_selection();
-                    self.focus = PaneFocus::Preview;
-                } else {
+                    self.scm_open_or_expand();
+                } else if !self.in_git_sidebar() {
                     self.open_selected();
                 }
             }
-            KeyCode::Char('h') | KeyCode::Backspace => {
+            KeyCode::Char('h') | KeyCode::Backspace | KeyCode::Left => {
                 if matches!(self.focus, PaneFocus::Preview) {
                     self.focus = PaneFocus::List;
                 } else if self.in_git_sidebar() {
-                    self.leave_git_sidebar();
+                    self.scm_tree_back();
                 } else {
                     self.tree_back();
                 }
@@ -1812,8 +2051,11 @@ impl App {
                         col,
                         row,
                     ) {
-                        if let Some(ScmRow::Change { column, index }) = rows.get(flat).copied() {
-                            self.open_staging_context_menu(column, index, col, row);
+                        if let Some(ScmRow::Change { column, index, .. }) = rows.get(flat) {
+                            self.open_staging_context_menu(*column, *index, col, row);
+                        } else if let Some(ScmRow::Folder { .. }) = rows.get(flat) {
+                            self.scm_selected = flat;
+                            self.toggle_scm_expand_at(flat);
                         }
                     }
                 } else if over_list {
@@ -1839,19 +2081,32 @@ impl App {
                         col,
                         row,
                     ) {
-                        if flat != self.scm_selected {
-                            self.scm_selected = flat;
-                        }
-                        if self.selected_scm_entry().is_some() {
-                            self.request_diff_for_scm_selection();
-                        } else {
-                            self.preview_mode = PreviewMode::Diff;
-                            self.file_diff = None;
-                            self.preview_loading = false;
-                            self.hunk_index = None;
-                            self.jobs.cancel_key("git:diff");
-                            self.pending_diff = None;
-                            self.status = "No changes selected".into();
+                        let same = flat == self.scm_selected;
+                        self.scm_selected = flat;
+                        match self.selected_scm_row() {
+                            Some(ScmRow::Change { .. }) => {
+                                self.request_diff_for_scm_selection();
+                            }
+                            Some(ScmRow::Folder { .. }) => {
+                                if same {
+                                    self.toggle_scm_expand_at(flat);
+                                } else {
+                                    self.preview_mode = PreviewMode::Diff;
+                                    self.clear_diff_view();
+                                    self.preview_loading = false;
+                                    self.jobs.cancel_key("git:diff");
+                                    self.pending_diff = None;
+                                    self.status = "folder".into();
+                                }
+                            }
+                            _ => {
+                                self.preview_mode = PreviewMode::Diff;
+                                self.clear_diff_view();
+                                self.preview_loading = false;
+                                self.jobs.cancel_key("git:diff");
+                                self.pending_diff = None;
+                                self.status = "No changes selected".into();
+                            }
                         }
                     }
                 } else if over_list {
@@ -1961,75 +2216,11 @@ impl App {
     }
 
     fn scroll_preview(&mut self, delta: isize) {
-        let view = self.current_preview_view();
-        let total = preview_line_count(view);
+        let total = self.preview_total_lines();
         let viewport = self.layout.preview_inner.height as usize;
         let max_scroll = total.saturating_sub(viewport);
         let next = (self.preview_scroll as isize + delta).clamp(0, max_scroll as isize) as usize;
         self.preview_scroll = next;
-    }
-
-    fn current_preview_view(&self) -> PreviewView<'_> {
-        if matches!(self.preview_mode, PreviewMode::Diff) {
-            if let Some(diff) = self.file_diff.as_ref() {
-                let hunks = diff.hunks();
-                let (hunk_start, hunk_end, hunk_idx) = match self.hunk_index {
-                    Some(i) if i < hunks.len() => (
-                        Some(hunks[i].start),
-                        Some(hunks[i].end),
-                        Some((i, hunks.len())),
-                    ),
-                    _ if !hunks.is_empty() => (None, None, Some((0, hunks.len()))),
-                    _ => (None, None, None),
-                };
-                return PreviewView::Diff {
-                    path: &diff.path,
-                    side: diff.side.label(),
-                    lines: &diff.lines,
-                    hunk_start,
-                    hunk_end,
-                    hunk_idx,
-                };
-            }
-            if self.preview_loading {
-                return PreviewView::Loading;
-            }
-            return PreviewView::Hint {
-                text: "No changes selected",
-            };
-        }
-        if self.preview_loading {
-            return PreviewView::Loading;
-        }
-        let Some(preview) = self.preview.as_ref() else {
-            return PreviewView::Idle;
-        };
-        match &preview.content {
-            PreviewContent::Empty => PreviewView::Idle,
-            PreviewContent::Directory { name, children, truncated } => PreviewView::Directory {
-                                name,
-                                children,
-                                truncated: *truncated,
-                            },
-            PreviewContent::Binary { notice, .. } => PreviewView::Binary { notice },
-            PreviewContent::Error { message } => PreviewView::Error { message },
-            PreviewContent::Text {
-                lines,
-                truncated,
-                bytes_read,
-            } => PreviewView::Text {
-                lines,
-                truncated: *truncated,
-                bytes_read: *bytes_read,
-                language: TextLang::from_name(
-                    preview
-                        .path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(""),
-                ),
-            },
-        }
     }
 
     fn move_sel(&mut self, delta: isize) {
@@ -2057,9 +2248,8 @@ impl App {
                 self.request_diff_for_scm_selection();
             } else {
                 self.preview_mode = PreviewMode::Diff;
-                self.file_diff = None;
+                self.clear_diff_view();
                 self.preview_loading = false;
-                self.hunk_index = None;
                 self.jobs.cancel_key("git:diff");
                 self.pending_diff = None;
                 self.status = "No changes selected".into();

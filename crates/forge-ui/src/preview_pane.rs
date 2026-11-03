@@ -69,6 +69,42 @@ pub enum PreviewView<'a> {
     },
 }
 
+
+/// Cached side-by-side rows for the current unified diff.
+///
+/// Rebuilt only when the underlying [`DiffLine`] buffer identity changes, so
+/// pure scroll / hunk highlight updates reuse the structural split.
+#[derive(Debug, Default, Clone)]
+pub struct SplitRowsCache {
+    lines_ptr: usize,
+    lines_len: usize,
+    rows: Vec<SplitRow>,
+}
+
+impl SplitRowsCache {
+    pub fn clear(&mut self) {
+        self.lines_ptr = 0;
+        self.lines_len = 0;
+        self.rows.clear();
+    }
+
+    fn rows_for(&mut self, lines: &[DiffLine]) -> &[SplitRow] {
+        let ptr = lines.as_ptr() as usize;
+        let len = lines.len();
+        if self.lines_ptr != ptr || self.lines_len != len {
+            self.lines_ptr = ptr;
+            self.lines_len = len;
+            self.rows = build_split_rows(lines);
+        }
+        &self.rows
+    }
+
+    /// Ensure cache is warm; returns split-row count (0 if `lines` empty).
+    pub fn ensure(&mut self, lines: &[DiffLine]) -> usize {
+        self.rows_for(lines).len()
+    }
+}
+
 /// Draw the preview pane into `area` (no nested box borders).
 pub fn draw_preview(
     frame: &mut Frame<'_>,
@@ -78,6 +114,7 @@ pub fn draw_preview(
     view: PreviewView<'_>,
     scroll: &mut usize,
     focused: bool,
+    split_cache: &mut SplitRowsCache,
 ) -> Rect {
     if area.height == 0 || area.width == 0 {
         return area;
@@ -168,17 +205,16 @@ pub fn draw_preview(
 
     style::fill_panel(frame, inner, theme);
 
-    let lines = build_lines(theme, view, inner.width);
-
     let viewport = inner.height as usize;
-    let total = lines.len();
+    let total = preview_line_count(view, split_cache);
     let max_scroll = total.saturating_sub(viewport);
     if *scroll > max_scroll {
         *scroll = max_scroll;
     }
     let start = *scroll;
     let end = (start + viewport).min(total);
-    let visible = lines[start..end].to_vec();
+    // Virtualize: only allocate Line/Span for the visible window.
+    let visible = build_visible_lines(theme, view, inner.width, start, end, split_cache);
 
     let style = Style::default().bg(rgb(theme.panel_bg)).fg(rgb(theme.fg));
     // Diff rows are pre-fitted to width; wrapping would break the split columns.
@@ -193,26 +229,48 @@ pub fn draw_preview(
     inner
 }
 
-fn build_lines(theme: &Theme, view: PreviewView<'_>, width: u16) -> Vec<Line<'static>> {
+/// Build only the `[start, end)` content lines (viewport virtualization).
+fn build_visible_lines(
+    theme: &Theme,
+    view: PreviewView<'_>,
+    width: u16,
+    start: usize,
+    end: usize,
+    split_cache: &mut SplitRowsCache,
+) -> Vec<Line<'static>> {
+    if end <= start {
+        return Vec::new();
+    }
     match view {
-        PreviewView::Loading => vec![Line::from(Span::styled(
-            "  loading...",
-            style::muted(theme),
-        ))],
-        PreviewView::Idle => vec![Line::from(Span::styled(
-            "  select a file to preview",
-            style::muted(theme),
-        ))],
-        PreviewView::Hint { text } => vec![Line::from(Span::styled(
-            format!("  {text}"),
-            style::muted(theme),
-        ))],
+        PreviewView::Loading => slice_static(
+            start,
+            end,
+            &[Line::from(Span::styled(
+                "  loading...",
+                style::muted(theme),
+            ))],
+        ),
+        PreviewView::Idle => slice_static(
+            start,
+            end,
+            &[Line::from(Span::styled(
+                "  select a file to preview",
+                style::muted(theme),
+            ))],
+        ),
+        PreviewView::Hint { text } => slice_static(
+            start,
+            end,
+            &[Line::from(Span::styled(
+                format!("  {text}"),
+                style::muted(theme),
+            ))],
+        ),
         PreviewView::Directory {
             name,
             children,
             truncated,
         } => {
-            // Minimal: name + child count (tree already lists children).
             let count = children.len();
             let count_label = if count == 0 {
                 "  (empty)".to_string()
@@ -223,7 +281,7 @@ fn build_lines(theme: &Theme, view: PreviewView<'_>, width: u16) -> Vec<Line<'st
             } else {
                 format!("  {count} items")
             };
-            vec![
+            let all = [
                 Line::from(""),
                 Line::from(Span::styled(
                     format!("  {name}/"),
@@ -237,51 +295,76 @@ fn build_lines(theme: &Theme, view: PreviewView<'_>, width: u16) -> Vec<Line<'st
                     "  Enter / l to open",
                     style::muted(theme),
                 )),
-            ]
+            ];
+            slice_static(start, end, &all)
         }
-        PreviewView::Binary { notice } => vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  {notice}"),
-                Style::default().fg(rgb(theme.warning)),
-            )),
-            Line::from(""),
-            Line::from(Span::styled(
-                "  binary preview not shown",
-                style::muted(theme),
-            )),
-        ],
-        PreviewView::Error { message } => vec![
-            Line::from(""),
-            Line::from(Span::styled(
-                format!("  error: {message}"),
-                Style::default().fg(rgb(theme.danger)),
-            )),
-        ],
+        PreviewView::Binary { notice } => {
+            let all = [
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  {notice}"),
+                    Style::default().fg(rgb(theme.warning)),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "  binary preview not shown",
+                    style::muted(theme),
+                )),
+            ];
+            slice_static(start, end, &all)
+        }
+        PreviewView::Error { message } => {
+            let all = [
+                Line::from(""),
+                Line::from(Span::styled(
+                    format!("  error: {message}"),
+                    Style::default().fg(rgb(theme.danger)),
+                )),
+            ];
+            slice_static(start, end, &all)
+        }
         PreviewView::Text {
             lines,
             truncated,
             bytes_read,
             language,
         } => {
-            let mut out: Vec<Line<'static>> = if lines.is_empty() {
-                vec![Line::from(Span::styled(
-                    "  (empty file)",
-                    style::muted(theme),
-                ))]
-            } else {
-                lines
-                    .iter()
-                    .enumerate()
-                    .map(|(i, l)| text_line_numbered(theme, i + 1, l, language))
-                    .collect()
-            };
-            if truncated {
-                out.push(Line::from(""));
-                out.push(Line::from(Span::styled(
-                    format!("  ... truncated - {bytes_read} bytes shown"),
-                    style::muted(theme),
-                )));
+            let total = text_preview_line_count(lines, truncated);
+            let end = end.min(total);
+            let start = start.min(end);
+            let mut out = Vec::with_capacity(end.saturating_sub(start));
+            for idx in start..end {
+                if lines.is_empty() {
+                    // single placeholder at 0; footer only if truncated (rare for empty)
+                    if idx == 0 {
+                        out.push(Line::from(Span::styled(
+                            "  (empty file)",
+                            style::muted(theme),
+                        )));
+                    } else if truncated && idx == total.saturating_sub(1) {
+                        out.push(Line::from(Span::styled(
+                            format!("  ... truncated - {bytes_read} bytes shown"),
+                            style::muted(theme),
+                        )));
+                    } else if truncated && idx == total.saturating_sub(2) {
+                        out.push(Line::from(""));
+                    }
+                    continue;
+                }
+                let body_len = lines.len();
+                if idx < body_len {
+                    out.push(text_line_numbered(theme, idx + 1, &lines[idx], language));
+                } else if truncated {
+                    let footer_i = idx - body_len;
+                    if footer_i == 0 {
+                        out.push(Line::from(""));
+                    } else {
+                        out.push(Line::from(Span::styled(
+                            format!("  ... truncated - {bytes_read} bytes shown"),
+                            style::muted(theme),
+                        )));
+                    }
+                }
             }
             out
         }
@@ -291,28 +374,58 @@ fn build_lines(theme: &Theme, view: PreviewView<'_>, width: u16) -> Vec<Line<'st
             hunk_end,
             ..
         } => {
-            // Side-by-side rows; raw git meta is dropped in build_split_rows.
             if lines.is_empty() {
-                vec![Line::from(Span::styled(
-                    "  (no diff)",
-                    style::muted(theme),
-                ))]
-            } else {
-                let rows = build_split_rows(lines);
-                rows.iter()
-                    .map(|row| {
-                        let in_hunk = match (hunk_start, hunk_end) {
-                            (Some(s), Some(e)) => {
-                                row.src_indices.iter().any(|&i| i >= s && i < e)
-                            }
-                            _ => false,
-                        };
-                        render_split_row(theme, row, width, in_hunk)
-                    })
-                    .collect()
+                return slice_static(
+                    start,
+                    end,
+                    &[Line::from(Span::styled(
+                        "  (no diff)",
+                        style::muted(theme),
+                    ))],
+                );
             }
+            let rows = split_cache.rows_for(lines);
+            let end = end.min(rows.len());
+            let start = start.min(end);
+            rows[start..end]
+                .iter()
+                .map(|row| {
+                    let in_hunk = match (hunk_start, hunk_end) {
+                        (Some(s), Some(e)) => row.src_indices.iter().any(|&i| i >= s && i < e),
+                        _ => false,
+                    };
+                    render_split_row(theme, row, width, in_hunk)
+                })
+                .collect()
         }
     }
+}
+
+fn slice_static(start: usize, end: usize, all: &[Line<'static>]) -> Vec<Line<'static>> {
+    let end = end.min(all.len());
+    let start = start.min(end);
+    all[start..end].to_vec()
+}
+
+fn text_preview_line_count(lines: &[String], truncated: bool) -> usize {
+    let base = if lines.is_empty() { 1 } else { lines.len() };
+    if truncated {
+        base + 2
+    } else {
+        base
+    }
+}
+
+/// Test/helper: build the full line list (not used on the hot scroll path).
+#[cfg(test)]
+fn build_lines(
+    theme: &Theme,
+    view: PreviewView<'_>,
+    width: u16,
+    split_cache: &mut SplitRowsCache,
+) -> Vec<Line<'static>> {
+    let total = preview_line_count(view, split_cache);
+    build_visible_lines(theme, view, width, 0, total, split_cache)
 }
 
 /// Split a path-like preview title into muted dirname + basename.
@@ -722,24 +835,46 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
     rows
 }
 
+/// Pad/truncate `s` to exactly `width` *terminal columns* (CJK = 2).
 fn fit_cell(s: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
     if width == 0 {
         return String::new();
     }
     let mut out = String::new();
     let mut w = 0usize;
     for ch in s.chars() {
-        if w + 1 > width {
+        let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cw == 0 {
+            // Keep combining marks attached to the previous visible char.
+            if !out.is_empty() {
+                out.push(ch);
+            }
+            continue;
+        }
+        if w + cw > width {
             break;
         }
         out.push(ch);
-        w += 1;
+        w += cw;
     }
     while w < width {
         out.push(' ');
         w += 1;
     }
+    debug_assert_eq!(UnicodeWidthStr::width(out.as_str()), width);
     out
+}
+
+/// accent(1) + left + │ + right == `total`. Returns `(left_w, right_w)`.
+fn split_half_widths(total: usize) -> Option<(usize, usize)> {
+    if total < 5 {
+        return None;
+    }
+    let rest = total - 1; // after accent
+    let left_w = rest / 2;
+    let right_w = rest.saturating_sub(left_w + 1);
+    Some((left_w, right_w))
 }
 
 fn render_split_row(
@@ -763,36 +898,40 @@ fn render_split_row(
         }))
         .bg(rgb(base_bg));
 
+    let sep_style = Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg));
+    let Some((left_w, right_w)) = split_half_widths(w) else {
+        return Line::from(Span::styled(
+            fit_cell("", w),
+            Style::default().bg(rgb(base_bg)),
+        ));
+    };
+
     match &row.kind {
+        // Note/Header share the same │ column as Pair rows so the rule stays straight.
         SplitRowKind::Note(text) => {
-            let body = if w <= 1 {
-                String::new()
-            } else {
-                fit_cell(&format!(" {text}"), w.saturating_sub(1))
-            };
+            let left_txt = fit_cell(&format!(" {text}"), left_w);
+            let right_txt = fit_cell("", right_w);
+            let muted = Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg));
             Line::from(vec![
                 Span::styled(accent_ch.to_string(), accent_style),
-                Span::styled(
-                    body,
-                    Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg)),
-                ),
+                Span::styled(left_txt, muted),
+                Span::styled("│".to_string(), sep_style),
+                Span::styled(right_txt, muted),
             ])
         }
         SplitRowKind::Header(text) => {
-            let body = if w <= 1 {
-                String::new()
-            } else {
-                fit_cell(&format!(" {text}"), w.saturating_sub(1))
-            };
+            let left_txt = fit_cell(&format!(" {text}"), left_w);
+            let right_txt = fit_cell("", right_w);
+            let hdr = Style::default()
+                .fg(rgb(theme.muted))
+                .bg(rgb(base_bg))
+                .add_modifier(Modifier::BOLD);
+            let muted = Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg));
             Line::from(vec![
                 Span::styled(accent_ch.to_string(), accent_style),
-                Span::styled(
-                    body,
-                    Style::default()
-                        .fg(rgb(theme.muted))
-                        .bg(rgb(base_bg))
-                        .add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(left_txt, hdr),
+                Span::styled("│".to_string(), sep_style),
+                Span::styled(right_txt, muted),
             ])
         }
         SplitRowKind::Pair {
@@ -801,16 +940,6 @@ fn render_split_row(
             old_del,
             new_add,
         } => {
-            if w < 5 {
-                return Line::from(Span::styled(
-                    fit_cell("", w),
-                    Style::default().bg(rgb(base_bg)),
-                ));
-            }
-            // accent(1) + left + │ + right
-            let rest = w - 1;
-            let left_w = rest / 2;
-            let right_w = rest.saturating_sub(left_w + 1);
             let left_txt = fit_cell(old.as_deref().unwrap_or(""), left_w);
             let right_txt = fit_cell(new.as_deref().unwrap_or(""), right_w);
 
@@ -832,7 +961,6 @@ fn render_split_row(
             } else {
                 Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg))
             };
-            let sep_style = Style::default().fg(rgb(theme.border)).bg(rgb(base_bg));
 
             Line::from(vec![
                 Span::styled(accent_ch.to_string(), accent_style),
@@ -845,15 +973,20 @@ fn render_split_row(
 }
 
 /// Rendered row index of a unified hunk start (for n/N scroll), after meta collapse.
-pub fn diff_render_hunk_start(lines: &[DiffLine], hunk_start: usize) -> usize {
-    let rows = build_split_rows(lines);
-    rows.iter()
+pub fn diff_render_hunk_start(
+    lines: &[DiffLine],
+    hunk_start: usize,
+    split_cache: &mut SplitRowsCache,
+) -> usize {
+    split_cache
+        .rows_for(lines)
+        .iter()
         .position(|r| r.src_indices.contains(&hunk_start))
         .unwrap_or(0)
 }
 
 /// How many content lines a preview view would render (before scrolling).
-pub fn preview_line_count(view: PreviewView<'_>) -> usize {
+pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCache) -> usize {
     match view {
         PreviewView::Loading | PreviewView::Idle | PreviewView::Hint { .. } => 1,
         PreviewView::Error { .. } => 2,
@@ -866,19 +999,12 @@ pub fn preview_line_count(view: PreviewView<'_>) -> usize {
             lines,
             truncated,
             ..
-        } => {
-            let base = if lines.is_empty() { 1 } else { lines.len() };
-            if truncated {
-                base + 2
-            } else {
-                base
-            }
-        }
+        } => text_preview_line_count(lines, truncated),
         PreviewView::Diff { lines, .. } => {
             if lines.is_empty() {
                 1
             } else {
-                build_split_rows(lines).len().max(1)
+                split_cache.ensure(lines).max(1)
             }
         }
     }
@@ -1006,7 +1132,7 @@ mod tests {
             }
             other => panic!("expected pair, got {other:?}"),
         }
-        assert_eq!(diff_render_hunk_start(&lines, 5), 1);
+        assert_eq!(diff_render_hunk_start(&lines, 5, &mut SplitRowsCache::default()), 1);
     }
 
     #[test]
@@ -1067,13 +1193,240 @@ mod tests {
             hunk_end: Some(2),
             hunk_idx: Some((0, 1)),
         };
-        let rendered = build_lines(&theme, view, 40);
+        let mut cache = SplitRowsCache::default();
+        let rendered = build_lines(&theme, view, 40, &mut cache);
         let joined: String = rendered
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
             .collect();
         assert!(!joined.contains("> +"), "no unified > marker: {joined}");
         assert!(joined.contains('│'), "split separator present");
-        assert_eq!(preview_line_count(view), rendered.len());
+        // Separator should use muted (readable on charcoal), not cyan accent.
+        let sep_fg = rendered
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .find(|s| s.content.as_ref() == "│")
+            .and_then(|s| s.style.fg);
+        assert_eq!(
+            sep_fg,
+            Some(crate::style::rgb(theme.muted)),
+            "split │ should use muted fg"
+        );
+        assert_eq!(preview_line_count(view, &mut cache), rendered.len());
     }
+
+    #[test]
+    fn split_change_row_keeps_del_add_backgrounds() {
+        let theme = Theme::modern_ide();
+        let row = SplitRow {
+            kind: SplitRowKind::Pair {
+                old: Some("gone".into()),
+                new: Some("here".into()),
+                old_del: true,
+                new_add: true,
+            },
+            src_indices: vec![0, 1],
+        };
+        let line = render_split_row(&theme, &row, 40, false);
+        let spans: Vec<_> = line.spans.iter().collect();
+        assert!(spans.len() >= 4);
+        assert_eq!(spans[2].content.as_ref(), "│");
+        assert_eq!(spans[1].style.bg, Some(crate::style::rgb(theme.diff_del_bg)));
+        assert_eq!(spans[3].style.bg, Some(crate::style::rgb(theme.diff_add_bg)));
+        assert_eq!(spans[2].style.fg, Some(crate::style::rgb(theme.muted)));
+        assert_ne!(spans[2].style.fg, Some(crate::style::rgb(theme.border_focus)));
+    }
+
+    #[test]
+    fn split_separator_column_stable_with_cjk() {
+        use unicode_width::UnicodeWidthStr;
+        let theme = Theme::modern_ide();
+        let width = 48u16;
+        let rows = [
+            SplitRow {
+                kind: SplitRowKind::Header("@@ -1,3 +1,3 @@".into()),
+                src_indices: vec![0],
+            },
+            SplitRow {
+                kind: SplitRowKind::Pair {
+                    old: Some("- 近黑背景，冷白/青 accent".into()),
+                    new: Some("- 近黑背景，冷白/青 accent".into()),
+                    old_del: false,
+                    new_add: false,
+                },
+                src_indices: vec![1],
+            },
+            SplitRow {
+                kind: SplitRowKind::Pair {
+                    old: Some("冷白/青 accent: 选中为浅抬升而非刺眼反色".into()),
+                    new: Some("冷白/青 accent: 选中为浅抬升，左右对比 diff 更直观".into()),
+                    old_del: true,
+                    new_add: true,
+                },
+                src_indices: vec![2, 3],
+            },
+            SplitRow {
+                kind: SplitRowKind::Pair {
+                    old: Some("ascii context line".into()),
+                    new: Some("ascii context line".into()),
+                    old_del: false,
+                    new_add: false,
+                },
+                src_indices: vec![4],
+            },
+        ];
+        let rendered: Vec<_> = rows
+            .iter()
+            .map(|r| render_split_row(&theme, r, width, true))
+            .collect();
+        let left_widths: Vec<_> = rendered
+            .iter()
+            .map(|l| {
+                assert_eq!(l.spans[2].content.as_ref(), "│");
+                UnicodeWidthStr::width(l.spans[1].content.as_ref())
+            })
+            .collect();
+        assert!(
+            left_widths.windows(2).all(|w| w[0] == w[1]),
+            "left cell display width must match across rows: {left_widths:?}"
+        );
+        let (left_w, _) = split_half_widths(width as usize).unwrap();
+        assert!(left_widths.iter().all(|&w| w == left_w));
+    }
+
+    #[test]
+    fn fit_cell_counts_cjk_as_two_columns() {
+        use unicode_width::UnicodeWidthStr;
+        let s = fit_cell("中文ab", 8);
+        assert_eq!(UnicodeWidthStr::width(s.as_str()), 8);
+        assert!(s.starts_with("中文ab"));
+        let tight = fit_cell("中文", 3); // 中=2, only one CJK fits + pad
+        assert_eq!(UnicodeWidthStr::width(tight.as_str()), 3);
+        assert!(tight.starts_with('中'));
+    }
+
+    #[test]
+    fn split_rows_zip_uneven_delete_add_runs() {
+        let lines = vec![
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -1,3 +1,2 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-b".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+c".into(),
+            },
+        ];
+        let rows = build_split_rows(&lines);
+        assert_eq!(rows.len(), 3); // header + 2 paired/padded rows
+        match &rows[1].kind {
+            SplitRowKind::Pair {
+                old,
+                new,
+                old_del,
+                new_add,
+            } => {
+                assert_eq!(old.as_deref(), Some("a"));
+                assert_eq!(new.as_deref(), Some("c"));
+                assert!(*old_del && *new_add);
+            }
+            other => panic!("expected first zip pair, got {other:?}"),
+        }
+        match &rows[2].kind {
+            SplitRowKind::Pair {
+                old,
+                new,
+                old_del,
+                new_add,
+            } => {
+                assert_eq!(old.as_deref(), Some("b"));
+                assert!(new.is_none());
+                assert!(*old_del && !*new_add);
+            }
+            other => panic!("expected unpaired delete, got {other:?}"),
+        }
+        assert_eq!(diff_render_hunk_start(&lines, 0, &mut SplitRowsCache::default()), 0);
+    }
+    #[test]
+    fn split_cache_reuses_rows_across_lookups() {
+        let lines = vec![
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -1 +1 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+x".into(),
+            },
+        ];
+        let mut cache = SplitRowsCache::default();
+        let n1 = preview_line_count(
+            PreviewView::Diff {
+                path: "f",
+                side: "unstaged",
+                lines: &lines,
+                hunk_start: None,
+                hunk_end: None,
+                hunk_idx: None,
+            },
+            &mut cache,
+        );
+        let ptr1 = cache.rows.as_ptr();
+        let n2 = preview_line_count(
+            PreviewView::Diff {
+                path: "f",
+                side: "unstaged",
+                lines: &lines,
+                hunk_start: Some(0),
+                hunk_end: Some(2),
+                hunk_idx: Some((0, 1)),
+            },
+            &mut cache,
+        );
+        let ptr2 = cache.rows.as_ptr();
+        assert_eq!(n1, n2);
+        assert_eq!(ptr1, ptr2, "scroll/hunk highlight must not rebuild split rows");
+        assert_eq!(diff_render_hunk_start(&lines, 0, &mut cache), 0);
+        assert_eq!(cache.rows.as_ptr(), ptr2);
+    }
+
+    #[test]
+    fn visible_text_window_matches_full_slice() {
+        let theme = Theme::modern_ide();
+        let lines = (1..=30).map(|i| format!("line {i}")).collect::<Vec<_>>();
+        let view = PreviewView::Text {
+            lines: &lines,
+            truncated: false,
+            bytes_read: 100,
+            language: TextLang::Plain,
+        };
+        let mut cache = SplitRowsCache::default();
+        let full = build_lines(&theme, view, 40, &mut cache);
+        let window = build_visible_lines(&theme, view, 40, 5, 15, &mut cache);
+        assert_eq!(window.len(), 10);
+        for (a, b) in window.iter().zip(full[5..15].iter()) {
+            assert_eq!(a.spans[0].content.as_ref(), b.spans[0].content.as_ref());
+        }
+    }
+
+    #[test]
+    fn scroll_to_hunk_clamps_and_targets_third() {
+        let mut scroll = 0;
+        scroll_to_hunk(&mut scroll, 30, 100, 40);
+        // 40 - 30/3 = 30
+        assert_eq!(scroll, 30);
+        scroll_to_hunk(&mut scroll, 30, 100, 95);
+        assert_eq!(scroll, 70); // max = 100-30
+        scroll_to_hunk(&mut scroll, 0, 100, 10);
+        assert_eq!(scroll, 0);
+    }
+
 }

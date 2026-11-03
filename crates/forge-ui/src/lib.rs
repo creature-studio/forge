@@ -28,11 +28,11 @@ pub use file_list::{
     draw_file_list, ensure_selected_visible, list_index_at, FileListState,
 };
 pub use tree::{find_parent_row, flatten_tree, TreeRow};
-pub use preview_pane::{draw_preview, diff_render_hunk_start, preview_line_count, scroll_to_hunk, PreviewView, TextLang};
+pub use preview_pane::{draw_preview, diff_render_hunk_start, preview_line_count, scroll_to_hunk, PreviewView, SplitRowsCache, TextLang};
 pub use staging::{
-    build_scm_rows, draw_commit_modal, draw_git_strip, draw_scm_sidebar, draw_staging, scm_entry,
-    scm_index_at, scm_jump_to_column, staging_index_at, ScmRow, StagingColumn, StagingLayout,
-    StagingState,
+    build_scm_rows, draw_commit_modal, draw_git_strip, draw_scm_sidebar, draw_staging,
+    expand_ancestors_for_path, find_scm_parent_row, scm_entry, scm_index_at, scm_jump_to_column,
+    staging_index_at, ScmRow, StagingColumn, StagingLayout, StagingState,
 };
 pub use style::{color_mode, set_color_mode};
 pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, IconMode, Icons};
@@ -122,6 +122,7 @@ pub struct ShellState<'a> {
     pub preview_title: &'a str,
     pub preview: PreviewView<'a>,
     pub preview_scroll: &'a mut usize,
+    pub split_cache: &'a mut SplitRowsCache,
     pub staging: StagingState<'a>,
     pub focus: PaneFocus,
     pub commit_input: Option<&'a str>,
@@ -218,6 +219,7 @@ impl UiShell {
                 state.preview,
                 state.preview_scroll,
                 matches!(state.focus, PaneFocus::Preview),
+                state.split_cache,
             )
         } else {
             Rect::default()
@@ -226,17 +228,32 @@ impl UiShell {
         // Git status left chip uses basename only (side lives in the preview header).
         let selected_display;
         let selected_name = if git_sidebar {
-            let rows = build_scm_rows(state.staging.unstaged, state.staging.staged);
+            let rows = build_scm_rows(
+                state.staging.unstaged,
+                state.staging.staged,
+                state.staging.expanded_unstaged,
+                state.staging.expanded_staged,
+            );
             selected_display = rows
                 .get(state.staging.selected)
-                .and_then(|r| {
-                    let entry = scm_entry(*r, state.staging.unstaged, state.staging.staged)?;
-                    let base = entry
-                        .path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(entry.path.as_str());
-                    Some(base.to_string())
+                .map(|r| match r {
+                    ScmRow::Change { .. } => scm_entry(
+                        r,
+                        state.staging.unstaged,
+                        state.staging.staged,
+                    )
+                    .map(|e| {
+                        e.path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(e.path.as_str())
+                            .to_string()
+                    })
+                    .unwrap_or_default(),
+                    ScmRow::Folder { name, file_count, .. } => {
+                        format!("{name}/ ({file_count})")
+                    }
+                    ScmRow::Section { title, count, .. } => format!("{title} ({count})"),
                 })
                 .unwrap_or_default();
             selected_display.as_str()
@@ -538,7 +555,8 @@ fn draw_hotkey_legend(
     let keys: &[(&str, &str)] = match focus {
         PaneFocus::List | PaneFocus::Staging if git => &[
             ("j/k", "Move"),
-            ("Enter", "Diff"),
+            ("h/l", "Fold"),
+            ("Enter", "Open"),
             ("s/u", "Stage"),
             ("c", "Commit"),
             ("[/]", "Sect"),

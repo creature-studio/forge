@@ -636,6 +636,7 @@ dependencies = [
  "forge-model",
  "forge-theme",
  "ratatui",
+ "unicode-width",
 ]
 
 [[package]]

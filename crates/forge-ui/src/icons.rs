@@ -1,32 +1,39 @@
-//! File / folder / chrome icons with Nerd Font glyphs and ASCII fallback.
+//! File / folder / chrome icons with three modes.
 //!
-//! Default is [`IconMode::Nerd`]. Override with `FORGE_ICONS`:
-//! - `nerd` | `on` | `1` → Nerd
-//! - `off` | `0` | `ascii` | `none` → Ascii
+//! Default is [`IconMode::Builtin`]: BMP Unicode that common fonts ship
+//! (no Private Use Area → no tofu). Override with `FORGE_ICONS`:
+//! - unset | `builtin` | `unicode` | `default` → Builtin
+//! - `nerd` | `on` | `1` | `true` | `yes` | `nf` → Nerd (needs a Nerd Font)
+//! - `off` | `0` | `ascii` | `none` | `false` | `no` → Ascii
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
-const MODE_NERD: u8 = 0;
-const MODE_ASCII: u8 = 1;
+const MODE_BUILTIN: u8 = 0;
+const MODE_NERD: u8 = 1;
+const MODE_ASCII: u8 = 2;
 
-static ICON_MODE: AtomicU8 = AtomicU8::new(MODE_NERD);
+static ICON_MODE: AtomicU8 = AtomicU8::new(MODE_BUILTIN);
 
 /// Which glyph set forge emits for file trees and chrome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum IconMode {
+    /// Single-cell Unicode from the BMP (▸▾, □▣, ·, ⎇). Works without Nerd Font.
     #[default]
+    Builtin,
+    /// Nerd Font Private Use Area glyphs. Opt-in only.
     Nerd,
+    /// Pure ASCII (`>`, `v`, `/`). Maximum compatibility.
     Ascii,
 }
 
 impl IconMode {
-    /// Parse a `FORGE_ICONS` value. Unknown values fall back to Nerd.
+    /// Parse a `FORGE_ICONS` value. Unknown / empty → Builtin (never emit PUA by default).
     pub fn parse(raw: &str) -> Self {
         match raw.trim().to_ascii_lowercase().as_str() {
             "off" | "0" | "ascii" | "none" | "false" | "no" => IconMode::Ascii,
             "nerd" | "on" | "1" | "true" | "yes" | "nf" => IconMode::Nerd,
-            "" => IconMode::Nerd,
-            _ => IconMode::Nerd,
+            "builtin" | "unicode" | "default" | "auto" | "" => IconMode::Builtin,
+            _ => IconMode::Builtin,
         }
     }
 
@@ -37,11 +44,25 @@ impl IconMode {
     pub fn is_ascii(self) -> bool {
         matches!(self, IconMode::Ascii)
     }
+
+    pub fn is_builtin(self) -> bool {
+        matches!(self, IconMode::Builtin)
+    }
+
+    /// Short label for stderr / status (`builtin` | `nerd` | `ascii`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            IconMode::Builtin => "builtin",
+            IconMode::Nerd => "nerd",
+            IconMode::Ascii => "ascii",
+        }
+    }
 }
 
 /// Install the icon mode used by every helper below.
 pub fn set_icon_mode(mode: IconMode) {
     let v = match mode {
+        IconMode::Builtin => MODE_BUILTIN,
         IconMode::Nerd => MODE_NERD,
         IconMode::Ascii => MODE_ASCII,
     };
@@ -51,16 +72,18 @@ pub fn set_icon_mode(mode: IconMode) {
 /// Current icon emission mode.
 pub fn icon_mode() -> IconMode {
     match ICON_MODE.load(Ordering::Relaxed) {
+        MODE_NERD => IconMode::Nerd,
         MODE_ASCII => IconMode::Ascii,
-        _ => IconMode::Nerd,
+        _ => IconMode::Builtin,
     }
 }
 
 /// Read `FORGE_ICONS` and install the mode. Call once at startup.
+/// Unset env → Builtin (safe without a Nerd Font).
 pub fn init_from_env() {
     let mode = match std::env::var("FORGE_ICONS") {
         Ok(v) => IconMode::parse(&v),
-        Err(_) => IconMode::Nerd,
+        Err(_) => IconMode::Builtin,
     };
     set_icon_mode(mode);
 }
@@ -74,11 +97,13 @@ impl Icons {
         icon_mode()
     }
 
-    /// Collapsed directory chevron (flat list — always collapsed for now).
+    /// Collapsed directory chevron.
     pub fn chevron_collapsed() -> &'static str {
         match icon_mode() {
             // nf-fa-chevron_right
             IconMode::Nerd => "\u{f054}",
+            // BLACK RIGHT-POINTING SMALL TRIANGLE (BMP, usually 1 cell)
+            IconMode::Builtin => "\u{25b8}",
             IconMode::Ascii => ">",
         }
     }
@@ -87,6 +112,8 @@ impl Icons {
         match icon_mode() {
             // nf-fa-chevron_down
             IconMode::Nerd => "\u{f078}",
+            // BLACK DOWN-POINTING SMALL TRIANGLE
+            IconMode::Builtin => "\u{25be}",
             IconMode::Ascii => "v",
         }
     }
@@ -96,6 +123,9 @@ impl Icons {
             // nf-fa-folder_open / nf-fa-folder
             (IconMode::Nerd, true) => "\u{f07c}",
             (IconMode::Nerd, false) => "\u{f07b}",
+            // WHITE SQUARE CONTAINING BLACK SMALL SQUARE / WHITE SQUARE
+            (IconMode::Builtin, true) => "\u{25a3}",
+            (IconMode::Builtin, false) => "\u{25a1}",
             (IconMode::Ascii, _) => "/",
         }
     }
@@ -108,6 +138,8 @@ impl Icons {
     pub fn file_for_name(name: &str) -> &'static str {
         match icon_mode() {
             IconMode::Ascii => " ",
+            // MIDDLE DOT — single cell, ubiquitous in Latin/CJK fonts
+            IconMode::Builtin => "\u{00b7}",
             IconMode::Nerd => nerd_file_for_name(name),
         }
     }
@@ -126,6 +158,8 @@ impl Icons {
         match icon_mode() {
             // nf-fa-code-branch
             IconMode::Nerd => "\u{f126}",
+            // ALTERNATIVE KEY SYMBOL (⎇) — common “branch-ish” BMP glyph
+            IconMode::Builtin => "\u{2387}",
             IconMode::Ascii => "",
         }
     }
@@ -236,8 +270,12 @@ mod tests {
         assert_eq!(IconMode::parse("off"), IconMode::Ascii);
         assert_eq!(IconMode::parse("0"), IconMode::Ascii);
         assert_eq!(IconMode::parse("none"), IconMode::Ascii);
-        assert_eq!(IconMode::parse(""), IconMode::Nerd);
-        assert_eq!(IconMode::parse("wat"), IconMode::Nerd);
+        assert_eq!(IconMode::parse(""), IconMode::Builtin);
+        assert_eq!(IconMode::parse("builtin"), IconMode::Builtin);
+        assert_eq!(IconMode::parse("unicode"), IconMode::Builtin);
+        assert_eq!(IconMode::parse("default"), IconMode::Builtin);
+        assert_eq!(IconMode::parse("wat"), IconMode::Builtin);
+        assert_eq!(IconMode::default(), IconMode::Builtin);
     }
 
     #[test]
@@ -253,6 +291,7 @@ mod tests {
         assert_eq!(Icons::file_for_name("mystery.bin"), "\u{f15b}");
         assert!(contains_private_use(Icons::file_for_name("main.rs")));
         assert!(contains_private_use(Icons::folder_closed()));
+        set_icon_mode(IconMode::Builtin);
     }
 
     #[test]
@@ -265,8 +304,23 @@ mod tests {
         assert!(!contains_private_use(Icons::file_for_name("Cargo.toml")));
         assert!(!contains_private_use(Icons::folder(true)));
         assert!(!contains_private_use(Icons::chevron_expanded()));
-        // restore default for other tests in the same process
-        set_icon_mode(IconMode::Nerd);
+        set_icon_mode(IconMode::Builtin);
+    }
+
+    #[test]
+    fn builtin_mode_no_private_use_and_readable() {
+        set_icon_mode(IconMode::Builtin);
+        assert_eq!(Icons::chevron_collapsed(), "\u{25b8}"); // ▸
+        assert_eq!(Icons::chevron_expanded(), "\u{25be}"); // ▾
+        assert_eq!(Icons::folder(false), "\u{25a1}"); // □
+        assert_eq!(Icons::folder(true), "\u{25a3}"); // ▣
+        assert_eq!(Icons::file_for_name("main.rs"), "\u{00b7}"); // ·
+        assert_eq!(Icons::branch(), "\u{2387}"); // ⎇
+        assert!(!contains_private_use(Icons::chevron_collapsed()));
+        assert!(!contains_private_use(Icons::folder_closed()));
+        assert!(!contains_private_use(Icons::file_for_name("x.rs")));
+        assert!(!contains_private_use(Icons::branch()));
+        assert_eq!(IconMode::Builtin.as_str(), "builtin");
     }
 
     #[test]
@@ -274,6 +328,7 @@ mod tests {
         set_icon_mode(IconMode::Ascii);
         assert_eq!(Icons::padded(Icons::folder_closed()), "/ ");
         assert_eq!(Icons::padded(""), "  ");
-        set_icon_mode(IconMode::Nerd);
+        set_icon_mode(IconMode::Builtin);
+        assert_eq!(Icons::padded(Icons::folder_closed()), "\u{25a1} ");
     }
 }

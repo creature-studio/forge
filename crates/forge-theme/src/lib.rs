@@ -333,21 +333,22 @@ impl Theme {
             accent: Rgb::new(0x3d, 0xd6, 0xe0),
             border: Rgb::new(0x2a, 0x31, 0x3e),
             border_focus: Rgb::new(0x3d, 0xd6, 0xe0),
-            // Edit-style solid cyan selection (hard invert)
-            selection_bg: Rgb::new(0x3d, 0xd6, 0xe0),
-            selection_fg: Rgb::new(0x0d, 0x0f, 0x14),
-            git_modified: Rgb::new(0xf0, 0xb4, 0x4c),
-            git_added: Rgb::new(0x5d, 0xd6, 0x8a),
-            git_deleted: Rgb::new(0xf0, 0x6e, 0x6e),
-            git_untracked: Rgb::new(0x7a, 0xb8, 0xf0),
+            // Soft cyan/slate selection lift (not hard invert / neon fill)
+            selection_bg: Rgb::new(0x1a, 0x2c, 0x34),
+            selection_fg: Rgb::new(0xe8, 0xf7, 0xfa),
+            git_modified: Rgb::new(0xe0, 0xa8, 0x48),
+            git_added: Rgb::new(0x5c, 0xc4, 0x82),
+            git_deleted: Rgb::new(0xd8, 0x6a, 0x6a),
+            git_untracked: Rgb::new(0x6a, 0xa8, 0xd8),
             git_ignored: Rgb::new(0x4a, 0x52, 0x60),
-            git_conflicted: Rgb::new(0xf0, 0x98, 0x5c),
-            git_renamed: Rgb::new(0x5c, 0xc8, 0xd8),
-            diff_add: Rgb::new(0xa0, 0xe4, 0xb8),
-            diff_add_bg: Rgb::new(0x14, 0x2a, 0x1c),
-            diff_del: Rgb::new(0xf0, 0xb0, 0xb0),
-            diff_del_bg: Rgb::new(0x32, 0x16, 0x18),
-            directory: Rgb::new(0x6c, 0xb6, 0xff),
+            git_conflicted: Rgb::new(0xe0, 0x90, 0x58),
+            git_renamed: Rgb::new(0x5c, 0xc0, 0xd0),
+            // Quiet sage / dusty rose — not neon blocks
+            diff_add: Rgb::new(0x98, 0xd4, 0xae),
+            diff_add_bg: Rgb::new(0x12, 0x20, 0x18),
+            diff_del: Rgb::new(0xe0, 0xa8, 0xa8),
+            diff_del_bg: Rgb::new(0x26, 0x14, 0x16),
+            directory: Rgb::new(0x6a, 0x9a, 0xc8),
             danger: Rgb::new(0xf0, 0x6e, 0x6e),
             warning: Rgb::new(0xf0, 0xb4, 0x4c),
             chrome_fg: Rgb::new(0xc8, 0xd0, 0xdc),
@@ -606,13 +607,17 @@ mod tests {
     }
 
     #[test]
-    fn modern_ide_selection_is_hard_invert_cyan() {
+    fn modern_ide_selection_is_soft_slate_cyan() {
         let t = Theme::modern_ide();
-        // Bright cyan/accent-like bg, near-black fg (Edit signature)
-        assert!(t.selection_bg.g > 180);
-        assert!(t.selection_bg.b > 180);
-        assert!(t.selection_fg.r < 40);
-        assert!(t.selection_fg.g < 40);
-        assert!(t.selection_fg.b < 40);
+        // Soft slate lift — darker than accent, lighter text (not hard invert)
+        assert!(t.selection_bg.r < 50);
+        assert!(t.selection_bg.g < 60);
+        assert!(t.selection_bg.b < 70);
+        assert!(t.selection_bg.b > t.selection_bg.r);
+        assert!(t.selection_fg.r > 180);
+        assert!(t.selection_fg.g > 200);
+        // Diff backgrounds stay muted / non-neon
+        assert!(t.diff_add_bg.g < 50);
+        assert!(t.diff_del_bg.r < 50);
     }
 }

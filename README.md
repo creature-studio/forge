@@ -51,34 +51,35 @@ cargo run -p forge -- --force-ansi256
 FORGE_COLOR=256 cargo run -p forge
 ```
 
-自检：启动后应看到青色 `forge`、目录图标 + 偏蓝目录名、选中整行青底。底栏 status 含 `color:ansi256` 或 `color:truecolor`；stderr 含 `icons=nerd` 或 `icons=ascii`。
+自检：启动后应看到青色 `forge`、目录图标 + 偏蓝目录名、选中整行青底。底栏 status 含 `color:ansi256` 或 `color:truecolor`；stderr 含 `icons=builtin` / `nerd` / `ascii`。
 
-## 图标（Nerd Font）
+## 图标
 
-文件树 / staging / 顶栏分支默认使用 **Nerd Font** 图标（JetBrainsMono Nerd Font、Cascadia Code NF、MesloLGS NF 等均可）。若终端字体缺字形会显示成方框或 `?`，可切到 ASCII：
+默认 **builtin**（内置 BMP Unicode：`▸▾` / `□▣` / `·` / `⎇`），常见字体即可显示，无需 Nerd Font。Nerd 图标可选；终端无法内嵌字体，PUA 字形缺字会变成方框。
 
 ```bash
-# 默认：Nerd 图标
+# 默认：builtin（无需 Nerd Font）
 cargo run -p forge
 
-# 关闭图标（纯 ASCII 回退）
-FORGE_ICONS=ascii cargo run -p forge
-# 或
-FORGE_ICONS=off cargo run -p forge
-```
+# 可选：Nerd Font 图标（需终端装 JetBrainsMono Nerd Font 等）
+FORGE_ICONS=nerd cargo run -p forge
+# 或 FORGE_ICONS=1
 
-`FORGE_ICONS=nerd|on|1` 强制开启；未设置时默认 Nerd。
+# 纯 ASCII
+FORGE_ICONS=ascii cargo run -p forge
+```
 
 ## 键位
 
 | Key | Action |
 |-----|--------|
 | `j` / `↓` · `k` / `↑` | 当前焦点区移动 / 滚动 |
-| `Enter` / `l` | 进入目录；staging 下打开 diff |
-| `h` / `Backspace` | 上级目录（或从 staging/preview 回列表） |
+| `Enter` / `l` / `→` | 进入目录；Git 侧栏展开文件夹或打开 diff |
+| `h` / `←` / `Backspace` | 上级目录；Git 侧栏折叠文件夹 / 跳到父级 |
+| `Space` | Git 侧栏：展开/折叠当前文件夹 |
 | `Tab` / `Shift-Tab` | 焦点：列表 → 预览 → staging |
-| `g` | 聚焦 staging |
-| `[` / `]` | staging 列：unstaged / staged |
+| `g` | 聚焦 staging（CHANGES/STAGED 目录树） |
+| `[` / `]` | 跳到 CHANGES / STAGED 并展开首个变更路径 |
 | `s` | stage（unstaged 选中项，或列表中的文件） |
 | `u` | unstage（staged 选中项，或列表中的文件） |
 | `d` | 对选中变更 / 文件显示 diff（预览区） |
@@ -88,8 +89,9 @@ FORGE_ICONS=off cargo run -p forge
 
 鼠标：点选列表 / staging；双击进目录；滚轮滚动当前区。
 
-## 视觉（Grok dark）
+## 视觉（Modern Minimal）
 
-- 近黑背景、柔和次级文字、克制边框
-- 冷白/青 accent；选中为浅抬升而非刺眼反色
-- Git / diff 色为降饱和 amber / sage / dusty rose（非霓虹）
+- Charcoal 面板 + Edit cyan accent（与 Files 模式一致）
+- 选中行：柔和 slate-cyan 抬升（非亮蓝块）；add/del 背景降饱和，避免大红大绿
+- Git 侧栏与 Files 同套图标：默认 builtin Unicode；`FORGE_ICONS=nerd`/`1` 用 Nerd Font；`ascii`/`off` 纯 ASCII
+- 左右对比 diff；CHANGES / STAGED 按路径分段可展开目录树

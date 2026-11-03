@@ -1,8 +1,9 @@
-//! VS Code–style Source Control sidebar (single-column, sectioned list).
+//! VS Code–style Source Control sidebar (sectioned directory tree).
 //!
-//! Drawn into the left sidebar when `ActivityTab::Git` is active — not a
-//! bottom strip. Dual-column / collapsed-strip helpers remain as unused
-//! compatibility shims.
+//! Drawn into the left sidebar when `ActivityTab::Git` is active.
+//! Changes are grouped by path segments with expandable folders.
+
+use std::collections::{BTreeMap, HashSet};
 
 use forge_model::{ChangeEntry, DiffSide, GitStatus};
 use forge_theme::Theme;
@@ -13,11 +14,11 @@ use ratatui::widgets::{Block, Borders, BorderType, Clear, List, ListItem, Paragr
 use ratatui::Frame;
 
 use crate::file_list::ensure_selected_visible;
-use crate::icons::Icons;
+use crate::icons::{icon_mode, IconMode, Icons};
 use crate::style::{self, rgb};
 
 /// Which section a change belongs to (unstaged vs staged).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum StagingColumn {
     #[default]
     Unstaged,
@@ -40,64 +41,203 @@ impl StagingColumn {
     }
 }
 
-/// One row in the flattened SCM sidebar list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One row in the SCM sidebar list (section / folder / file).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScmRow {
     Section {
         title: &'static str,
         count: usize,
         column: StagingColumn,
     },
+    /// Expandable directory grouping under CHANGES / STAGED.
+    Folder {
+        column: StagingColumn,
+        /// Repo-relative dir path (`/` separators, no trailing slash).
+        path: String,
+        /// Last path segment (display name).
+        name: String,
+        depth: u16,
+        expanded: bool,
+        /// Number of change files under this folder (recursive).
+        file_count: usize,
+    },
     Change {
         column: StagingColumn,
         /// Index into the unstaged / staged slice.
         index: usize,
+        depth: u16,
     },
 }
 
 impl ScmRow {
-    pub fn column(self) -> StagingColumn {
+    pub fn column(&self) -> StagingColumn {
         match self {
-            ScmRow::Section { column, .. } | ScmRow::Change { column, .. } => column,
+            ScmRow::Section { column, .. }
+            | ScmRow::Folder { column, .. }
+            | ScmRow::Change { column, .. } => *column,
         }
     }
 
-    pub fn is_change(self) -> bool {
+    pub fn is_change(&self) -> bool {
         matches!(self, ScmRow::Change { .. })
+    }
+
+    pub fn is_folder(&self) -> bool {
+        matches!(self, ScmRow::Folder { .. })
+    }
+
+    pub fn depth(&self) -> u16 {
+        match self {
+            ScmRow::Section { .. } => 0,
+            ScmRow::Folder { depth, .. } | ScmRow::Change { depth, .. } => *depth,
+        }
     }
 }
 
-/// Build the flat SCM list: Changes section + rows, then Staged section + rows.
-pub fn build_scm_rows(unstaged: &[ChangeEntry], staged: &[ChangeEntry]) -> Vec<ScmRow> {
+#[derive(Default)]
+struct DirNode {
+    dirs: BTreeMap<String, DirNode>,
+    /// Indices into the ChangeEntry slice for files directly in this dir.
+    files: Vec<usize>,
+}
+
+impl DirNode {
+    fn file_count(&self) -> usize {
+        self.files.len() + self.dirs.values().map(DirNode::file_count).sum::<usize>()
+    }
+}
+
+fn insert_entry(root: &mut DirNode, path: &str, index: usize) {
+    let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.is_empty() {
+        return;
+    }
+    if parts.len() == 1 {
+        root.files.push(index);
+        return;
+    }
+    let mut node = root;
+    for seg in &parts[..parts.len() - 1] {
+        node = node.dirs.entry((*seg).to_string()).or_default();
+    }
+    node.files.push(index);
+}
+
+fn build_dir_tree(entries: &[ChangeEntry]) -> DirNode {
+    let mut root = DirNode::default();
+    for (i, e) in entries.iter().enumerate() {
+        insert_entry(&mut root, &e.path, i);
+    }
+    // Keep files in path order (entries are usually sorted; stabilize by index).
+    root.files.sort_unstable();
+    sort_files_recursive(&mut root);
+    root
+}
+
+fn sort_files_recursive(node: &mut DirNode) {
+    node.files.sort_unstable();
+    for child in node.dirs.values_mut() {
+        sort_files_recursive(child);
+    }
+}
+
+fn flatten_dir(
+    node: &DirNode,
+    prefix: &str,
+    depth: u16,
+    column: StagingColumn,
+    expanded: &HashSet<String>,
+    out: &mut Vec<ScmRow>,
+) {
+    for (name, child) in &node.dirs {
+        let path = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let file_count = child.file_count();
+        let is_exp = expanded.contains(&path);
+        out.push(ScmRow::Folder {
+            column,
+            path: path.clone(),
+            name: name.clone(),
+            depth,
+            expanded: is_exp,
+            file_count,
+        });
+        if is_exp {
+            flatten_dir(child, &path, depth.saturating_add(1), column, expanded, out);
+        }
+    }
+    for &index in &node.files {
+        out.push(ScmRow::Change {
+            column,
+            index,
+            depth,
+        });
+    }
+}
+
+/// Build the SCM list: CHANGES tree + STAGED tree (expandable folders).
+pub fn build_scm_rows(
+    unstaged: &[ChangeEntry],
+    staged: &[ChangeEntry],
+    expanded_unstaged: &HashSet<String>,
+    expanded_staged: &HashSet<String>,
+) -> Vec<ScmRow> {
     let mut rows = Vec::with_capacity(2 + unstaged.len() + staged.len());
     rows.push(ScmRow::Section {
         title: "CHANGES",
         count: unstaged.len(),
         column: StagingColumn::Unstaged,
     });
-    for index in 0..unstaged.len() {
-        rows.push(ScmRow::Change {
-            column: StagingColumn::Unstaged,
-            index,
-        });
-    }
+    let u_tree = build_dir_tree(unstaged);
+    flatten_dir(
+        &u_tree,
+        "",
+        0,
+        StagingColumn::Unstaged,
+        expanded_unstaged,
+        &mut rows,
+    );
     rows.push(ScmRow::Section {
         title: "STAGED",
         count: staged.len(),
         column: StagingColumn::Staged,
     });
-    for index in 0..staged.len() {
-        rows.push(ScmRow::Change {
-            column: StagingColumn::Staged,
-            index,
-        });
-    }
+    let s_tree = build_dir_tree(staged);
+    flatten_dir(
+        &s_tree,
+        "",
+        0,
+        StagingColumn::Staged,
+        expanded_staged,
+        &mut rows,
+    );
     rows
 }
 
-/// Resolve a flat SCM row to a change entry, if any.
+/// Expand every ancestor directory of `rela_path` so the file row is visible.
+pub fn expand_ancestors_for_path(expanded: &mut HashSet<String>, rela_path: &str) {
+    let parts: Vec<&str> = rela_path.split('/').filter(|s| !s.is_empty()).collect();
+    if parts.len() < 2 {
+        return;
+    }
+    let mut acc = String::new();
+    for seg in &parts[..parts.len() - 1] {
+        if acc.is_empty() {
+            acc.push_str(seg);
+        } else {
+            acc.push('/');
+            acc.push_str(seg);
+        }
+        expanded.insert(acc.clone());
+    }
+}
+
+/// Resolve a SCM row to a change entry, if any.
 pub fn scm_entry<'a>(
-    row: ScmRow,
+    row: &ScmRow,
     unstaged: &'a [ChangeEntry],
     staged: &'a [ChangeEntry],
 ) -> Option<&'a ChangeEntry> {
@@ -105,12 +245,14 @@ pub fn scm_entry<'a>(
         ScmRow::Change {
             column: StagingColumn::Unstaged,
             index,
-        } => unstaged.get(index),
+            ..
+        } => unstaged.get(*index),
         ScmRow::Change {
             column: StagingColumn::Staged,
             index,
-        } => staged.get(index),
-        ScmRow::Section { .. } => None,
+            ..
+        } => staged.get(*index),
+        ScmRow::Section { .. } | ScmRow::Folder { .. } => None,
     }
 }
 
@@ -123,6 +265,23 @@ pub fn scm_jump_to_column(rows: &[ScmRow], column: StagingColumn) -> usize {
                 .position(|r| matches!(r, ScmRow::Section { column: c, .. } if *c == column))
         })
         .unwrap_or(0)
+}
+
+/// Index of the nearest ancestor folder/section at `depth - 1`.
+pub fn find_scm_parent_row(rows: &[ScmRow], index: usize) -> Option<usize> {
+    let depth = rows.get(index)?.depth();
+    if depth == 0 {
+        // Walk up to the section header for this column.
+        let col = rows.get(index)?.column();
+        return (0..index)
+            .rev()
+            .find(|&i| matches!(&rows[i], ScmRow::Section { column: c, .. } if *c == col));
+    }
+    let target = depth - 1;
+    (0..index).rev().find(|&i| {
+        matches!(&rows[i], ScmRow::Folder { depth: d, .. } if *d == target)
+            || (target == 0 && matches!(&rows[i], ScmRow::Section { .. }))
+    })
 }
 
 /// Hit regions for the SCM sidebar (occupies the left pane in Git mode).
@@ -159,6 +318,8 @@ impl StagingLayout {
 pub struct StagingState<'a> {
     pub unstaged: &'a [ChangeEntry],
     pub staged: &'a [ChangeEntry],
+    pub expanded_unstaged: &'a HashSet<String>,
+    pub expanded_staged: &'a HashSet<String>,
     /// Flat index into [`build_scm_rows`].
     pub selected: usize,
     pub scroll: &'a mut usize,
@@ -184,7 +345,12 @@ pub fn draw_scm_sidebar(
     };
     let body = style::draw_section_header(frame, area, theme, &title, state.focused);
 
-    let rows = build_scm_rows(state.unstaged, state.staged);
+    let rows = build_scm_rows(
+        state.unstaged,
+        state.staged,
+        state.expanded_unstaged,
+        state.expanded_staged,
+    );
     let count = rows.len();
     let selected = state.selected.min(count.saturating_sub(1));
 
@@ -201,17 +367,37 @@ pub fn draw_scm_sidebar(
         .map(|(row, scm)| {
             let index = start + row;
             let is_sel = index == selected;
-            match *scm {
-                ScmRow::Section {
-                    title, count, ..
-                } => section_item(theme, title, count, is_sel, focused),
-                ScmRow::Change { column, index: ei } => {
+            match scm {
+                ScmRow::Section { title, count, .. } => {
+                    section_item(theme, title, *count, is_sel, focused)
+                }
+                ScmRow::Folder {
+                    name,
+                    depth,
+                    expanded,
+                    file_count,
+                    ..
+                } => folder_item(
+                    theme,
+                    name,
+                    *depth,
+                    *expanded,
+                    *file_count,
+                    is_sel,
+                    focused,
+                    body.width,
+                ),
+                ScmRow::Change {
+                    column,
+                    index: ei,
+                    depth,
+                } => {
                     let entry = match column {
-                        StagingColumn::Unstaged => state.unstaged.get(ei),
-                        StagingColumn::Staged => state.staged.get(ei),
+                        StagingColumn::Unstaged => state.unstaged.get(*ei),
+                        StagingColumn::Staged => state.staged.get(*ei),
                     };
                     match entry {
-                        Some(e) => change_item(theme, e, is_sel, focused, body.width),
+                        Some(e) => change_item(theme, e, *depth, is_sel, focused, body.width),
                         None => ListItem::new(Line::from("")),
                     }
                 }
@@ -243,14 +429,8 @@ pub fn draw_staging(
     draw_scm_sidebar(frame, area, theme, state)
 }
 
-fn section_item(
-    theme: &Theme,
-    title: &str,
-    count: usize,
-    selected: bool,
-    focused: bool,
-) -> ListItem<'static> {
-    let row_bg = if selected {
+fn row_bg(theme: &Theme, selected: bool, focused: bool) -> forge_theme::Rgb {
+    if selected {
         if focused {
             theme.selection_bg
         } else {
@@ -258,7 +438,17 @@ fn section_item(
         }
     } else {
         theme.panel_bg
-    };
+    }
+}
+
+fn section_item(
+    theme: &Theme,
+    title: &str,
+    count: usize,
+    selected: bool,
+    focused: bool,
+) -> ListItem<'static> {
+    let bg = row_bg(theme, selected, focused);
     let title_fg = if selected && focused {
         theme.selection_fg
     } else if selected {
@@ -266,32 +456,118 @@ fn section_item(
     } else {
         theme.muted
     };
-    // Count stays muted even when selected (VS Code–like).
     let count_fg = if selected && focused {
         theme.selection_fg
     } else {
         theme.muted
     };
-    let pad = Style::default().bg(rgb(row_bg));
-    // Stronger section headers: always uppercase + bold when idle muted.
+    let icon_fg = if selected && focused {
+        theme.selection_fg
+    } else if selected {
+        theme.accent
+    } else {
+        theme.muted
+    };
+    let pad = Style::default().bg(rgb(bg));
     let title_style = Style::default()
         .fg(rgb(title_fg))
-        .bg(rgb(row_bg))
+        .bg(rgb(bg))
         .add_modifier(Modifier::BOLD);
+    let icon_tok = Icons::padded(Icons::branch());
+    let icon_style = Style::default().fg(rgb(icon_fg)).bg(rgb(bg));
     ListItem::new(Line::from(vec![
         Span::styled(" ", pad),
+        Span::styled(icon_tok, icon_style),
         Span::styled(title.to_ascii_uppercase(), title_style),
         Span::styled(
             format!(" ({count})"),
-            Style::default().fg(rgb(count_fg)).bg(rgb(row_bg)),
+            Style::default().fg(rgb(count_fg)).bg(rgb(bg)),
         ),
         Span::styled(" ", pad),
+    ]))
+}
+
+fn folder_item(
+    theme: &Theme,
+    name: &str,
+    depth: u16,
+    expanded: bool,
+    file_count: usize,
+    selected: bool,
+    focused: bool,
+    row_width: u16,
+) -> ListItem<'static> {
+    let bg = row_bg(theme, selected, focused);
+    let indent = "  ".repeat(depth as usize);
+    let chevron = if expanded {
+        Icons::chevron_expanded()
+    } else {
+        Icons::chevron_collapsed()
+    };
+    let icon = Icons::folder(expanded);
+    let icon_tok = Icons::padded(icon);
+    let chevron_tok = format!("{chevron} ");
+
+    let name_fg = if selected && focused {
+        theme.selection_fg
+    } else if selected {
+        theme.accent
+    } else {
+        // Muted folder names — hierarchy without shouting.
+        theme.muted
+    };
+    let icon_fg = if selected && focused {
+        theme.selection_fg
+    } else if selected {
+        theme.accent
+    } else {
+        theme.muted
+    };
+    let count_fg = if selected && focused {
+        theme.selection_fg
+    } else {
+        theme.muted
+    };
+
+    let mut name_style = Style::default().fg(rgb(name_fg)).bg(rgb(bg));
+    if selected || matches!(icon_mode(), IconMode::Ascii) {
+        name_style = name_style.add_modifier(Modifier::BOLD);
+    }
+    let icon_style = Style::default().fg(rgb(icon_fg)).bg(rgb(bg));
+    let pad_style = Style::default().bg(rgb(bg));
+    let count_style = Style::default().fg(rgb(count_fg)).bg(rgb(bg));
+
+    let label = if matches!(icon_mode(), IconMode::Ascii) {
+        format!("{name}/")
+    } else {
+        name.to_string()
+    };
+    let count_tok = format!(" ({file_count})");
+
+    let left_inset = " ";
+    let used = left_inset.chars().count()
+        + indent.chars().count()
+        + chevron_tok.chars().count()
+        + icon_tok.chars().count()
+        + label.chars().count()
+        + count_tok.chars().count();
+    let pad_len = (row_width as usize).saturating_sub(used);
+
+    ListItem::new(Line::from(vec![
+        Span::styled(left_inset.to_string(), pad_style),
+        Span::styled(indent, pad_style),
+        Span::styled(chevron_tok, icon_style),
+        Span::styled(icon_tok, icon_style),
+        Span::styled(label, name_style),
+        Span::styled(count_tok, count_style),
+        Span::styled(" ".repeat(pad_len.max(1)), pad_style),
     ]))
 }
 
 fn change_item(
     theme: &Theme,
     entry: &ChangeEntry,
+    depth: u16,
     selected: bool,
     focused: bool,
     row_width: u16,
@@ -305,17 +581,9 @@ fn change_item(
         GitStatus::Ignored => theme.git_ignored,
         GitStatus::Clean => theme.fg,
     };
-    let row_bg = if selected {
-        if focused {
-            theme.selection_bg
-        } else {
-            theme.pill_bg
-        }
-    } else {
-        theme.panel_bg
-    };
+    let bg = row_bg(theme, selected, focused);
     let gutter = entry.status.gutter();
-    let mut name_style = Style::default().fg(rgb(theme.fg)).bg(rgb(row_bg));
+    let mut name_style = Style::default().fg(rgb(theme.fg)).bg(rgb(bg));
     if selected && focused {
         name_style = name_style
             .fg(rgb(theme.selection_fg))
@@ -323,6 +591,7 @@ fn change_item(
     } else if selected {
         name_style = name_style.fg(rgb(theme.fg));
     }
+    // Stronger but calm status letters when unselected.
     let gutter_fg = if selected && focused {
         theme.selection_fg
     } else {
@@ -340,28 +609,55 @@ fn change_item(
         .unwrap_or(entry.path.as_str());
     let icon = Icons::file_for_name(basename);
     let icon_tok = Icons::padded(icon);
-    // " " + gutter + " " + icon_tok  (gutter is 1 char + space in format)
-    let prefix_cols = 1 + 2 + icon_tok.chars().count();
-    let max_path = (row_width as usize).saturating_sub(prefix_cols).saturating_sub(1);
-    let label = truncate_left(&entry.path, max_path.max(4));
+    let indent = "  ".repeat(depth as usize);
+    // Align with folder rows: spacer where chevron would be.
+    let chevron_pad = "  ";
+    let left_inset = " ";
+    let gutter_tok = format!("{gutter} ");
+    let prefix_cols = left_inset.chars().count()
+        + indent.chars().count()
+        + chevron_pad.chars().count()
+        + gutter_tok.chars().count()
+        + icon_tok.chars().count();
+    let max_name = (row_width as usize)
+        .saturating_sub(prefix_cols)
+        .saturating_sub(1)
+        .max(4);
+    let label = truncate_end(basename, max_name);
     let used = prefix_cols + label.chars().count();
     let pad_len = (row_width as usize).saturating_sub(used);
-    let pad_style = Style::default().bg(rgb(row_bg));
-    // Status letter keeps git_* color when unselected; bold for contrast.
-    let mut gutter_style = Style::default().fg(rgb(gutter_fg)).bg(rgb(row_bg));
+    let pad_style = Style::default().bg(rgb(bg));
+    let mut gutter_style = Style::default().fg(rgb(gutter_fg)).bg(rgb(bg));
     if !(selected && focused) {
         gutter_style = gutter_style.add_modifier(Modifier::BOLD);
     }
     ListItem::new(Line::from(vec![
-        Span::styled(" ", pad_style),
-        Span::styled(format!("{gutter} "), gutter_style),
-        Span::styled(icon_tok, Style::default().fg(rgb(icon_fg)).bg(rgb(row_bg))),
+        Span::styled(left_inset.to_string(), pad_style),
+        Span::styled(indent, pad_style),
+        Span::styled(chevron_pad.to_string(), pad_style),
+        Span::styled(gutter_tok, gutter_style),
+        Span::styled(icon_tok, Style::default().fg(rgb(icon_fg)).bg(rgb(bg))),
         Span::styled(label, name_style),
         Span::styled(" ".repeat(pad_len.max(1)), pad_style),
     ]))
 }
 
+/// Truncate from the end with an ellipsis when too wide.
+fn truncate_end(name: &str, max: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if chars.len() <= max {
+        return name.to_string();
+    }
+    if max <= 1 {
+        return "…".to_string();
+    }
+    let keep = max - 1;
+    let head: String = chars[..keep].iter().collect();
+    format!("{head}…")
+}
+
 /// Prefer keeping the filename: `…/crates/foo.rs` when the path is too wide.
+#[allow(dead_code)]
 fn truncate_left(path: &str, max: usize) -> String {
     let chars: Vec<char> = path.chars().collect();
     if chars.len() <= max {
@@ -533,8 +829,9 @@ pub fn draw_commit_modal(frame: &mut Frame<'_>, theme: &Theme, input: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_scm_rows, scm_entry, scm_jump_to_column, ScmRow, StagingColumn};
+    use super::*;
     use forge_model::{ChangeEntry, DiffSide, GitStatus};
+    use std::collections::HashSet;
 
     fn entry(path: &str, side: DiffSide) -> ChangeEntry {
         ChangeEntry {
@@ -545,44 +842,132 @@ mod tests {
     }
 
     #[test]
-    fn scm_rows_order() {
-        let u = vec![entry("a.rs", DiffSide::Unstaged)];
-        let s = vec![entry("b.rs", DiffSide::Staged)];
-        let rows = build_scm_rows(&u, &s);
-        assert_eq!(rows.len(), 4);
+    fn scm_rows_tree_groups_by_dir() {
+        let u = vec![
+            entry("agent/app/a.py", DiffSide::Unstaged),
+            entry("agent/app/b.py", DiffSide::Unstaged),
+            entry("README.md", DiffSide::Unstaged),
+        ];
+        let s = vec![entry("crates/x.rs", DiffSide::Staged)];
+        let empty = HashSet::new();
+        let rows = build_scm_rows(&u, &s, &empty, &empty);
+        // CHANGES, agent/ (collapsed), README.md, STAGED, crates/ (collapsed)
         assert!(matches!(
-            rows[0],
+            &rows[0],
             ScmRow::Section {
                 title: "CHANGES",
-                count: 1,
+                count: 3,
                 ..
             }
         ));
         assert!(matches!(
-            rows[1],
-            ScmRow::Change {
-                column: StagingColumn::Unstaged,
-                index: 0
-            }
+            &rows[1],
+            ScmRow::Folder {
+                name,
+                expanded: false,
+                file_count: 2,
+                ..
+            } if name == "agent"
         ));
         assert!(matches!(
-            rows[2],
+            &rows[2],
+            ScmRow::Change { index: 2, depth: 0, .. }
+        ));
+        assert!(matches!(
+            &rows[3],
             ScmRow::Section {
                 title: "STAGED",
                 count: 1,
                 ..
             }
         ));
+        assert!(matches!(
+            &rows[4],
+            ScmRow::Folder {
+                name,
+                file_count: 1,
+                ..
+            } if name == "crates"
+        ));
         assert_eq!(
-            scm_entry(rows[1], &u, &s).map(|e| e.path.as_str()),
-            Some("a.rs")
+            scm_entry(&rows[2], &u, &s).map(|e| e.path.as_str()),
+            Some("README.md")
         );
-        assert_eq!(scm_jump_to_column(&rows, StagingColumn::Staged), 3);
+    }
+
+    #[test]
+    fn scm_rows_expands_nested() {
+        let u = vec![
+            entry("agent/app/a.py", DiffSide::Unstaged),
+            entry("agent/app/api/b.py", DiffSide::Unstaged),
+        ];
+        let s: Vec<ChangeEntry> = vec![];
+        let mut exp = HashSet::new();
+        exp.insert("agent".into());
+        exp.insert("agent/app".into());
+        let empty = HashSet::new();
+        let rows = build_scm_rows(&u, &s, &exp, &empty);
+        let folders: Vec<_> = rows
+            .iter()
+            .filter_map(|r| match r {
+                ScmRow::Folder {
+                    path,
+                    depth,
+                    expanded,
+                    ..
+                } => Some((path.as_str(), *depth, *expanded)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            folders,
+            vec![
+                ("agent", 0, true),
+                ("agent/app", 1, true),
+                ("agent/app/api", 2, false),
+            ]
+        );
+        // Files under agent/app visible; api collapsed so b.py hidden.
+        let changes: Vec<_> = rows
+            .iter()
+            .filter_map(|r| scm_entry(r, &u, &s).map(|e| e.path.as_str()))
+            .collect();
+        assert_eq!(changes, vec!["agent/app/a.py"]);
+    }
+
+    #[test]
+    fn expand_ancestors_inserts_parents() {
+        let mut exp = HashSet::new();
+        expand_ancestors_for_path(&mut exp, "a/b/c/d.py");
+        assert!(exp.contains("a"));
+        assert!(exp.contains("a/b"));
+        assert!(exp.contains("a/b/c"));
+        assert!(!exp.contains("a/b/c/d.py"));
+    }
+
+    #[test]
+    fn scm_jump_and_parent() {
+        let u = vec![
+            entry("pkg/a.rs", DiffSide::Unstaged),
+            entry("pkg/b.rs", DiffSide::Unstaged),
+        ];
+        let s = vec![entry("z.rs", DiffSide::Staged)];
+        let mut exp = HashSet::new();
+        exp.insert("pkg".into());
+        let empty = HashSet::new();
+        let rows = build_scm_rows(&u, &s, &exp, &empty);
+        assert_eq!(scm_jump_to_column(&rows, StagingColumn::Staged), 5);
+        // rows: CHANGES, pkg/, a, b, STAGED, z
+        assert_eq!(find_scm_parent_row(&rows, 2), Some(1)); // a -> pkg
+        assert_eq!(find_scm_parent_row(&rows, 1), Some(0)); // pkg -> CHANGES
     }
 
     #[test]
     fn truncate_left_keeps_tail() {
-        assert_eq!(super::truncate_left("crates/forge-app/src/lib.rs", 20), "…orge-app/src/lib.rs");
+        assert_eq!(
+            super::truncate_left("crates/forge-app/src/lib.rs", 20),
+            "…orge-app/src/lib.rs"
+        );
         assert_eq!(super::truncate_left("short.rs", 20), "short.rs");
         assert_eq!(super::truncate_left("abcdefghij", 4), "…hij");
     }
