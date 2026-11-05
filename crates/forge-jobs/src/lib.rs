@@ -8,7 +8,7 @@ use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Notify};
 use tokio::task::AbortHandle;
 
 pub use forge_model::{JobId, JobPriority};
@@ -78,6 +78,7 @@ struct JobEnvelope {
 }
 
 struct Inner {
+    completed: Arc<Notify>,
     next_id: AtomicU64,
     high_tx: mpsc::UnboundedSender<JobEnvelope>,
     normal_tx: mpsc::UnboundedSender<JobEnvelope>,
@@ -106,6 +107,7 @@ impl JobScheduler {
         let (low_tx, low_rx) = mpsc::unbounded_channel();
 
         let inner = Arc::new(Inner {
+            completed: Arc::new(Notify::new()),
             next_id: AtomicU64::new(1),
             high_tx,
             normal_tx,
@@ -117,6 +119,11 @@ impl JobScheduler {
         spawn_dispatcher(inner.clone(), high_rx, normal_rx, low_rx);
 
         Self { inner }
+    }
+
+    /// Completion wakeups are coalesced. Drain ready handles after each wake.
+    pub fn completion_notifier(&self) -> Arc<Notify> {
+        self.inner.completed.clone()
     }
 
     /// Submit a future at `priority`.
@@ -143,7 +150,9 @@ impl JobScheduler {
         }
 
         let cancel_run = cancel.clone();
+        let completion = CompletionSignal(self.inner.completed.clone());
         let wrapped = async move {
+            let _completion = completion;
             if cancel_run.is_cancelled() {
                 let _ = tx.send(Err(JobError::Cancelled));
                 return;
@@ -210,6 +219,15 @@ impl JobScheduler {
         if let Some(id) = id {
             self.cancel(id);
         }
+    }
+}
+
+// Also wakes the UI when an aborted/queued future drops its result sender.
+struct CompletionSignal(Arc<Notify>);
+
+impl Drop for CompletionSignal {
+    fn drop(&mut self) {
+        self.0.notify_one();
     }
 }
 
@@ -283,6 +301,34 @@ mod tests {
     use std::time::Duration;
 
     #[tokio::test]
+    async fn completion_wakeup_has_ready_results_and_idle_does_not_spin() {
+        let scheduler = JobScheduler::new();
+        let completed = scheduler.completion_notifier();
+        let mut job = scheduler.spawn(JobPriority::Normal, None, async { 42 });
+        tokio::time::timeout(Duration::from_secs(2), completed.notified())
+            .await
+            .unwrap();
+        assert_eq!(job.try_join(), Some(Ok(42)));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), completed.notified())
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_job_also_wakes_completion_receiver() {
+        let scheduler = JobScheduler::new();
+        let completed = scheduler.completion_notifier();
+        let mut job = scheduler.spawn(JobPriority::Normal, None, std::future::pending::<()>());
+        scheduler.cancel(job.id);
+        tokio::time::timeout(Duration::from_secs(2), completed.notified())
+            .await
+            .unwrap();
+        assert_eq!(job.try_join(), Some(Err(JobError::Cancelled)));
+    }
+
+    #[tokio::test]
     async fn runs_job_and_returns_value() {
         let sched = JobScheduler::new();
         let handle = sched.spawn(JobPriority::Normal, None, async { 42u32 });
@@ -292,14 +338,10 @@ mod tests {
     #[tokio::test]
     async fn latest_wins_cancels_previous() {
         let sched = JobScheduler::new();
-        let first = sched.spawn(
-            JobPriority::Normal,
-            Some("k".into()),
-            async {
-                tokio::time::sleep(Duration::from_millis(200)).await;
-                1u32
-            },
-        );
+        let first = sched.spawn(JobPriority::Normal, Some("k".into()), async {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            1u32
+        });
         tokio::time::sleep(Duration::from_millis(10)).await;
         let second = sched.spawn(JobPriority::Normal, Some("k".into()), async { 2u32 });
         assert_eq!(second.join().await.unwrap(), 2);

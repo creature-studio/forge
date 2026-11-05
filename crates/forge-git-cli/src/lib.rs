@@ -10,6 +10,8 @@ use std::process::{Output, Stdio};
 use forge_model::{DiffHunk, DiffLine, DiffLineKind, DiffSide, FileDiff};
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
+mod workbench;
+pub use workbench::{GitAction, GitItem, GitQuery};
 
 /// Errors from the git CLI write / diff backend.
 #[derive(Debug, thiserror::Error)]
@@ -41,7 +43,7 @@ impl CliWriteBackend {
         Self
     }
 
-    /// `git add -- <paths>` relative to `repo` (worktree root or cwd inside it).
+    /// `git --literal-pathspecs add -- <paths>` relative to `repo`.
     pub async fn stage_paths(
         &self,
         repo: impl AsRef<Path>,
@@ -49,7 +51,7 @@ impl CliWriteBackend {
     ) -> Result<(), GitWriteError> {
         let args = path_args(paths)?;
         run_git(repo.as_ref(), "add", {
-            let mut v = vec!["add".into(), "--".into()];
+            let mut v = vec!["--literal-pathspecs".into(), "add".into(), "--".into()];
             v.extend(args);
             v
         })
@@ -57,15 +59,39 @@ impl CliWriteBackend {
         .map(|_| ())
     }
 
-    /// `git restore --staged -- <paths>` (unstage).
+    /// Unstage literal paths, preserving worktree files, including before the first commit.
     pub async fn unstage_paths(
         &self,
         repo: impl AsRef<Path>,
         paths: &[impl AsRef<Path>],
     ) -> Result<(), GitWriteError> {
         let args = path_args(paths)?;
+        let has_head = run_git_raw(
+            repo.as_ref(),
+            "rev-parse",
+            vec!["rev-parse".into(), "--verify".into(), "HEAD".into()],
+        )
+        .await?
+        .status
+        .success();
         run_git(repo.as_ref(), "unstage", {
-            let mut v = vec!["restore".into(), "--staged".into(), "--".into()];
+            let mut v = if has_head {
+                vec![
+                    "--literal-pathspecs".into(),
+                    "restore".into(),
+                    "--staged".into(),
+                    "--".into(),
+                ]
+            } else {
+                // An unborn branch has no HEAD to restore from. Remove only index entries.
+                vec![
+                    "--literal-pathspecs".into(),
+                    "rm".into(),
+                    "--cached".into(),
+                    "-f".into(),
+                    "--".into(),
+                ]
+            };
             v.extend(args);
             v
         })
@@ -103,7 +129,14 @@ impl CliWriteBackend {
     ) -> Result<FileDiff, GitWriteError> {
         let repo = repo.as_ref();
         let path = rela_path.as_ref();
-        let mut args: Vec<String> = vec!["diff".into(), "--no-color".into(), "--unified=3".into()];
+        let mut args: Vec<String> = vec![
+            "--literal-pathspecs".into(),
+            "diff".into(),
+            "--no-ext-diff".into(),
+            "--no-textconv".into(),
+            "--no-color".into(),
+            "--unified=3".into(),
+        ];
         if matches!(side, DiffSide::Staged) {
             args.push("--cached".into());
         }
@@ -217,7 +250,11 @@ impl CliWriteBackend {
             Ok(())
         } else {
             Err(GitWriteError::Command {
-                op: if reverse { "unstage-hunk" } else { "stage-hunk" },
+                op: if reverse {
+                    "unstage-hunk"
+                } else {
+                    "stage-hunk"
+                },
                 code: output.status.code().unwrap_or(-1),
                 stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
             })
@@ -232,7 +269,12 @@ impl CliWriteBackend {
 
     /// `git pull` (non-interactive). Credential / divergent-history errors surface in status.
     pub async fn pull(&self, repo: impl AsRef<Path>) -> Result<String, GitWriteError> {
-        let output = run_git_raw(repo.as_ref(), "pull", vec!["pull".into(), "--ff-only".into()]).await?;
+        let output = run_git_raw(
+            repo.as_ref(),
+            "pull",
+            vec!["pull".into(), "--ff-only".into()],
+        )
+        .await?;
         summarize_remote(output, "pull")
     }
 }
@@ -255,7 +297,7 @@ fn summarize_remote(output: Output, op: &'static str) -> Result<String, GitWrite
         Err(GitWriteError::Command {
             op,
             code: output.status.code().unwrap_or(-1),
-            stderr: detail.lines().next().unwrap_or("failed").to_string(),
+            stderr: detail,
         })
     }
 }
@@ -296,8 +338,14 @@ async fn run_git_raw(
         .args(&args)
         .current_dir(repo)
         .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
+        .kill_on_drop(true)
         // Prefer repo-local config; fall back so CI / ephemeral envs can commit.
-        .env("GIT_AUTHOR_NAME", std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "forge".into()))
+        .env(
+            "GIT_AUTHOR_NAME",
+            std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "forge".into()),
+        )
         .env(
             "GIT_AUTHOR_EMAIL",
             std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "forge@localhost".into()),
@@ -356,13 +404,31 @@ async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, Git
     if !abs.is_file() {
         return Ok(Vec::new());
     }
+    let tracked = run_git_raw(
+        repo,
+        "ls-files",
+        vec![
+            "--literal-pathspecs".into(),
+            "ls-files".into(),
+            "--error-unmatch".into(),
+            "--".into(),
+            rela.into(),
+        ],
+    )
+    .await?;
+    if tracked.status.success() {
+        return Ok(Vec::new());
+    }
     // `git diff --no-index -- /dev/null path` exits 1 with a diff.
     let output = Command::new("git")
         .args([
             "diff",
             "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
             "--no-index",
             "--unified=3",
+            "--",
             "/dev/null",
             rela,
         ])
@@ -374,9 +440,7 @@ async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, Git
     if code != 0 && code != 1 {
         return Ok(Vec::new());
     }
-    Ok(parse_unified_diff(&String::from_utf8_lossy(
-        &output.stdout,
-    )))
+    Ok(parse_unified_diff(&String::from_utf8_lossy(&output.stdout)))
 }
 
 #[cfg(test)]
@@ -419,7 +483,10 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            staged.lines.iter().any(|l| matches!(l.kind, DiffLineKind::Add)),
+            staged
+                .lines
+                .iter()
+                .any(|l| matches!(l.kind, DiffLineKind::Add)),
             "{:?}",
             staged.lines
         );
@@ -455,14 +522,23 @@ mod tests {
 
         fs::write(root.join("a.txt"), "one\nTWO\nthree\nFOUR\n").unwrap();
         let cli = CliWriteBackend::new();
-        let diff = cli.file_diff(root, "a.txt", DiffSide::Unstaged).await.unwrap();
+        let diff = cli
+            .file_diff(root, "a.txt", DiffSide::Unstaged)
+            .await
+            .unwrap();
         let hunks = diff.hunks();
         assert!(!hunks.is_empty(), "expected hunks in {:?}", diff.lines);
         // Stage first hunk only.
         cli.stage_hunk(root, &diff, &hunks[0]).await.unwrap();
-        let staged = cli.file_diff(root, "a.txt", DiffSide::Staged).await.unwrap();
+        let staged = cli
+            .file_diff(root, "a.txt", DiffSide::Staged)
+            .await
+            .unwrap();
         assert!(
-            staged.lines.iter().any(|l| matches!(l.kind, DiffLineKind::Add)),
+            staged
+                .lines
+                .iter()
+                .any(|l| matches!(l.kind, DiffLineKind::Add)),
             "expected staged adds: {:?}",
             staged.lines
         );

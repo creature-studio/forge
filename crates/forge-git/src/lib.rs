@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 pub use forge_git_cli::{CliWriteBackend, GitWriteError};
+pub use forge_git_cli::{GitAction, GitItem, GitQuery};
 pub use forge_git_gix::{GitReadError, GixReadBackend};
 pub use forge_model::{
     ChangeEntry, DiffHunk, DiffLine, DiffLineKind, DiffSide, FileDiff, GitStatus, StatusSnapshot,
@@ -139,10 +140,7 @@ mod tests {
 
         let svc = GitService::new();
         let snap = svc.status(root).unwrap();
-        assert_eq!(
-            snap.status_for(&root.join("b.txt")),
-            GitStatus::Untracked
-        );
+        assert_eq!(snap.status_for(&root.join("b.txt")), GitStatus::Untracked);
         assert!(svc.find_repo_root(root).is_some());
         assert!(snap.unstaged.iter().any(|c| c.path == "b.txt"));
     }

@@ -2,7 +2,7 @@
 
 use forge_model::{DiffLine, DiffLineKind};
 use forge_theme::Theme;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
@@ -69,7 +69,6 @@ pub enum PreviewView<'a> {
     },
 }
 
-
 /// Cached side-by-side rows for the current unified diff.
 ///
 /// Rebuilt only when the underlying [`DiffLine`] buffer identity changes, so
@@ -110,10 +109,8 @@ pub fn draw_preview(
     frame: &mut Frame<'_>,
     area: Rect,
     theme: &Theme,
-    title: &str,
     view: PreviewView<'_>,
     scroll: &mut usize,
-    focused: bool,
     split_cache: &mut SplitRowsCache,
 ) -> Rect {
     if area.height == 0 || area.width == 0 {
@@ -121,88 +118,7 @@ pub fn draw_preview(
     }
 
     let is_diff = matches!(view, PreviewView::Diff { .. });
-    // Diff: title + thin rule + body. File/text: title + body.
-    let (title_area, inner) = if is_diff {
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(area);
-        (chunks[0], chunks[2])
-    } else {
-        let chunks = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(area);
-        (chunks[0], chunks[1])
-    };
-
-    // Diff: muted side label + cyan chip on basename (+ hunk note).
-    // Text/file: muted dirname prefix + cyan basename chip when path-like.
-    let title_line = match view {
-        PreviewView::Diff {
-            path,
-            side,
-            hunk_idx,
-            ..
-        } => {
-            let basename = path.rsplit('/').next().unwrap_or(path);
-            let hunk_note = match hunk_idx {
-                Some((i, n)) if n > 0 => {
-                    let unit = if n == 1 { "hunk" } else { "hunks" };
-                    format!("  {}/{} {unit}", i + 1, n)
-                }
-                _ => String::new(),
-            };
-            // One header line: muted side + cyan basename chip + optional hunk note.
-            Line::from(vec![
-                Span::styled(
-                    format!(" {side} "),
-                    Style::default()
-                        .fg(rgb(theme.muted))
-                        .bg(rgb(theme.panel_bg)),
-                ),
-                Span::styled(
-                    format!(" {basename} "),
-                    Style::default()
-                        .fg(rgb(theme.selection_fg))
-                        .bg(rgb(theme.selection_bg))
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    hunk_note,
-                    Style::default()
-                        .fg(rgb(theme.muted))
-                        .bg(rgb(theme.panel_bg)),
-                ),
-            ])
-        }
-        _ => file_preview_title_line(theme, title, focused),
-    };
-    frame.render_widget(
-        Paragraph::new(title_line).style(Style::default().bg(rgb(theme.panel_bg))),
-        title_area,
-    );
-
-    if is_diff {
-        // Thin muted rule under the title — anchors short diffs without filler.
-        let rule_area = Rect {
-            x: area.x,
-            y: title_area.y.saturating_add(1),
-            width: area.width,
-            height: 1,
-        };
-        let rule = "─".repeat(rule_area.width as usize);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                rule,
-                Style::default()
-                    .fg(rgb(theme.muted))
-                    .bg(rgb(theme.panel_bg)),
-            )))
-            .style(Style::default().bg(rgb(theme.panel_bg))),
-            rule_area,
-        );
-    }
-
+    let inner = area;
     style::fill_panel(frame, inner, theme);
 
     let viewport = inner.height as usize;
@@ -291,10 +207,7 @@ fn build_visible_lines(
                 )),
                 Line::from(Span::styled(count_label, style::muted(theme))),
                 Line::from(""),
-                Line::from(Span::styled(
-                    "  Enter / l to open",
-                    style::muted(theme),
-                )),
+                Line::from(Span::styled("  Enter / l to open", style::muted(theme))),
             ];
             slice_static(start, end, &all)
         }
@@ -378,10 +291,7 @@ fn build_visible_lines(
                 return slice_static(
                     start,
                     end,
-                    &[Line::from(Span::styled(
-                        "  (no diff)",
-                        style::muted(theme),
-                    ))],
+                    &[Line::from(Span::styled("  (no diff)", style::muted(theme)))],
                 );
             }
             let rows = split_cache.rows_for(lines);
@@ -430,6 +340,7 @@ fn build_lines(
 
 /// Split a path-like preview title into muted dirname + basename.
 /// Basename-only titles return `(None, name)`.
+#[cfg(test)]
 fn split_preview_path(title: &str) -> (Option<String>, String) {
     let title = title.trim();
     if title.is_empty() {
@@ -449,51 +360,13 @@ fn split_preview_path(title: &str) -> (Option<String>, String) {
     }
 }
 
-fn file_preview_title_line(theme: &Theme, title: &str, focused: bool) -> Line<'static> {
-    let (prefix, base) = split_preview_path(title);
-    let has_prefix = prefix.is_some();
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    if let Some(dir) = prefix {
-        spans.push(Span::styled(
-            format!(" {dir}"),
-            Style::default()
-                .fg(rgb(theme.muted))
-                .bg(rgb(theme.panel_bg)),
-        ));
-    }
-    if focused {
-        spans.push(Span::styled(
-            format!(" {base} "),
-            Style::default()
-                .fg(rgb(theme.selection_fg))
-                .bg(rgb(theme.selection_bg))
-                .add_modifier(Modifier::BOLD),
-        ));
-    } else if has_prefix {
-        spans.push(Span::styled(
-            base,
-            Style::default()
-                .fg(rgb(theme.muted))
-                .bg(rgb(theme.panel_bg)),
-        ));
-    } else {
-        spans.push(Span::styled(
-            format!(" {base}"),
-            Style::default()
-                .fg(rgb(theme.muted))
-                .bg(rgb(theme.panel_bg)),
-        ));
-    }
-    Line::from(spans)
-}
-
 /// Line-number gutter: slightly brighter than chrome muted + visible rule.
 fn gutter_num_fg(theme: &Theme) -> forge_theme::Rgb {
     // Lift muted ~1/3 of the way toward fg so numbers stay secondary but readable.
     forge_theme::Rgb::new(
-        theme.muted.r + (theme.fg.r - theme.muted.r) / 3,
-        theme.muted.g + (theme.fg.g - theme.muted.g) / 3,
-        theme.muted.b + (theme.fg.b - theme.muted.b) / 3,
+        ((2 * u16::from(theme.muted.r) + u16::from(theme.fg.r)) / 3) as u8,
+        ((2 * u16::from(theme.muted.g) + u16::from(theme.fg.g)) / 3) as u8,
+        ((2 * u16::from(theme.muted.b) + u16::from(theme.fg.b)) / 3) as u8,
     )
 }
 
@@ -631,10 +504,7 @@ fn rust_line(theme: &Theme, raw: &str) -> Line<'static> {
             let next = chars.get(i + 1).copied();
             // Lifetime / label: 'ident — alpha after quote, not a closed char literal
             let looks_like_lifetime = matches!(next, Some(n) if n.is_ascii_alphabetic() || n == '_')
-                && !matches!(
-                    (next, chars.get(i + 2).copied()),
-                    (Some(_), Some('\''))
-                );
+                && !matches!((next, chars.get(i + 2).copied()), (Some(_), Some('\'')));
             if looks_like_lifetime {
                 // keep as normal text (lifetime)
                 buf.push(c);
@@ -996,9 +866,7 @@ pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCach
             5
         }
         PreviewView::Text {
-            lines,
-            truncated,
-            ..
+            lines, truncated, ..
         } => text_preview_line_count(lines, truncated),
         PreviewView::Diff { lines, .. } => {
             if lines.is_empty() {
@@ -1026,7 +894,6 @@ pub fn scroll_to_hunk(
     *scroll = target.min(max_scroll);
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1039,7 +906,11 @@ mod tests {
         let styles: Vec<_> = line.spans.iter().map(|s| s.style.fg).collect();
         let magenta = style::rgb(forge_theme::Rgb::new(0xc6, 0x78, 0xdd));
         let fg = style::rgb(theme.fg);
-        assert!(styles.iter().any(|c| *c == Some(magenta)), "expected magenta keyword span, got {:?}", styles);
+        assert!(
+            styles.iter().any(|c| *c == Some(magenta)),
+            "expected magenta keyword span, got {:?}",
+            styles
+        );
         // first span should be the keyword "use"
         assert_eq!(line.spans[0].content.as_ref(), "use");
         assert_eq!(line.spans[0].style.fg, Some(magenta));
@@ -1132,7 +1003,10 @@ mod tests {
             }
             other => panic!("expected pair, got {other:?}"),
         }
-        assert_eq!(diff_render_hunk_start(&lines, 5, &mut SplitRowsCache::default()), 1);
+        assert_eq!(
+            diff_render_hunk_start(&lines, 5, &mut SplitRowsCache::default()),
+            1
+        );
     }
 
     #[test]
@@ -1231,10 +1105,19 @@ mod tests {
         let spans: Vec<_> = line.spans.iter().collect();
         assert!(spans.len() >= 4);
         assert_eq!(spans[2].content.as_ref(), "│");
-        assert_eq!(spans[1].style.bg, Some(crate::style::rgb(theme.diff_del_bg)));
-        assert_eq!(spans[3].style.bg, Some(crate::style::rgb(theme.diff_add_bg)));
+        assert_eq!(
+            spans[1].style.bg,
+            Some(crate::style::rgb(theme.diff_del_bg))
+        );
+        assert_eq!(
+            spans[3].style.bg,
+            Some(crate::style::rgb(theme.diff_add_bg))
+        );
         assert_eq!(spans[2].style.fg, Some(crate::style::rgb(theme.muted)));
-        assert_ne!(spans[2].style.fg, Some(crate::style::rgb(theme.border_focus)));
+        assert_ne!(
+            spans[2].style.fg,
+            Some(crate::style::rgb(theme.border_focus))
+        );
     }
 
     #[test]
@@ -1353,7 +1236,10 @@ mod tests {
             }
             other => panic!("expected unpaired delete, got {other:?}"),
         }
-        assert_eq!(diff_render_hunk_start(&lines, 0, &mut SplitRowsCache::default()), 0);
+        assert_eq!(
+            diff_render_hunk_start(&lines, 0, &mut SplitRowsCache::default()),
+            0
+        );
     }
     #[test]
     fn split_cache_reuses_rows_across_lookups() {
@@ -1393,7 +1279,10 @@ mod tests {
         );
         let ptr2 = cache.rows.as_ptr();
         assert_eq!(n1, n2);
-        assert_eq!(ptr1, ptr2, "scroll/hunk highlight must not rebuild split rows");
+        assert_eq!(
+            ptr1, ptr2,
+            "scroll/hunk highlight must not rebuild split rows"
+        );
         assert_eq!(diff_render_hunk_start(&lines, 0, &mut cache), 0);
         assert_eq!(cache.rows.as_ptr(), ptr2);
     }
@@ -1428,5 +1317,4 @@ mod tests {
         scroll_to_hunk(&mut scroll, 0, 100, 10);
         assert_eq!(scroll, 0);
     }
-
 }

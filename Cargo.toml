@@ -19,7 +19,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/example/forge"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 # Internal crates
@@ -38,16 +38,16 @@ forge-model = { path = "crates/forge-model" }
 tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util", "process"] }
 
 # TUI
-ratatui = "=0.28.1"  # 0.29+ needs rustc >= 1.88; box is 1.85
-crossterm = "=0.28.1"
+ratatui = "=0.30.1"
+crossterm = "=0.29.0"
+ratatui-kit = { version = "=0.10.3", features = ["atom", "input"] }
 
 # Terminal display width (CJK-aware column layout)
 unicode-width = "=0.1.14"
 
 # Git (read path)
 gix = { version = "=0.87.0", default-features = false, features = ["max-performance-safe", "status", "sha1"] }
-# Transitive pin: gix-filter → encoding_rs; 0.8.40+ needs rustc 1.88 (box is 1.85).
-# Keep Cargo.lock on encoding_rs 0.8.35 via: cargo update -p encoding_rs --precise 0.8.35
+# Keep the existing gix encoding behavior pinned during the UI migration.
 encoding_rs = "=0.8.35"
 
 
@@ -63,6 +63,8 @@ notify = "6.1"
 nucleo = "0.5"
 walkdir = "2.5"
 ignore = "0.4"
+regex = "1.11"
+shell-words = "1.1"
 directories = "6.0"
 clap = { version = "4.5", features = ["derive"] }
 tracing = "0.1"

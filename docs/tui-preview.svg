@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1248" height="648" viewBox="0 0 1248 648">
+<title>Forge terminal workspace — captured from the running application</title>
+<rect width="1248" height="648" rx="12" fill="#16181b"/>
+<g font-family="DejaVu Sans Mono, monospace" font-size="16">
+<text x="44" y="42" fill="#d4d4d4" xml:space="preserve" textLength="50" lengthAdjust="spacingAndGlyphs" font-weight="700">forge</text>
+<text x="94" y="42" fill="#7f7f7f" xml:space="preserve" textLength="260" lengthAdjust="spacingAndGlyphs">  /  /home/fxh/tools/forge</text>
+<text x="884" y="42" fill="#7f7f7f" xml:space="preserve" textLength="100" lengthAdjust="spacingAndGlyphs">git master</text>
+<text x="984" y="42" fill="#cdcd00" xml:space="preserve" textLength="120" lengthAdjust="spacingAndGlyphs">  16 changed</text>
+<text x="1104" y="42" fill="#00cd00" xml:space="preserve" textLength="100" lengthAdjust="spacingAndGlyphs">  0 staged</text>
+<text x="24" y="62" fill="#7f7f7f" xml:space="preserve" textLength="1200" lengthAdjust="spacingAndGlyphs">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="24" y="82" fill="#00cdcd" xml:space="preserve" textLength="30" lengthAdjust="spacingAndGlyphs"> › </text>
+<text x="54" y="82" fill="#d4d4d4" xml:space="preserve" textLength="50" lengthAdjust="spacingAndGlyphs" font-weight="700">Files</text>
+<text x="104" y="82" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  11</text>
+<text x="324" y="82" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="364" y="82" fill="#7f7f7f" xml:space="preserve" textLength="190" lengthAdjust="spacingAndGlyphs">Preview  Cargo.toml</text>
+<text x="324" y="102" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="34" y="122" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">▸ □ </text>
+<text x="74" y="122" fill="#d4d4d4" xml:space="preserve" textLength="250" lengthAdjust="spacingAndGlyphs">.git                     </text>
+<text x="324" y="122" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="122" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   1</text>
+<text x="374" y="122" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="122" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">[workspace]                                                                         </text>
+<text x="34" y="142" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">▸ □ </text>
+<text x="74" y="142" fill="#cdcd00" xml:space="preserve" textLength="60" lengthAdjust="spacingAndGlyphs">crates</text>
+<text x="304" y="142" fill="#cdcd00" xml:space="preserve" textLength="20" lengthAdjust="spacingAndGlyphs">M </text>
+<text x="324" y="142" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="142" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   2</text>
+<text x="374" y="142" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="142" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">resolver = &quot;2&quot;                                                                      </text>
+<text x="34" y="162" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">▸ □ </text>
+<text x="74" y="162" fill="#00cd00" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">docs</text>
+<text x="304" y="162" fill="#00cd00" xml:space="preserve" textLength="20" lengthAdjust="spacingAndGlyphs">U </text>
+<text x="324" y="162" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="162" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   3</text>
+<text x="374" y="162" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="162" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">members = [                                                                         </text>
+<text x="34" y="182" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">▸ □ </text>
+<text x="74" y="182" fill="#00cd00" xml:space="preserve" textLength="70" lengthAdjust="spacingAndGlyphs">scripts</text>
+<text x="304" y="182" fill="#00cd00" xml:space="preserve" textLength="20" lengthAdjust="spacingAndGlyphs">U </text>
+<text x="324" y="182" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="182" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   4</text>
+<text x="374" y="182" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="182" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge&quot;,                                                                 </text>
+<text x="34" y="202" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">▸ □ </text>
+<text x="74" y="202" fill="#d4d4d4" xml:space="preserve" textLength="250" lengthAdjust="spacingAndGlyphs">target                   </text>
+<text x="324" y="202" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="202" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   5</text>
+<text x="374" y="202" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="202" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-app&quot;,                                                             </text>
+<text x="34" y="222" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">▸ □ </text>
+<text x="74" y="222" fill="#d4d4d4" xml:space="preserve" textLength="250" lengthAdjust="spacingAndGlyphs">tests                    </text>
+<text x="324" y="222" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="222" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   6</text>
+<text x="374" y="222" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="222" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-ui&quot;,                                                              </text>
+<text x="34" y="242" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  · </text>
+<text x="74" y="242" fill="#d4d4d4" xml:space="preserve" textLength="250" lengthAdjust="spacingAndGlyphs">.gitignore               </text>
+<text x="324" y="242" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="242" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   7</text>
+<text x="374" y="242" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="242" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-fs&quot;,                                                              </text>
+<text x="34" y="262" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  · </text>
+<text x="74" y="262" fill="#cdcd00" xml:space="preserve" textLength="100" lengthAdjust="spacingAndGlyphs">Cargo.lock</text>
+<text x="304" y="262" fill="#cdcd00" xml:space="preserve" textLength="20" lengthAdjust="spacingAndGlyphs">M </text>
+<text x="324" y="262" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="262" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   8</text>
+<text x="374" y="262" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="262" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-git&quot;,                                                             </text>
+<rect x="24" y="264" width="10" height="20" fill="#7f7f7f"/>
+<text x="24" y="282" fill="#00cdcd" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">›</text>
+<rect x="34" y="264" width="40" height="20" fill="#7f7f7f"/>
+<text x="34" y="282" fill="#ffffff" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  · </text>
+<rect x="74" y="264" width="100" height="20" fill="#7f7f7f"/>
+<text x="74" y="282" fill="#ffffff" xml:space="preserve" textLength="100" lengthAdjust="spacingAndGlyphs" font-weight="700">Cargo.toml</text>
+<rect x="174" y="264" width="130" height="20" fill="#7f7f7f"/>
+<rect x="304" y="264" width="20" height="20" fill="#7f7f7f"/>
+<text x="304" y="282" fill="#cdcd00" xml:space="preserve" textLength="20" lengthAdjust="spacingAndGlyphs">M </text>
+<text x="324" y="282" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="282" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">   9</text>
+<text x="374" y="282" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="282" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-git-gix&quot;,                                                         </text>
+<text x="34" y="302" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  · </text>
+<text x="74" y="302" fill="#cdcd00" xml:space="preserve" textLength="90" lengthAdjust="spacingAndGlyphs">README.md</text>
+<text x="304" y="302" fill="#cdcd00" xml:space="preserve" textLength="20" lengthAdjust="spacingAndGlyphs">M </text>
+<text x="324" y="302" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="302" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  10</text>
+<text x="374" y="302" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="302" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-git-cli&quot;,                                                         </text>
+<text x="34" y="322" fill="#7f7f7f" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  · </text>
+<text x="74" y="322" fill="#d4d4d4" xml:space="preserve" textLength="250" lengthAdjust="spacingAndGlyphs">rust-toolchain.toml      </text>
+<text x="324" y="322" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="322" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  11</text>
+<text x="374" y="322" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="322" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-jobs&quot;,                                                            </text>
+<text x="324" y="342" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="342" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  12</text>
+<text x="374" y="342" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="342" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-config&quot;,                                                          </text>
+<text x="324" y="362" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="362" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  13</text>
+<text x="374" y="362" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="362" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-theme&quot;,                                                           </text>
+<text x="324" y="382" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="382" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  14</text>
+<text x="374" y="382" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="382" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">    &quot;crates/forge-model&quot;,                                                           </text>
+<text x="324" y="402" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="402" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  15</text>
+<text x="374" y="402" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="402" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">]                                                                                   </text>
+<text x="324" y="422" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="422" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  16</text>
+<text x="374" y="422" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="324" y="442" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="442" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  17</text>
+<text x="374" y="442" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="442" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">[workspace.package]                                                                 </text>
+<text x="324" y="462" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="462" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  18</text>
+<text x="374" y="462" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="462" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">version = &quot;0.1.0&quot;                                                                   </text>
+<text x="324" y="482" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="482" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  19</text>
+<text x="374" y="482" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="482" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">edition = &quot;2021&quot;                                                                    </text>
+<text x="324" y="502" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="502" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  20</text>
+<text x="374" y="502" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="502" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">license = &quot;MIT&quot;                                                                     </text>
+<text x="324" y="522" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="522" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  21</text>
+<text x="374" y="522" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="522" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">repository = &quot;https://github.com/example/forge&quot;                                     </text>
+<text x="324" y="542" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="542" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  22</text>
+<text x="374" y="542" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="384" y="542" fill="#d4d4d4" xml:space="preserve" textLength="840" lengthAdjust="spacingAndGlyphs">rust-version = &quot;1.89&quot;                                                               </text>
+<text x="324" y="562" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="334" y="562" fill="#858585" xml:space="preserve" textLength="40" lengthAdjust="spacingAndGlyphs">  23</text>
+<text x="374" y="562" fill="#7f7f7f" xml:space="preserve" textLength="10" lengthAdjust="spacingAndGlyphs">│</text>
+<text x="24" y="582" fill="#7f7f7f" xml:space="preserve" textLength="1200" lengthAdjust="spacingAndGlyphs">────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────</text>
+<text x="44" y="602" fill="#7f7f7f" xml:space="preserve" textLength="160" lengthAdjust="spacingAndGlyphs">Browse workspace</text>
+<text x="1074" y="602" fill="#7f7f7f" xml:space="preserve" textLength="130" lengthAdjust="spacingAndGlyphs">Files  9 / 11</text>
+<text x="24" y="622" fill="#d4d4d4" xml:space="preserve" textLength="60" lengthAdjust="spacingAndGlyphs">  Tab </text>
+<text x="84" y="622" fill="#7f7f7f" xml:space="preserve" textLength="70" lengthAdjust="spacingAndGlyphs">focus  </text>
+<text x="154" y="622" fill="#d4d4d4" xml:space="preserve" textLength="70" lengthAdjust="spacingAndGlyphs"> Enter </text>
+<text x="224" y="622" fill="#7f7f7f" xml:space="preserve" textLength="60" lengthAdjust="spacingAndGlyphs">open  </text>
+<text x="284" y="622" fill="#d4d4d4" xml:space="preserve" textLength="30" lengthAdjust="spacingAndGlyphs"> g </text>
+<text x="314" y="622" fill="#7f7f7f" xml:space="preserve" textLength="50" lengthAdjust="spacingAndGlyphs">Git  </text>
+<text x="364" y="622" fill="#d4d4d4" xml:space="preserve" textLength="30" lengthAdjust="spacingAndGlyphs"> d </text>
+<text x="394" y="622" fill="#7f7f7f" xml:space="preserve" textLength="60" lengthAdjust="spacingAndGlyphs">diff  </text>
+<text x="454" y="622" fill="#d4d4d4" xml:space="preserve" textLength="30" lengthAdjust="spacingAndGlyphs"> r </text>
+<text x="484" y="622" fill="#7f7f7f" xml:space="preserve" textLength="90" lengthAdjust="spacingAndGlyphs">refresh  </text>
+<text x="574" y="622" fill="#d4d4d4" xml:space="preserve" textLength="30" lengthAdjust="spacingAndGlyphs"> q </text>
+<text x="604" y="622" fill="#7f7f7f" xml:space="preserve" textLength="60" lengthAdjust="spacingAndGlyphs">quit  </text>
+</g>
+</svg>

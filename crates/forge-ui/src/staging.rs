@@ -10,8 +10,9 @@ use forge_theme::Theme;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph};
 use ratatui::Frame;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::file_list::ensure_selected_visible;
 use crate::icons::{icon_mode, IconMode, Icons};
@@ -301,10 +302,7 @@ pub struct StagingLayout {
 
 impl StagingLayout {
     pub fn contains(&self, column: u16, row: u16) -> bool {
-        self.area.contains(Position {
-            x: column,
-            y: row,
-        })
+        self.area.contains(Position { x: column, y: row })
     }
 
     /// Legacy dual-column hit test — unused in sidebar mode (always `None`).
@@ -337,13 +335,7 @@ pub fn draw_scm_sidebar(
         return StagingLayout::default();
     }
 
-    let dirty = state.unstaged.len() + state.staged.len();
-    let title = if dirty > 0 {
-        format!("GIT · {dirty}")
-    } else {
-        "SOURCE CONTROL".into()
-    };
-    let body = style::draw_section_header(frame, area, theme, &title, state.focused);
+    let body = area;
 
     let rows = build_scm_rows(
         state.unstaged,
@@ -397,7 +389,16 @@ pub fn draw_scm_sidebar(
                         StagingColumn::Staged => state.staged.get(*ei),
                     };
                     match entry {
-                        Some(e) => change_item(theme, e, *depth, is_sel, focused, body.width),
+                        Some(e) => {
+                            change_item(
+                                theme,
+                                e,
+                                *depth,
+                                is_sel,
+                                focused,
+                                body.width,
+                            )
+                        }
                         None => ListItem::new(Line::from("")),
                     }
                 }
@@ -485,6 +486,7 @@ fn section_item(
         ),
         Span::styled(" ", pad),
     ]))
+    .style(Style::default().bg(rgb(bg)))
 }
 
 fn folder_item(
@@ -545,12 +547,12 @@ fn folder_item(
     let count_tok = format!(" ({file_count})");
 
     let left_inset = " ";
-    let used = left_inset.chars().count()
-        + indent.chars().count()
-        + chevron_tok.chars().count()
-        + icon_tok.chars().count()
-        + label.chars().count()
-        + count_tok.chars().count();
+    let used = left_inset.width()
+        + indent.width()
+        + chevron_tok.width()
+        + icon_tok.width()
+        + label.width()
+        + count_tok.width();
     let pad_len = (row_width as usize).saturating_sub(used);
 
     ListItem::new(Line::from(vec![
@@ -562,6 +564,7 @@ fn folder_item(
         Span::styled(count_tok, count_style),
         Span::styled(" ".repeat(pad_len.max(1)), pad_style),
     ]))
+    .style(Style::default().bg(rgb(bg)))
 }
 
 fn change_item(
@@ -602,11 +605,7 @@ fn change_item(
     } else {
         theme.muted
     };
-    let basename = entry
-        .path
-        .rsplit('/')
-        .next()
-        .unwrap_or(entry.path.as_str());
+    let basename = entry.path.rsplit('/').next().unwrap_or(entry.path.as_str());
     let icon = Icons::file_for_name(basename);
     let icon_tok = Icons::padded(icon);
     let indent = "  ".repeat(depth as usize);
@@ -614,46 +613,55 @@ fn change_item(
     let chevron_pad = "  ";
     let left_inset = " ";
     let gutter_tok = format!("{gutter} ");
-    let prefix_cols = left_inset.chars().count()
-        + indent.chars().count()
-        + chevron_pad.chars().count()
-        + gutter_tok.chars().count()
-        + icon_tok.chars().count();
+    let prefix_cols = left_inset.width()
+        + indent.width()
+        + chevron_pad.width()
+        + gutter_tok.width()
+        + icon_tok.width();
     let max_name = (row_width as usize)
         .saturating_sub(prefix_cols)
         .saturating_sub(1)
         .max(4);
     let label = truncate_end(basename, max_name);
-    let used = prefix_cols + label.chars().count();
+    let used = prefix_cols + label.width();
     let pad_len = (row_width as usize).saturating_sub(used);
     let pad_style = Style::default().bg(rgb(bg));
     let mut gutter_style = Style::default().fg(rgb(gutter_fg)).bg(rgb(bg));
     if !(selected && focused) {
         gutter_style = gutter_style.add_modifier(Modifier::BOLD);
     }
-    ListItem::new(Line::from(vec![
+    let mut spans = vec![
         Span::styled(left_inset.to_string(), pad_style),
         Span::styled(indent, pad_style),
         Span::styled(chevron_pad.to_string(), pad_style),
         Span::styled(gutter_tok, gutter_style),
         Span::styled(icon_tok, Style::default().fg(rgb(icon_fg)).bg(rgb(bg))),
         Span::styled(label, name_style),
-        Span::styled(" ".repeat(pad_len.max(1)), pad_style),
-    ]))
+    ];
+    spans.push(Span::styled(" ".repeat(pad_len.max(1)), pad_style));
+    ListItem::new(Line::from(spans)).style(Style::default().bg(rgb(bg)))
 }
 
 /// Truncate from the end with an ellipsis when too wide.
 fn truncate_end(name: &str, max: usize) -> String {
-    let chars: Vec<char> = name.chars().collect();
-    if chars.len() <= max {
+    if name.width() <= max {
         return name.to_string();
     }
-    if max <= 1 {
-        return "…".to_string();
+    if max == 0 {
+        return String::new();
     }
-    let keep = max - 1;
-    let head: String = chars[..keep].iter().collect();
-    format!("{head}…")
+    let mut remaining = max - 1;
+    let mut label = String::new();
+    for ch in name.chars() {
+        let cells = ch.width().unwrap_or(0);
+        if cells > remaining {
+            break;
+        }
+        remaining -= cells;
+        label.push(ch);
+    }
+    label.push('…');
+    label
 }
 
 /// Prefer keeping the filename: `…/crates/foo.rs` when the path is too wide.
@@ -690,10 +698,7 @@ pub fn scm_index_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    if !inner.contains(Position {
-        x: column,
-        y: row,
-    }) {
+    if !inner.contains(Position { x: column, y: row }) {
         return None;
     }
     let offset = (row - inner.y) as usize;
@@ -787,7 +792,11 @@ pub fn draw_commit_modal(frame: &mut Frame<'_>, theme: &Theme, input: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(Style::default().fg(rgb(theme.border)).bg(rgb(theme.menu_bg)))
+        .border_style(
+            Style::default()
+                .fg(rgb(theme.border))
+                .bg(rgb(theme.menu_bg)),
+        )
         .style(
             Style::default()
                 .bg(rgb(theme.menu_bg))
@@ -804,14 +813,15 @@ pub fn draw_commit_modal(frame: &mut Frame<'_>, theme: &Theme, input: &str) {
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
 
-    let rows =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)])
-            .split(inner);
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
     let prompt = Paragraph::new(Span::styled(
         " message | Enter confirm | Esc cancel",
-        Style::default()
-            .fg(rgb(theme.muted))
-            .bg(rgb(theme.menu_bg)),
+        Style::default().fg(rgb(theme.muted)).bg(rgb(theme.menu_bg)),
     ));
     frame.render_widget(prompt, rows[0]);
 
@@ -871,7 +881,11 @@ mod tests {
         ));
         assert!(matches!(
             &rows[2],
-            ScmRow::Change { index: 2, depth: 0, .. }
+            ScmRow::Change {
+                index: 2,
+                depth: 0,
+                ..
+            }
         ));
         assert!(matches!(
             &rows[3],

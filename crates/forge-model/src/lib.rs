@@ -161,6 +161,124 @@ impl FileDiff {
     pub fn hunk_patch(&self, hunk: &DiffHunk) -> String {
         build_hunk_patch(self, hunk)
     }
+
+    /// Build a patch from the current index to the index with exactly one change
+    /// staged/unstaged. Other changes in the hunk become context or are omitted.
+    pub fn line_patch(&self, index: usize) -> Option<String> {
+        let hunk = self
+            .hunks()
+            .into_iter()
+            .find(|h| index > h.start && index < h.end)?;
+        if !matches!(
+            self.lines.get(index)?.kind,
+            DiffLineKind::Add | DiffLineKind::Delete
+        ) {
+            return None;
+        }
+        let reverse = self.side == DiffSide::Staged;
+        let ranges: Vec<_> = hunk.header.split_whitespace().collect();
+        let range = ranges.get(if reverse { 2 } else { 1 })?;
+        let start: usize = range.get(1..)?.split(',').next()?.parse().ok()?;
+        let mut body = String::new();
+        let (mut old_count, mut new_count) = (0, 0);
+        let mut kept = false;
+        for (offset, line) in self.lines[hunk.start + 1..hunk.end].iter().enumerate() {
+            if line.text.starts_with("\\ No newline") {
+                if kept {
+                    body.push_str(&line.text);
+                    body.push('\n');
+                }
+                kept = false;
+                continue;
+            }
+            let selected = hunk.start + 1 + offset == index;
+            let prefix = match (&line.kind, reverse, selected) {
+                (DiffLineKind::Context, _, _) => Some(' '),
+                (DiffLineKind::Add, false, true) | (DiffLineKind::Delete, true, true) => Some('+'),
+                (DiffLineKind::Delete, false, true) | (DiffLineKind::Add, true, true) => Some('-'),
+                (DiffLineKind::Delete, false, false) | (DiffLineKind::Add, true, false) => {
+                    Some(' ')
+                }
+                _ => None,
+            };
+            if let Some(prefix) = prefix {
+                if prefix != '+' {
+                    old_count += 1;
+                }
+                if prefix != '-' {
+                    new_count += 1;
+                }
+                body.push(prefix);
+                body.push_str(line.text.get(1..)?);
+                body.push('\n');
+                kept = true;
+            } else {
+                kept = false;
+            }
+        }
+        let old_header = self
+            .lines
+            .iter()
+            .find(|l| l.text.starts_with("--- "))?
+            .text
+            .clone();
+        let new_header = self
+            .lines
+            .iter()
+            .find(|l| l.text.starts_with("+++ "))?
+            .text
+            .clone();
+        let new_file = old_header == "--- /dev/null";
+        let deleted_file = new_header == "+++ /dev/null";
+        let base_missing = if reverse { deleted_file } else { new_file };
+        let target_missing = if reverse {
+            new_file && new_count == 0
+        } else {
+            deleted_file && new_count == 0
+        };
+        // Preserve git's quoted path spelling, including whitespace and Unicode.
+        let a = if new_file {
+            new_header[4..].replacen("b/", "a/", 1)
+        } else {
+            old_header[4..].into()
+        };
+        let b = if deleted_file {
+            old_header[4..].replacen("a/", "b/", 1)
+        } else {
+            new_header[4..].into()
+        };
+        let diff_header = self
+            .lines
+            .iter()
+            .find(|l| l.text.starts_with("diff --git "))?;
+        let mode = self
+            .lines
+            .iter()
+            .find_map(|l| {
+                l.text
+                    .strip_prefix("new file mode ")
+                    .or_else(|| l.text.strip_prefix("deleted file mode "))
+            })
+            .unwrap_or("100644");
+        let mut patch = format!("{}\n", diff_header.text);
+        if base_missing {
+            patch.push_str(&format!("new file mode {mode}\n"));
+        }
+        if target_missing {
+            patch.push_str(&format!("deleted file mode {mode}\n"));
+        }
+        patch.push_str(&format!(
+            "--- {}\n+++ {}\n",
+            if base_missing { "/dev/null" } else { &a },
+            if target_missing { "/dev/null" } else { &b }
+        ));
+        let old_start = if old_count == 0 { 0 } else { start.max(1) };
+        let new_start = if new_count == 0 { 0 } else { start.max(1) };
+        patch.push_str(&format!(
+            "@@ -{old_start},{old_count} +{new_start},{new_count} @@\n{body}"
+        ));
+        Some(patch)
+    }
 }
 
 /// Locate `@@` hunks in a parsed unified diff.
@@ -212,9 +330,7 @@ fn build_hunk_patch(diff: &FileDiff, hunk: &DiffHunk) -> String {
     }
     if !header.contains("diff --git") {
         let path = &diff.path;
-        header = format!(
-            "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
-        );
+        header = format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n");
     }
     let mut out = header;
     let end = hunk.end.min(diff.lines.len());
@@ -279,11 +395,7 @@ impl StatusSnapshot {
         if matches!(status, GitStatus::Ignored) {
             return;
         }
-        let entry = ChangeEntry {
-            path,
-            status,
-            side,
-        };
+        let entry = ChangeEntry { path, status, side };
         match side {
             DiffSide::Unstaged => self.unstaged.push(entry),
             DiffSide::Staged => self.staged.push(entry),
@@ -399,7 +511,10 @@ mod tests {
             snap.status_for(Path::new("/repo/README.md")),
             GitStatus::Untracked
         );
-        assert_eq!(snap.status_for(Path::new("/repo/clean.txt")), GitStatus::Clean);
+        assert_eq!(
+            snap.status_for(Path::new("/repo/clean.txt")),
+            GitStatus::Clean
+        );
     }
 
     #[test]
@@ -417,14 +532,38 @@ mod tests {
     #[test]
     fn parse_hunks_splits_on_at_headers() {
         let lines = vec![
-            DiffLine { kind: DiffLineKind::Meta, text: "diff --git a/a b/a".into() },
-            DiffLine { kind: DiffLineKind::Meta, text: "--- a/a".into() },
-            DiffLine { kind: DiffLineKind::Meta, text: "+++ b/a".into() },
-            DiffLine { kind: DiffLineKind::Header, text: "@@ -1,2 +1,3 @@".into() },
-            DiffLine { kind: DiffLineKind::Context, text: " a".into() },
-            DiffLine { kind: DiffLineKind::Add, text: "+b".into() },
-            DiffLine { kind: DiffLineKind::Header, text: "@@ -10,1 +11,1 @@".into() },
-            DiffLine { kind: DiffLineKind::Delete, text: "-c".into() },
+            DiffLine {
+                kind: DiffLineKind::Meta,
+                text: "diff --git a/a b/a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Meta,
+                text: "--- a/a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Meta,
+                text: "+++ b/a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -1,2 +1,3 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Context,
+                text: " a".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+b".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -10,1 +11,1 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-c".into(),
+            },
         ];
         let hunks = parse_diff_hunks(&lines);
         assert_eq!(hunks.len(), 2);

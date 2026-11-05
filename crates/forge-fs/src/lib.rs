@@ -4,6 +4,8 @@
 
 mod list;
 mod preview;
+pub mod text;
+pub mod workspace;
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;

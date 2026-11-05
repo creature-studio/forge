@@ -9,7 +9,7 @@ use forge_theme::{match_vga, nearest_vga, to_ansi256, ColorMode, Rgb, Theme, Vga
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 const MODE_TRUECOLOR: u8 = 0;
@@ -156,15 +156,6 @@ pub fn fill_panel(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
     );
 }
 
-pub fn draw_pane_separator(frame: &mut Frame<'_>, area: Rect, theme: &Theme) {
-    let style = fg_bg(theme.border, theme.bg);
-    let mut lines = Vec::with_capacity(area.height as usize);
-    for _ in 0..area.height {
-        lines.push(Line::from(Span::styled("│", style)));
-    }
-    frame.render_widget(Paragraph::new(lines).style(style), area);
-}
-
 /// Soft section header — Edit-style cyan title chip when focused, no box borders.
 pub fn draw_section_header(
     frame: &mut Frame<'_>,
@@ -188,7 +179,10 @@ pub fn draw_section_header(
         let pad = rest.saturating_sub(chip_w);
         let chip_style = fg_bg(theme.accent, theme.selection_bg).add_modifier(Modifier::BOLD);
         let pad_style = fg_bg(theme.title_inactive, theme.panel_bg);
-        let mut spans = vec![Span::styled(chip.chars().take(chip_w).collect::<String>(), chip_style)];
+        let mut spans = vec![Span::styled(
+            chip.chars().take(chip_w).collect::<String>(),
+            chip_style,
+        )];
         if pad > 0 {
             spans.push(Span::styled(" ".repeat(pad), pad_style));
         }
@@ -250,10 +244,7 @@ pub fn draw_pane_header(
 pub fn pill_spans(text: &str, fg: Rgb, bg: Rgb, outer_bg: Rgb) -> Vec<Span<'static>> {
     let _ = outer_bg;
     vec![
-        Span::styled(
-            "[".to_string(),
-            Style::default().fg(rgb(fg)).bg(rgb(bg)),
-        ),
+        Span::styled("[".to_string(), Style::default().fg(rgb(fg)).bg(rgb(bg))),
         Span::styled(
             text.to_string(),
             Style::default()
@@ -261,10 +252,7 @@ pub fn pill_spans(text: &str, fg: Rgb, bg: Rgb, outer_bg: Rgb) -> Vec<Span<'stat
                 .bg(rgb(bg))
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            "]".to_string(),
-            Style::default().fg(rgb(fg)).bg(rgb(bg)),
-        ),
+        Span::styled("]".to_string(), Style::default().fg(rgb(fg)).bg(rgb(bg))),
     ]
 }
 
@@ -320,12 +308,7 @@ pub fn draw_window_shadow(_frame: &mut Frame<'_>, _window: Rect, _theme: &Theme,
 
 /// Legacy floating window - now just fills charcoal + returns full area.
 #[allow(dead_code)]
-pub fn draw_main_window(
-    frame: &mut Frame<'_>,
-    area: Rect,
-    theme: &Theme,
-    _app_name: &str,
-) -> Rect {
+pub fn draw_main_window(frame: &mut Frame<'_>, area: Rect, theme: &Theme, _app_name: &str) -> Rect {
     if area.height == 0 || area.width == 0 {
         return area;
     }
