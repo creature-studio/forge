@@ -22,6 +22,14 @@ Commit: save ALL staged changes in this repository, including files outside the 
 \nFiles / Git tabs
 Click the visible tabs or press F1 for Files, F2 for Git.
 Files: browse, search, create, rename, copy, move, delete and edit text.
+Markdown (.md / .markdown): click Preview / Code above the file, or press F3.
+Preview formats Markdown; Code shows the source with line numbers.
+F6: current source line's commit details. Click a source line to select it;
+otherwise the first visible source line is current. Wrapped CJK rows share attribution.
+F7: source change peek while Preview is focused. Click a colored line number
+to toggle its hunk. Green added, yellow replacement, red deletion anchor.
+In commit details: d diff, h file history, c copy SHA, F6 details, Esc close.
+Markdown line blame uses Code (F3); formatted Preview has no source offsets.
 Right-click a folder to create inside it; right-click blank space to create at root.
 Right-click operations target that item. Commands use marked items for batches.
 Stage / Unstage are available only in Git.
@@ -48,14 +56,33 @@ u on a Staged folder: unstage its changes, including subfolders.
 Folder actions include collapsed children, additions and deletions.
 Only the selected folder is affected; group headings are navigation only.
 Select a file inside the folder to review its diff.
+o or double-click a changed file: open its current worktree version in Files.
+Right-click a changed file or Diff: Open file in Files.
+x on CHANGES directory: discard only tracked unstaged changes underneath, after confirmation.
+Untracked files, conflicts and staged contents are preserved.
 \nRepository actions
 c: open commit editor. Enter submits; Esc cancels.
 p: pull repository changes. P: push repository commits.
 Pull and push always affect the repository, not just the selection.
 r: refresh files and Git status. g: open Git from Files.
 Esc: return from diff to the list, then from Git to Files.
-q: quit the workspace. Ctrl-C: quit, including from this help.
+q: quit from the main workspace. Ctrl-C: never exits; closes help or a context menu.
+,: independent Settings window (Tree Sticky Scroll, Show hidden files, F4 shortcuts).
+F4: searchable shortcuts grouped by Files/Git/Editor/Navigation; Tab switches groups.
+: or Ctrl-K: command palette. Rebind Ctrl/Alt chords or F5-F12 in the shortcuts view.
+F1/F2, Tab, F3/F4, Esc, navigation, and q are fixed for safe recovery.
+\nHistory (Git sidebar)
+G: open the Git tab with HISTORY expanded and the newest commit selected.
+Enter or Space on HISTORY: collapse or expand the whole section.
+Enter on a commit: list its changed files, grouped by folder.
+Enter on a file: show how that commit changed it in the preview (read-only).
+Enter on a folder: expand it. h or Left: collapse, or climb to the parent.
+j/k or arrows: move. PgUp/PgDn: jump ten rows. Home/End: first/last row.
+r: reload files, Git status and history.
+History diffs never touch the staging area; select a file under CHANGES or
+STAGED to stage it.
 \nHelp
+F4: searchable keyboard shortcuts, rebind commands and restore defaults.
 ? opens help outside editors. Esc, ? or q closes help.
 j/k, arrows, PageUp/PageDown or mouse wheel: scroll help.
 Typing ?, q, s or other shortcuts in the commit editor inserts text.
@@ -68,8 +95,11 @@ F: filters for Git status, extension, hidden files and excluded directories.
 Filtering keeps the selected path, expansion and focus; if that path is
 hidden it falls back to the nearest visible parent folder, not its old index.
 Default exclusions: target and node_modules. .git is always protected.
-e or right-click Edit text: open the built-in UTF-8 text editor (up to 2 MiB).
-Ctrl-S save; Ctrl-Z/Y undo/redo. Arrows, mouse, multiline typing and paste.
+Ctrl-E or right-click Edit text: open the built-in UTF-8 text editor (up to 2 MiB).
+Ctrl-S save; Ctrl-Z/Y undo/redo. Shift+arrows or mouse drag select; Ctrl-A selects all.
+Ctrl-C copies selection or the current line (never quits); Ctrl-X cuts selection or the current line.
+Ctrl-V pastes; Delete/Backspace removes selection; typing/paste replaces it.
+Ctrl-Insert copies; Shift-Insert pastes; Shift-Delete cuts.
 Esc closes; unsaved changes: Ctrl-S save & close, Enter discard, Esc keep editing.
 Saving preserves line endings and permissions; external changes retain your draft.
 E: open the selected file using $EDITOR (fallback $VISUAL, then vi).
@@ -106,12 +136,33 @@ impl App {
         if self.repo_root().as_deref() != Some(diff.repo_root.as_path()) {
             return false;
         }
-        if self.in_git_sidebar() {
-            self.selected_scm_entry()
-                .is_some_and(|e| e.path == diff.path && e.side == diff.side)
-        } else {
-            self.selected_entry()
-                .is_some_and(|e| e.path == diff.repo_root.join(&diff.path))
+        match &self.preview_state.diff_source {
+            DiffSource::Commit { oid, .. } => {
+                let Some(ScmRow::CommitFile { commit, index, .. }) = self.selected_scm_row() else {
+                    return false;
+                };
+                let Some(commit) = self.history.commits.get(commit) else {
+                    return false;
+                };
+                commit.id == *oid
+                    && self
+                        .history
+                        .files
+                        .get(&commit.id)
+                        .and_then(|changes| changes.get(index))
+                        .is_some_and(|change| change.path == diff.path)
+            }
+            // Working diffs carry their own side; a stale request cannot match
+            // because the loaded `diff.side` must equal the selected row's side.
+            DiffSource::Working(_) => {
+                if self.in_git_sidebar() {
+                    self.selected_scm_entry()
+                        .is_some_and(|e| e.path == diff.path && e.side == diff.side)
+                } else {
+                    self.selected_entry()
+                        .is_some_and(|e| e.path == diff.repo_root.join(&diff.path))
+                }
+            }
         }
     }
 
@@ -127,7 +178,7 @@ impl App {
                 self.session.help_open = false
             }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.session.should_quit = true
+                self.session.help_open = false
             }
             KeyCode::Down | KeyCode::Char('j') => self.scroll_help(1),
             KeyCode::Up | KeyCode::Char('k') => self.scroll_help(-1),
@@ -162,6 +213,11 @@ impl App {
             }
             if !matches!(self.preview_state.preview_mode, PreviewMode::Diff) {
                 return Err("Open a diff to operate on a hunk");
+            }
+            if matches!(self.preview_state.diff_source, DiffSource::Commit { .. }) {
+                return Err(
+                    "History diffs are read-only; open the file in the working tree to stage it",
+                );
             }
             let diff = self
                 .preview_state
@@ -229,6 +285,13 @@ impl App {
                 hunk: None,
                 paths,
             });
+        }
+        if self.in_git_sidebar()
+            && self.selected_scm_row().is_some_and(|row| {
+                row.commit().is_some() || matches!(row, ScmRow::HistorySection { .. })
+            })
+        {
+            return Err("History is read-only; select a file under Changes or Staged to stage it");
         }
         let (path, can_stage, can_unstage) = if self.in_git_sidebar() {
             let e = self
@@ -310,28 +373,47 @@ impl App {
     pub(super) fn context_shortcuts(&self) -> Vec<Shortcut> {
         if !self.in_git_sidebar() {
             let mut keys = vec![];
+            if self.markdown_available() {
+                keys.push(Shortcut {
+                    key: "F3",
+                    label: if self.preview_state.markdown_code {
+                        "Preview"
+                    } else {
+                        "Code"
+                    },
+                });
+            }
             if self.session.focus == PaneFocus::Preview {
+                if self.config.git.blame.show_popup && self.current_blame().is_some() {
+                    keys.push(Shortcut {
+                        key: "F6",
+                        label: "Line commit",
+                    });
+                }
                 keys.push(Shortcut {
                     key: "j/k",
                     label: "Scroll",
                 });
             }
-            keys.push(
-                if self
-                    .selected_entry()
-                    .is_some_and(|e| e.kind == EntryKind::Directory)
-                {
-                    Shortcut {
-                        key: "Enter",
-                        label: "Toggle folder",
-                    }
-                } else {
-                    Shortcut {
-                        key: "e",
-                        label: "Edit text",
-                    }
-                },
-            );
+            keys.push(if self.session.focus == PaneFocus::Preview {
+                Shortcut {
+                    key: "Tab",
+                    label: "File actions",
+                }
+            } else if self
+                .selected_entry()
+                .is_some_and(|e| e.kind == EntryKind::Directory)
+            {
+                Shortcut {
+                    key: "Enter",
+                    label: "Toggle folder",
+                }
+            } else {
+                Shortcut {
+                    key: "Ctrl-E",
+                    label: "Edit text",
+                }
+            });
             keys.extend([
                 Shortcut {
                     key: ":",
@@ -346,8 +428,8 @@ impl App {
                     label: "Search",
                 },
                 Shortcut {
-                    key: "v",
-                    label: "Select",
+                    key: "G",
+                    label: "History",
                 },
                 Shortcut {
                     key: "F2",
@@ -358,12 +440,16 @@ impl App {
                     label: "Refresh",
                 },
             ]);
+            if self.sidebar_focused() {
+                keys.push(Shortcut {
+                    key: "v",
+                    label: "Select",
+                });
+            }
             return keys;
         }
         let mut keys = Vec::new();
-        if !self.tools.marks.is_empty()
-            && self.session.focus != PaneFocus::Preview
-        {
+        if !self.tools.marks.is_empty() && self.session.focus != PaneFocus::Preview {
             keys.extend([
                 Shortcut {
                     key: "s",
@@ -432,6 +518,38 @@ impl App {
                     key: "Enter",
                     label: "Focus diff",
                 },
+                Some(ScmRow::HistorySection { expanded: true, .. }) => Shortcut {
+                    key: "Enter",
+                    label: "Hide history",
+                },
+                Some(ScmRow::HistorySection { .. }) => Shortcut {
+                    key: "Enter",
+                    label: "Show history",
+                },
+                Some(ScmRow::Commit { index }) => {
+                    Shortcut {
+                        key: "Enter",
+                        label: if self.history.commits.get(index).is_some_and(|commit| {
+                            self.history.expanded_commits.contains(&commit.id)
+                        }) {
+                            "Collapse commit"
+                        } else {
+                            "Expand commit"
+                        },
+                    }
+                }
+                Some(ScmRow::CommitFolder { expanded: true, .. }) => Shortcut {
+                    key: "Enter",
+                    label: "Collapse folder",
+                },
+                Some(ScmRow::CommitFolder { .. }) => Shortcut {
+                    key: "Enter",
+                    label: "Expand folder",
+                },
+                Some(ScmRow::CommitFile { .. }) => Shortcut {
+                    key: "Enter",
+                    label: "Show commit diff",
+                },
                 _ => Shortcut {
                     key: "j/k",
                     label: "Select a file",
@@ -474,20 +592,22 @@ impl App {
             }
         }
         if self.scm.git_status.is_some() && self.scm.pending_write.is_none() {
-            keys.extend([
-                Shortcut {
-                    key: "c",
-                    label: "Commit staged",
-                },
-                Shortcut {
-                    key: "p",
-                    label: "Pull",
-                },
-                Shortcut {
-                    key: "P",
-                    label: "Push",
-                },
-            ]);
+            keys.push(Shortcut {
+                key: "c",
+                label: "Commit staged",
+            });
+            if self.git_sync_shortcut_enabled() {
+                keys.extend([
+                    Shortcut {
+                        key: "p",
+                        label: "Pull",
+                    },
+                    Shortcut {
+                        key: "P",
+                        label: "Push",
+                    },
+                ]);
+            }
         }
         if preview || self.in_git_sidebar() {
             keys.push(Shortcut {
@@ -525,7 +645,7 @@ impl App {
                         if e.kind == EntryKind::Directory {
                             "Right-click: new file / folder, rename, delete"
                         } else {
-                            "e Edit text · Right-click: file actions"
+                            "Ctrl-E Edit text · Right-click: file actions"
                         }
                     )
                 })
@@ -544,7 +664,7 @@ impl App {
                 return format!(
                     "{} · {} · {}",
                     diff.path,
-                    diff.side.label(),
+                    self.preview_state.diff_label,
                     self.preview_state
                         .hunk_index
                         .map(|i| format!("hunk {}/{}", i + 1, diff.hunks().len()))
@@ -580,6 +700,51 @@ impl App {
                     .selected_scm_entry()
                     .map(|e| format!("{} · {} · whole file", e.path, e.side.label()))
                     .unwrap_or_default(),
+                Some(ScmRow::HistorySection {
+                    count, expanded, ..
+                }) => format!(
+                    "History · {count} commits · {} · G focuses it",
+                    if expanded {
+                        "Enter collapses"
+                    } else {
+                        "Enter expands"
+                    }
+                ),
+                Some(ScmRow::Commit { index }) => self
+                    .history
+                    .commits
+                    .get(index)
+                    .map(|commit| {
+                        let expanded = self.history.expanded_commits.contains(&commit.id);
+                        format!(
+                            "{} · {} · {} · {}",
+                            commit.short,
+                            commit.subject,
+                            commit.author,
+                            if expanded {
+                                "Enter collapses files"
+                            } else {
+                                "Enter shows changed files"
+                            }
+                        )
+                    })
+                    .unwrap_or_default(),
+                Some(ScmRow::CommitFolder {
+                    name,
+                    file_count,
+                    expanded,
+                    ..
+                }) => format!(
+                    "{name}/ · {file_count} changed files · {}",
+                    if expanded {
+                        "Enter collapses"
+                    } else {
+                        "Enter expands"
+                    }
+                ),
+                Some(ScmRow::CommitFile { .. }) => {
+                    "Enter shows this file in the preview (read-only)".into()
+                }
                 None => "Select a file to review its changes".into(),
             }
         } else {
@@ -607,6 +772,12 @@ impl App {
     }
 
     pub(super) fn empty_diff_hint(&self) -> &'static str {
+        if matches!(self.preview_state.diff_source, DiffSource::Commit { .. }) {
+            return "History diff · read-only. Select a file under a commit and press Enter; Esc returns to the list.";
+        }
+        if matches!(self.selected_scm_row(), Some(ScmRow::CommitFile { .. })) {
+            return "Press Enter to load this file as changed by the commit (read-only).";
+        }
         if self
             .scm
             .git_status
@@ -615,12 +786,7 @@ impl App {
         {
             "Working tree clean. Edit a file, then refresh with r."
         } else {
-            match self.selected_scm_row() {
-                Some(ScmRow::Folder { column: StagingColumn::Unstaged, .. }) => "s stages all changes in this folder and its subfolders, including additions and deletions. Expand with Enter or Space to review individual files.",
-                Some(ScmRow::Folder { .. }) => "u unstages all changes in this folder and its subfolders; working-tree edits are kept. Expand with Enter or Space to review individual files.",
-                Some(ScmRow::Section { column: StagingColumn::Staged, .. }) => "Staged files are ready for the next commit. Select a file to review it; u removes it from the staging area without discarding edits.",
-                _ => "Changes are not yet staged. Select a file with j/k to review its diff; s stages the whole file. Press ? for help.",
-            }
+            "Select a file to view its diff."
         }
     }
 

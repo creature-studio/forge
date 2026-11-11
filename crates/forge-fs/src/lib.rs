@@ -16,7 +16,7 @@ use forge_jobs::{JobHandle, JobPriority, JobScheduler};
 pub use forge_model::{Entry, EntryKind, PathId};
 pub use list::FsError;
 pub use preview::{
-    preview_path, Preview, PreviewContent, PREVIEW_MAX_BYTES, PREVIEW_MAX_LINES,
+    preview_from_bytes, preview_path, Preview, PreviewContent, PREVIEW_MAX_BYTES, PREVIEW_MAX_LINES,
 };
 
 /// Light debounce before starting a preview read (latest-wins cancels earlier jobs).

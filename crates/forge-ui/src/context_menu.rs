@@ -16,6 +16,8 @@ use crate::style::rgb;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContextAction {
     Open,
+    OpenFile,
+    DiscardChanges,
     Preview,
     Stage,
     Unstage,
@@ -43,6 +45,8 @@ impl ContextAction {
     pub fn label(self) -> &'static str {
         match self {
             ContextAction::Open => "Open",
+            ContextAction::OpenFile => "Open file in Files",
+            ContextAction::DiscardChanges => "Discard changes…",
             ContextAction::Preview => "Preview",
             ContextAction::Stage => "Stage file",
             ContextAction::Unstage => "Unstage file",
@@ -222,8 +226,8 @@ pub fn file_list_items(is_dir: bool) -> Vec<ContextMenuItem> {
 /// Build staging-panel context items.
 pub fn staging_items(
     column: StagingColumn,
-    has_staged: bool,
-    in_repo: bool,
+    _has_staged: bool,
+    _in_repo: bool,
 ) -> Vec<ContextMenuItem> {
     let mut items = Vec::new();
     match column {
@@ -245,17 +249,18 @@ pub fn staging_items(
         enabled: true,
     });
     items.push(ContextMenuItem {
-        action: ContextAction::Commit,
-        enabled: has_staged,
+        action: ContextAction::OpenFile,
+        enabled: true,
     });
-    items.push(ContextMenuItem {
-        action: ContextAction::Pull,
-        enabled: in_repo,
-    });
-    items.push(ContextMenuItem {
-        action: ContextAction::Push,
-        enabled: in_repo,
-    });
+    if column == StagingColumn::Unstaged {
+        items.push(ContextMenuItem {
+            action: ContextAction::DiscardChanges,
+            enabled: true,
+        });
+    }
+    // Commit, Pull and Push are repository-level actions, never
+    // properties of the file or folder that was right-clicked.
+    // Keep them in the Git sidebar and the Sync panel instead.
     items.push(ContextMenuItem {
         action: ContextAction::CopyPath,
         enabled: true,
@@ -265,7 +270,10 @@ pub fn staging_items(
 
 /// Diff-pane context items for hunk ops.
 pub fn diff_items(side_unstaged: bool, has_hunk: bool) -> Vec<ContextMenuItem> {
-    let mut items = Vec::new();
+    let mut items = vec![ContextMenuItem {
+        action: ContextAction::OpenFile,
+        enabled: true,
+    }];
     if side_unstaged {
         items.push(ContextMenuItem {
             action: ContextAction::StageHunk,

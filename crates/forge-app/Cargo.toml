@@ -16,10 +16,11 @@ forge-config = { workspace = true }
 forge-theme = { workspace = true }
 anyhow = { workspace = true }
 tokio = { workspace = true }
-crossterm = { workspace = true }
+crossterm = { workspace = true, features = ["osc52"] }
 ratatui = { workspace = true }
 ratatui-kit = { workspace = true }
 arboard = { workspace = true }
+notify = { workspace = true }
 unicode-width = { workspace = true }
 shell-words = { workspace = true }
 

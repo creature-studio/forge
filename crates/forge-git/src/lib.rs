@@ -1,18 +1,20 @@
 //! Unified git service facade.
 //!
-//! Read paths go through `forge-git-gix`; write / network / file-diff through
-//! `forge-git-cli`. UI / app code should depend on this crate, never on gix
-//! directly.
+//! Status and graph reads go through `forge-git-gix`; blame, commit queries,
+//! write / network / file-diff through `forge-git-cli`. UI / app code should
+//! depend on this crate, never on gix directly.
 
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
 
+pub use forge_git_cli::BlameLine;
 pub use forge_git_cli::{CliWriteBackend, GitWriteError};
 pub use forge_git_cli::{GitAction, GitItem, GitQuery};
 pub use forge_git_gix::{GitReadError, GixReadBackend};
 pub use forge_model::{
-    ChangeEntry, DiffHunk, DiffLine, DiffLineKind, DiffSide, FileDiff, GitStatus, StatusSnapshot,
+    ChangeEntry, CommitChange, CommitChangeKind, DiffHunk, DiffLine, DiffLineKind, DiffSide,
+    FileDiff, GitStatus, GraphCommit, GraphRef, GraphRefKind, GraphSnapshot, StatusSnapshot,
 };
 
 /// Facade combining read + write backends.
@@ -23,6 +25,14 @@ pub struct GitService {
 }
 
 impl GitService {
+    pub async fn blame(
+        &self,
+        repo: &Path,
+        path: &Path,
+        lines: usize,
+    ) -> Result<Vec<BlameLine>, GitWriteError> {
+        self.write.blame(repo, path, lines).await
+    }
     pub fn new() -> Self {
         Self {
             read: GixReadBackend::new(),
@@ -38,6 +48,24 @@ impl GitService {
     /// Status snapshot via gix (blocking). Prefer running inside `spawn_blocking`.
     pub fn status(&self, start: impl AsRef<Path>) -> Result<StatusSnapshot, GitReadError> {
         self.read.status_snapshot(start)
+    }
+
+    /// Commit graph across every ref, newest first (blocking).
+    pub fn graph(
+        &self,
+        start: impl AsRef<Path>,
+        limit: usize,
+    ) -> Result<GraphSnapshot, GitReadError> {
+        self.read.graph(start, limit)
+    }
+
+    /// Files touched by one commit versus its first parent (blocking).
+    pub fn commit_changes(
+        &self,
+        start: impl AsRef<Path>,
+        oid: &str,
+    ) -> Result<Vec<CommitChange>, GitReadError> {
+        self.read.commit_changes(start, oid)
     }
 
     /// Stage paths relative to (or absolute under) the worktree.
@@ -75,6 +103,16 @@ impl GitService {
         side: DiffSide,
     ) -> Result<FileDiff, GitWriteError> {
         self.write.file_diff(repo, rela_path, side).await
+    }
+
+    /// One file's diff as changed by `oid` (read-only history view).
+    pub async fn commit_file_diff(
+        &self,
+        repo: impl AsRef<Path>,
+        oid: &str,
+        path: &str,
+    ) -> Result<FileDiff, GitWriteError> {
+        self.write.commit_file_diff(repo.as_ref(), oid, path).await
     }
 
     /// Stage a single hunk from an unstaged [`FileDiff`].

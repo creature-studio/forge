@@ -76,7 +76,7 @@ def smoke():
             drain(1)
             assert b"Files" in transcript and b"Git" in transcript
             send(b"\x1b[<0;17;2M")  # Visible Git tab.
-            assert b"Source" in transcript
+            assert b"Git" in transcript
             send(b"\x1b[<0;4;2M")  # Visible Files tab.
             send(b"su")
             assert not git("diff", "--cached"), "Files shortcuts changed the index"
@@ -87,17 +87,17 @@ def smoke():
             send(b"menu-dir\r")
             wait_for(lambda: (root / "menu-dir").is_dir(), "right-click new folder failed")
             send(b"\x1b")
-            send(b"\x1b[<2;4;5M")  # First content row, after heading and its gap.
+            send(b"\x1b[<2;4;3M")  # First content row, after heading and its gap.
             send(b"\x1b[B\r")  # New file inside folder.
             send(b"note.txt\r")
             wait_for(lambda: (root / "menu-dir/note.txt").is_file(), "folder context new file failed")
             send(b"\x1b")
-            send(b"\x1b[<2;4;5M")
+            send(b"\x1b[<2;4;3M")
             send(b"\x1b[A\x1b[A\r")  # Wrap to Delete folder, above Copy path.
             assert (root / "menu-dir/note.txt").exists(), "folder deleted before confirmation"
             send(b"\x1b")
             assert (root / "menu-dir/note.txt").exists(), "cancelled folder delete changed files"
-            send(b"\x1b[<2;4;5M")
+            send(b"\x1b[<2;4;3M")
             send(b"\x1b[A\x1b[A\r")
             send(b"\r")
             wait_for(lambda: not (root / "menu-dir").exists(), "folder context delete failed")
@@ -106,7 +106,7 @@ def smoke():
             send(b"\x10deeprs")  # Ctrl-P, filename subsequence.
             assert b"deep.rs" in transcript
             send(b"\r")
-            send(b"e")
+            send(b"\x05")
             send("qgsu你好\r".encode())
             send(b"\x1b[200~pasted\ntext\n\x1b[201~")
             send(b"\x13")  # Ctrl-S in the built-in editor.
@@ -114,12 +114,12 @@ def smoke():
             assert not git("diff", "--cached"), "editor input triggered Git actions"
             send(b"\x1b")
             saved = (root / "src/deep.rs").read_text()
-            send(b"e")
+            send(b"\x05")
             send(b"unsaved")
             send(b"\x1b")  # Dirty close confirmation.
             send(b"\x1b")  # Keep editing.
             send(b"\x1b")
-            send(b"\r")  # Discard draft.
+            send(b"d")  # Explicitly discard the unsaved draft.
             assert (root / "src/deep.rs").read_text() == saved
             send(b"E")
             wait_for(lambda: "editor returned" in (root / "src/deep.rs").read_text(), "$EDITOR did not receive the selected file")
@@ -155,7 +155,8 @@ def smoke():
             assert b"history" in transcript
             send(b"\r")
             assert b"details" in transcript
-            send(b"\x1b")
+            send(b"\x1b")  # Commit details returns to the history list.
+            send(b"\x1b")  # Then close history before opening another tool.
             send(b"B")
             assert b"Branches" in transcript
             send(b"\x1b")

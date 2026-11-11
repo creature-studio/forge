@@ -8,7 +8,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
 
+use crate::markdown::wrap_line;
 use crate::style::{self, fg_bg, rgb};
+use crate::MarkdownPreview;
 
 /// Lightweight language hint for plain-text preview coloring.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -59,6 +61,14 @@ pub enum PreviewView<'a> {
         bytes_read: usize,
         language: TextLang,
     },
+    Markdown {
+        preview: &'a MarkdownPreview,
+    },
+    /// Pre-wrapped, source-numbered code rows. Every entry occupies one
+    /// terminal row, so rendering must never invoke ratatui's implicit Wrap.
+    TextRows {
+        rows: &'a [Line<'static>],
+    },
     Diff {
         path: &'a str,
         side: &'a str,
@@ -67,6 +77,114 @@ pub enum PreviewView<'a> {
         hunk_end: Option<usize>,
         hunk_idx: Option<(usize, usize)>,
     },
+}
+
+/// Width-safe, source-aware layout for the Code and plain-text preview.
+///
+/// A source line may occupy several terminal rows. Counting rendered rows here
+/// avoids the old bug where a long line swallowed following lines but the
+/// scrollbar and preview selection still counted one source line per row.
+/// The cache is invalidated when content changes or the pane width/theme does.
+#[derive(Debug, Default)]
+pub struct TextRowsCache {
+    rows: Vec<Line<'static>>,
+    source_starts: Vec<usize>,
+    width: u16,
+    theme: Option<Theme>,
+    lang: TextLang,
+    truncated: bool,
+    bytes_read: usize,
+    source_count: usize,
+    source_rows: usize,
+}
+
+impl TextRowsCache {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub fn ensure(
+        &mut self,
+        theme: &Theme,
+        lines: &[String],
+        truncated: bool,
+        bytes_read: usize,
+        language: TextLang,
+        width: u16,
+    ) {
+        if self.width == width
+            && self.theme.as_ref() == Some(theme)
+            && self.lang == language
+            && self.truncated == truncated
+            && self.bytes_read == bytes_read
+            && self.source_count == lines.len()
+        {
+            return;
+        }
+        self.rows.clear();
+        self.source_starts.clear();
+        let width = width.max(1);
+        self.rows.reserve(lines.len());
+        self.source_starts.reserve(lines.len());
+        for (index, line) in lines.iter().enumerate() {
+            self.source_starts.push(self.rows.len());
+            let source = text_line_numbered(theme, index + 1, line, language);
+            self.rows.extend(wrap_line(&source, width));
+        }
+        self.source_rows = self.rows.len();
+        if lines.is_empty() {
+            self.rows.push(Line::from(Span::styled(
+                "  (empty file)",
+                style::muted(theme),
+            )));
+        }
+        if truncated {
+            self.rows.push(Line::from(""));
+            let footer = Line::from(Span::styled(
+                format!("  ... truncated - {bytes_read} bytes shown"),
+                style::muted(theme),
+            ));
+            self.rows.extend(wrap_line(&footer, width));
+        }
+        self.width = width;
+        self.theme = Some(theme.clone());
+        self.lang = language;
+        self.truncated = truncated;
+        self.bytes_read = bytes_read;
+        self.source_count = lines.len();
+    }
+
+    pub fn rows(&self) -> &[Line<'static>] {
+        &self.rows
+    }
+
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    pub fn line_count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// 1-based source line -> first rendered row (0-based).
+    pub fn source_to_row(&self, line: usize) -> usize {
+        self.source_starts
+            .get(line.saturating_sub(1))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// 0-based rendered row -> 1-based source line for editor navigation.
+    pub fn row_to_source(&self, row: usize) -> usize {
+        self.source_starts
+            .partition_point(|start| *start <= row)
+            .max(1)
+    }
+
+    /// Attribution must ignore empty-file and truncation notice rows.
+    pub fn source_line_at(&self, row: usize) -> Option<usize> {
+        (row < self.source_rows).then(|| self.row_to_source(row))
+    }
 }
 
 /// Cached side-by-side rows for the current unified diff.
@@ -117,6 +235,28 @@ pub fn draw_preview(
         return area;
     }
 
+    // Callers without a persistent cache must still get the exact same safe
+    // layout as the App's cached path. Never let raw Code/Text through the
+    // old Paragraph::wrap route: it may spill terminal-wide CJK glyphs.
+    if let PreviewView::Text {
+        lines,
+        truncated,
+        bytes_read,
+        language,
+    } = view
+    {
+        let mut safe = TextRowsCache::default();
+        safe.ensure(theme, lines, truncated, bytes_read, language, area.width);
+        return draw_preview(
+            frame,
+            area,
+            theme,
+            PreviewView::TextRows { rows: safe.rows() },
+            scroll,
+            split_cache,
+        );
+    }
+
     let is_diff = matches!(view, PreviewView::Diff { .. });
     let inner = area;
     style::fill_panel(frame, inner, theme);
@@ -129,12 +269,16 @@ pub fn draw_preview(
     }
     let start = *scroll;
     let end = (start + viewport).min(total);
+    if let PreviewView::Markdown { preview } = view {
+        preview.draw(frame, inner, start);
+        return inner;
+    }
     // Virtualize: only allocate Line/Span for the visible window.
     let visible = build_visible_lines(theme, view, inner.width, start, end, split_cache);
 
     let style = Style::default().bg(rgb(theme.panel_bg)).fg(rgb(theme.fg));
     // Diff rows are pre-fitted to width; wrapping would break the split columns.
-    let para = if is_diff {
+    let para = if is_diff || matches!(view, PreviewView::TextRows { .. }) {
         Paragraph::new(visible).style(style)
     } else {
         Paragraph::new(visible)
@@ -158,6 +302,8 @@ fn build_visible_lines(
         return Vec::new();
     }
     match view {
+        PreviewView::Markdown { .. } => Vec::new(),
+        PreviewView::TextRows { rows } => rows[start.min(rows.len())..end.min(rows.len())].to_vec(),
         PreviewView::Loading => slice_static(
             start,
             end,
@@ -858,6 +1004,8 @@ pub fn diff_render_hunk_start(
 /// How many content lines a preview view would render (before scrolling).
 pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCache) -> usize {
     match view {
+        PreviewView::Markdown { preview } => preview.line_count(),
+        PreviewView::TextRows { rows } => rows.len(),
         PreviewView::Loading | PreviewView::Idle | PreviewView::Hint { .. } => 1,
         PreviewView::Error { .. } => 2,
         PreviewView::Binary { .. } => 4,
@@ -898,6 +1046,76 @@ pub fn scroll_to_hunk(
 mod tests {
     use super::*;
     use forge_theme::Theme;
+
+    #[test]
+    fn code_preview_pre_wraps_long_cjk_rows_and_scrolls_by_visual_row() {
+        use ratatui::{backend::TestBackend, buffer::CellWidth, Terminal};
+
+        let theme = Theme::modern_ide();
+        let lines = vec![
+            "说明 ".to_string() + &("文档 README Code 模式包含中文与very_long_token".repeat(18)),
+            "const flag = true; // 中文".into(),
+            "这是一个很长的中文字符串".repeat(20),
+        ];
+        for width in [96, 40, 17, 12] {
+            let mut cache = TextRowsCache::default();
+            cache.ensure(&theme, &lines, false, 500, TextLang::Markdown, width);
+            assert!(
+                cache.line_count() > lines.len(),
+                "code wrapping missing at width {width}"
+            );
+            let starts = (1..=lines.len())
+                .map(|i| cache.source_to_row(i))
+                .collect::<Vec<_>>();
+            assert_eq!(starts[0], 0);
+            assert!(starts[1] > starts[0] && starts[2] > starts[1]);
+            assert_eq!(cache.row_to_source(starts[1]), 2);
+            assert_eq!(cache.row_to_source(starts[1] - 1), 1);
+
+            for row in cache.rows() {
+                assert!(
+                    row.width() <= width as usize,
+                    "text row exceeds preview width {width}: {row:?}"
+                );
+            }
+
+            let total_width = width + 33;
+            let mut terminal = Terminal::new(TestBackend::new(total_width, 12)).unwrap();
+            let area = Rect::new(33, 0, width, 12);
+            let mut diff_cache = SplitRowsCache::default();
+            for &scroll_at in &[0, starts[1], cache.line_count().saturating_sub(12)] {
+                terminal
+                    .draw(|frame| {
+                        let mut scroll = scroll_at;
+                        let rendered = draw_preview(
+                            frame,
+                            area,
+                            &theme,
+                            PreviewView::TextRows { rows: cache.rows() },
+                            &mut scroll,
+                            &mut diff_cache,
+                        );
+                        assert_eq!(rendered, area);
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                for y in 0..12u16 {
+                    // The entire Files area must remain untouched, even when
+                    // the last preview cell would be a two-column CJK glyph.
+                    for x in 0..33u16 {
+                        assert_eq!(
+                            buffer[(x, y)].symbol(),
+                            " ",
+                            "Code text leaked into Files at ({x},{y}) / width {width}"
+                        );
+                    }
+                    let last = buffer[(total_width - 1, y)].symbol();
+                    assert!(last.cell_width() < 2,
+                        "Code emitted a wide glyph in terminal's last column at width {width}: {last:?}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn rust_keywords_use_magenta_not_fg() {

@@ -28,6 +28,8 @@ pub enum GitQuery {
     Conflicts,
     Worktrees,
     Sync,
+    /// Select the remote for publishing a local branch that has no upstream.
+    PublishRemotes(String),
 }
 
 #[derive(Clone, Debug)]
@@ -42,12 +44,26 @@ pub struct GitItem {
 pub enum GitAction {
     CreateBranch(String),
     SwitchBranch(String),
-    RenameBranch { old: String, new: String },
+    RenameBranch {
+        old: String,
+        new: String,
+    },
     DeleteBranch(String),
+    PublishBranch {
+        remote: String,
+        branch: String,
+    },
     SaveStash(String),
     ApplyStash(String),
+    /// Like Apply, but restore the original staged/index state.
+    ApplyStashIndexed(String),
+    /// Git stash pop: apply and drop only when apply succeeds.
+    PopStash(String),
     DropStash(String),
-    Resolve { paths: Vec<String>, ours: bool },
+    Resolve {
+        paths: Vec<String>,
+        ours: bool,
+    },
     MarkResolved(Vec<String>),
     Amend(String),
     CherryPick(String),
@@ -68,6 +84,43 @@ fn strings(args: &[&str]) -> Vec<String> {
 }
 
 impl CliWriteBackend {
+    /// Unified diff of one file as changed by `oid` (read-only, for history).
+    ///
+    /// `-m --first-parent` matches [`gix`'s first-parent tree diff] used to list
+    /// a commit's files: plain `git show` prints a combined diff for merges,
+    /// which is empty when the merge simply takes one side.
+    pub async fn commit_file_diff(
+        &self,
+        repo: &Path,
+        oid: &str,
+        path: &str,
+    ) -> Result<FileDiff, GitWriteError> {
+        let text = self
+            .text(
+                repo,
+                strings(&[
+                    "--literal-pathspecs",
+                    "show",
+                    "-m",
+                    "--first-parent",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-color",
+                    "--format=",
+                    oid,
+                    "--",
+                    path,
+                ]),
+            )
+            .await?;
+        Ok(FileDiff {
+            repo_root: repo.to_path_buf(),
+            path: path.to_string(),
+            side: DiffSide::Unstaged,
+            lines: parse_unified_diff(&text),
+        })
+    }
+
     pub async fn apply_line(
         &self,
         repo: &Path,
@@ -142,6 +195,8 @@ impl CliWriteBackend {
                     .text(
                         repo,
                         strings(&[
+                            "-c",
+                            "core.quotePath=false",
                             "show",
                             "--no-ext-diff",
                             "--no-textconv",
@@ -368,6 +423,24 @@ impl CliWriteBackend {
                 detail =
                     "Enter switch workspace · A create worktree · X remove clean worktree".into();
             }
+            GitQuery::PublishRemotes(branch) => {
+                let remotes = self.text(repo, strings(&["remote"])).await?;
+                items.extend(
+                    remotes
+                        .lines()
+                        .filter(|r| !r.trim().is_empty())
+                        .map(|remote| GitItem {
+                            id: remote.to_owned(),
+                            label: format!("Remote: {remote}"),
+                            path: None,
+                        }),
+                );
+                detail = if items.is_empty() {
+                    format!("No remotes configured for {branch}. Add a remote first using git remote add <name> <url>; no push was attempted.")
+                } else {
+                    format!("Publish local branch {branch} (currently without upstream).\nChoose a remote and press Enter, then confirm.\nThis runs git push --set-upstream and sets the tracking branch. No force-push.")
+                };
+            }
             GitQuery::Sync => {
                 let status = self
                     .text(repo, strings(&["status", "--short", "--branch"]))
@@ -387,7 +460,14 @@ impl CliWriteBackend {
                     .and_then(|t| t.elapsed().ok())
                     .map(|d| format!("{} seconds ago", d.as_secs()))
                     .unwrap_or_else(|| "never".into());
-                detail = format!("{status}\nLast FETCH_HEAD update: {last}\n\nF fetch · p pull --ff-only · P push\nRemote errors remain visible here and in the footer.");
+                let untracked = status.lines().next().unwrap_or_default();
+                let publish = untracked.starts_with("## ")
+                    && !untracked.contains("...")
+                    && !untracked.contains("No commits yet")
+                    && !untracked.contains("Initial commit");
+                detail = format!("{status}\nLast FETCH_HEAD update: {last}\n\nF fetch · p pull --ff-only · {}\nRemote errors remain visible here and in the footer.",
+                    if publish { "P Publish Branch (choose remote, confirm)" }
+                    else { "P push" });
             }
             GitQuery::HistoryPage { .. } => unreachable!(),
         }
@@ -400,8 +480,15 @@ impl CliWriteBackend {
             GitAction::SwitchBranch(name) => format!("Switched to branch {name}"),
             GitAction::RenameBranch { old, new } => format!("Renamed branch {old} to {new}"),
             GitAction::DeleteBranch(name) => format!("Deleted branch {name}"),
+            GitAction::PublishBranch { remote, branch } => {
+                format!("Published {branch} to {remote} and set upstream")
+            }
             GitAction::SaveStash(_) => "Saved tracked and untracked changes to stash".into(),
             GitAction::ApplyStash(_) => "Applied stash; saved stash kept".into(),
+            GitAction::ApplyStashIndexed(_) => {
+                "Applied stash with original staged state; saved stash kept".into()
+            }
+            GitAction::PopStash(_) => "Popped stash; entry removed after successful apply".into(),
             GitAction::DropStash(_) => "Deleted stash".into(),
             GitAction::Resolve { paths, ours } => format!(
                 "Resolved and staged {} files using {}",
@@ -425,6 +512,7 @@ impl CliWriteBackend {
             GitAction::ContinueCherryPick => "Continued cherry-pick".into(),
             GitAction::ContinueRevert => "Continued revert".into(),
         };
+        let is_stash_pop = matches!(&action, GitAction::PopStash(_));
         let mut args;
         match action {
             GitAction::CreateBranch(name) => {
@@ -439,11 +527,99 @@ impl CliWriteBackend {
                 args = strings(&["branch", "-m", "--", &old, &new]);
             }
             GitAction::DeleteBranch(name) => args = strings(&["branch", "-d", "--", &name]),
+            GitAction::PublishBranch { remote, branch } => {
+                // Recheck at execution time: picker state can become stale if
+                // a different terminal switches branch or configures upstream.
+                let current = self
+                    .text(
+                        repo,
+                        strings(&["symbolic-ref", "--quiet", "--short", "HEAD"]),
+                    )
+                    .await?;
+                if current.trim() != branch {
+                    return Err(GitWriteError::Command {
+                        op: "publish",
+                        code: -1,
+                        stderr: format!("Current branch changed to {}; expected {branch}. Reopen Publish Branch.", current.trim()),
+                    });
+                }
+                let head =
+                    run_git_raw(repo, "publish", strings(&["rev-parse", "--verify", "HEAD"]))
+                        .await?;
+                if !head.status.success() {
+                    return Err(GitWriteError::Command {
+                        op: "publish",
+                        code: -1,
+                        stderr: format!("Cannot publish branch {branch}: no commits yet. Create a commit first (HEAD is not available)."),
+                    });
+                }
+                let existing_upstream = run_git_raw(
+                    repo,
+                    "publish",
+                    strings(&[
+                        "rev-parse",
+                        "--abbrev-ref",
+                        "--symbolic-full-name",
+                        "@{upstream}",
+                    ]),
+                )
+                .await?;
+                // A configured upstream may be "gone": @{upstream} cannot
+                // resolve its remote-tracking ref, yet changing tracking
+                // silently would still be wrong. Inspect branch config too.
+                let configured_remote = run_git_raw(
+                    repo,
+                    "publish",
+                    vec![
+                        "config".into(),
+                        "--get".into(),
+                        format!("branch.{branch}.remote"),
+                    ],
+                )
+                .await?;
+                if configured_remote.status.success() {
+                    return Err(GitWriteError::Command {
+                        op: "publish",
+                        code: -1,
+                        stderr: format!("Branch {branch} already has a configured upstream remote. Use normal Push, or explicitly change tracking configuration."),
+                    });
+                }
+                if existing_upstream.status.success() {
+                    return Err(GitWriteError::Command {
+                        op: "publish",
+                        code: -1,
+                        stderr: format!(
+                            "Branch {branch} already tracks {}. Use normal Push.",
+                            String::from_utf8_lossy(&existing_upstream.stdout).trim()
+                        ),
+                    });
+                }
+                let remotes = self.text(repo, strings(&["remote"])).await?;
+                if !remotes.lines().any(|r| r == remote) {
+                    return Err(GitWriteError::Command {
+                        op: "publish",
+                        code: -1,
+                        stderr: format!(
+                            "Remote {remote} is not configured. Refresh the remote list."
+                        ),
+                    });
+                }
+                // Explicit fully-qualified source/destination, no shell and no
+                // force flag. '--' prevents remote names resembling options.
+                args = vec![
+                    "push".into(),
+                    "--set-upstream".into(),
+                    "--".into(),
+                    remote,
+                    format!("refs/heads/{branch}:refs/heads/{branch}"),
+                ];
+            }
             GitAction::SaveStash(message) => {
                 args = strings(&["stash", "push", "--include-untracked", "-m", &message])
             }
             GitAction::ApplyStash(id) => args = strings(&["stash", "apply", &id]),
-            GitAction::DropStash(id) => {
+            GitAction::ApplyStashIndexed(id) => args = strings(&["stash", "apply", "--index", &id]),
+            GitAction::PopStash(id) | GitAction::DropStash(id) => {
                 // Resolve the pinned object back to its current reflog entry. Never drop a shifted index.
                 let text = self
                     .text(repo, strings(&["stash", "list", "--format=%H%x00%gd"]))
@@ -456,7 +632,14 @@ impl CliWriteBackend {
                             .map(|(_, r)| r.to_owned())
                     })
                     .ok_or(GitWriteError::NoPaths)?;
-                args = strings(&["stash", "drop", &reference]);
+                args = if is_stash_pop {
+                    // Git itself leaves the stash in the reflog if applying
+                    // it fails or conflicts. The pinned object is resolved
+                    // to the current reflog ref just before execution.
+                    strings(&["stash", "pop", &reference])
+                } else {
+                    strings(&["stash", "drop", &reference])
+                };
             }
             GitAction::Resolve { paths, ours } => {
                 args = strings(&[

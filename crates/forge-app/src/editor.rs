@@ -17,6 +17,9 @@ pub(super) struct EditingState {
     pending_save: Option<JobHandle<Result<TextDocument>>>,
     return_focus: Option<PaneFocus>,
     close_after_save: bool,
+    clipboard: String,
+    clipboard_line: bool,
+    system_clipboard: Option<arboard::Clipboard>,
 }
 
 impl EditingState {
@@ -33,6 +36,7 @@ struct Snapshot {
     text: String,
     row: usize,
     col: usize,
+    anchor: Option<(usize, usize)>,
 }
 
 pub(super) struct TextEditor {
@@ -45,6 +49,8 @@ pub(super) struct TextEditor {
     viewport: Rect,
     message: String,
     confirm_close: bool,
+    anchor: Option<(usize, usize)>,
+    dragging: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
 }
@@ -63,6 +69,8 @@ impl TextEditor {
             viewport: Rect::default(),
             message: String::new(),
             confirm_close: false,
+            anchor: None,
+            dragging: false,
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -78,12 +86,14 @@ impl TextEditor {
             text: self.value(),
             row: self.row,
             col: self.col,
+            anchor: self.anchor,
         }
     }
     fn restore(&mut self, snapshot: Snapshot) {
         self.lines = snapshot.text.split('\n').map(str::to_owned).collect();
         self.row = snapshot.row;
         self.col = snapshot.col;
+        self.anchor = snapshot.anchor;
     }
     fn checkpoint(&mut self) {
         self.undo.push(self.snapshot());
@@ -110,6 +120,60 @@ impl TextEditor {
             self.message.clear();
         }
     }
+    fn selection(&self) -> Option<((usize, usize), (usize, usize))> {
+        let anchor = self.anchor?;
+        let cursor = (self.row, self.col);
+        (anchor != cursor).then_some((anchor.min(cursor), anchor.max(cursor)))
+    }
+    fn selected_text(&self) -> Option<String> {
+        let ((sr, sc), (er, ec)) = self.selection()?;
+        if sr == er {
+            return Some(self.lines[sr][sc..ec].into());
+        }
+        let mut selected = vec![self.lines[sr][sc..].to_owned()];
+        selected.extend(self.lines[sr + 1..er].iter().cloned());
+        selected.push(self.lines[er][..ec].to_owned());
+        Some(selected.join("\n"))
+    }
+    // Caller checkpoints once, so replacing a selection is one undo step.
+    fn remove_selection(&mut self) -> bool {
+        let Some(((sr, sc), (er, ec))) = self.selection() else {
+            return false;
+        };
+        let tail = self.lines[er][ec..].to_owned();
+        self.lines[sr].truncate(sc);
+        self.lines[sr].push_str(&tail);
+        self.lines.drain(sr + 1..er + 1);
+        self.row = sr;
+        self.col = sc;
+        self.anchor = None;
+        true
+    }
+    fn delete_selection(&mut self) -> bool {
+        if self.selection().is_none() {
+            return false;
+        }
+        self.checkpoint();
+        self.remove_selection()
+    }
+    fn select_line(&mut self) {
+        self.anchor = Some((self.row, 0));
+        if self.row + 1 < self.lines.len() {
+            self.row += 1;
+            self.col = 0;
+        } else if self.row > 0 {
+            // Include the preceding newline when cutting the final line.
+            self.anchor = Some((self.row - 1, self.lines[self.row - 1].len()));
+            self.col = self.lines[self.row].len();
+        } else {
+            self.col = self.lines[self.row].len();
+        }
+    }
+    fn select_all(&mut self) {
+        self.anchor = Some((0, 0));
+        self.row = self.lines.len() - 1;
+        self.col = self.lines[self.row].len();
+    }
     fn insert(&mut self, value: &str) {
         let value = value.replace("\r\n", "\n").replace('\r', "\n");
         let value: String = value
@@ -119,11 +183,15 @@ impl TextEditor {
         if value.is_empty() {
             return;
         }
-        if self.value().len() + value.len() > text::MAX_TEXT_BYTES {
+        if self.value().len() - self.selected_text().map_or(0, |s| s.len()) + value.len()
+            > text::MAX_TEXT_BYTES
+        {
             self.message = "Text exceeds the editor's 2 MiB limit".into();
             return;
         }
         self.checkpoint();
+        self.remove_selection();
+        self.anchor = None;
         let tail = self.lines[self.row].split_off(self.col);
         let parts: Vec<_> = value.split('\n').collect();
         self.lines[self.row].push_str(parts[0]);
@@ -139,6 +207,10 @@ impl TextEditor {
         }
     }
     fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        self.anchor = None;
         if self.col > 0 {
             self.checkpoint();
             let start = self.lines[self.row][..self.col]
@@ -157,6 +229,10 @@ impl TextEditor {
         }
     }
     fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
+        self.anchor = None;
         if self.col < self.lines[self.row].len() {
             self.checkpoint();
             let end = self.col
@@ -179,6 +255,42 @@ impl TextEditor {
             .saturating_add_signed(delta)
             .min(self.lines.len() - 1);
         self.col = byte_at_cell(&self.lines[self.row], cells);
+    }
+}
+
+fn write_editor_clipboard(clipboard: &mut Option<arboard::Clipboard>, text: &str) -> bool {
+    #[cfg(not(test))]
+    {
+        if clipboard.is_none() {
+            *clipboard = arboard::Clipboard::new().ok();
+        }
+        let native = clipboard
+            .as_mut()
+            .is_some_and(|c| c.set_text(text.to_owned()).is_ok());
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+        );
+        native
+    }
+    #[cfg(test)]
+    {
+        let _ = (clipboard, text);
+        false
+    }
+}
+fn read_editor_clipboard(clipboard: &mut Option<arboard::Clipboard>) -> Option<String> {
+    #[cfg(not(test))]
+    {
+        if clipboard.is_none() {
+            *clipboard = arboard::Clipboard::new().ok();
+        }
+        clipboard.as_mut().and_then(|c| c.get_text().ok())
+    }
+    #[cfg(test)]
+    {
+        let _ = clipboard;
+        None
     }
 }
 
@@ -298,7 +410,7 @@ impl App {
                     if self.in_git_sidebar() {
                         self.request_diff_for_scm_selection();
                     } else {
-                        self.tools.reveal = Some((path, self.preview_state.preview_scroll + 1));
+                        self.tools.reveal = Some((path, self.preview_source_line()));
                         self.tools.return_focus = Some(self.session.focus);
                         self.request_preview_for_selection();
                     }
@@ -330,7 +442,27 @@ impl App {
             }
         }
     }
-    pub(super) fn handle_editor_key(&mut self, key: KeyEvent) {
+    pub(super) fn handle_editor_key(&mut self, mut key: KeyEvent) {
+        if key.code == KeyCode::F(4) {
+            self.keys.open = true;
+            return;
+        }
+        let Some(mapped) = self.keys.remap(key, true) else {
+            return;
+        };
+        key = mapped;
+        key = match (key.code, key.modifiers) {
+            (KeyCode::Insert, KeyModifiers::CONTROL) => {
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+            }
+            (KeyCode::Insert, KeyModifiers::SHIFT) => {
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL)
+            }
+            (KeyCode::Delete, KeyModifiers::SHIFT) => {
+                KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL)
+            }
+            _ => key,
+        };
         if self.editing.saving() {
             return;
         }
@@ -348,19 +480,101 @@ impl App {
         }
         if view.confirm_close {
             match key.code {
-                KeyCode::Enter => self.close_text_editor(),
-                KeyCode::Esc => view.confirm_close = false,
+                // Do not let an accidental Enter silently throw away a draft.
+                KeyCode::Char('d' | 'D') => self.close_text_editor(),
+                KeyCode::Enter | KeyCode::Esc => view.confirm_close = false,
                 _ => {}
             }
             return;
         }
-        if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('q' | 'c'))) {
+        if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('q'))) {
             if view.dirty() {
                 view.confirm_close = true;
             } else {
                 self.close_text_editor();
             }
             return;
+        }
+        if ctrl {
+            match key.code {
+                KeyCode::Char('a') => {
+                    view.select_all();
+                    return;
+                }
+                KeyCode::Char('c' | 'x') => {
+                    let whole_line = view.selection().is_none();
+                    let line_text = whole_line.then(|| format!("{}\n", view.lines[view.row]));
+                    if whole_line && key.code == KeyCode::Char('x') {
+                        view.select_line();
+                    }
+                    let Some(text) = line_text.or_else(|| view.selected_text()) else {
+                        view.message = "Select text first · Shift+arrows or mouse drag".into();
+                        return;
+                    };
+                    self.editing.clipboard = text.clone();
+                    self.editing.clipboard_line = whole_line;
+                    let native = write_editor_clipboard(&mut self.editing.system_clipboard, &text);
+                    if key.code == KeyCode::Char('x') {
+                        view.delete_selection();
+                    }
+                    view.message = if native {
+                        "Copied to clipboard"
+                    } else {
+                        "Copied within Forge · terminal clipboard requested · Ctrl-V Paste"
+                    }
+                    .into();
+                    return;
+                }
+                KeyCode::Char('v') => {
+                    let text = read_editor_clipboard(&mut self.editing.system_clipboard)
+                        .unwrap_or_else(|| self.editing.clipboard.clone());
+                    if text.is_empty() {
+                        view.message =
+                            "Clipboard empty · use terminal Paste for external text".into();
+                    } else {
+                        if self.editing.clipboard_line
+                            && text == self.editing.clipboard
+                            && view.selection().is_none()
+                        {
+                            view.col = 0;
+                        }
+                        view.insert(&text);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let movement = matches!(
+            key.code,
+            KeyCode::Left
+                | KeyCode::Right
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::Home
+                | KeyCode::End
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+        );
+        if movement {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                view.anchor.get_or_insert((view.row, view.col));
+            } else {
+                if let Some((start, end)) = view.selection() {
+                    if matches!(key.code, KeyCode::Left | KeyCode::Right) && !ctrl {
+                        let (row, col) = if key.code == KeyCode::Left {
+                            start
+                        } else {
+                            end
+                        };
+                        view.row = row;
+                        view.col = col;
+                        view.anchor = None;
+                        return;
+                    }
+                }
+                view.anchor = None;
+            }
         }
         match key.code {
             KeyCode::Char('z') if ctrl => view.undo(false),
@@ -429,13 +643,40 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if view.viewport.contains((mouse.column, mouse.row).into()) =>
             {
+                if !mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                    view.anchor = None;
+                } else {
+                    view.anchor.get_or_insert((view.row, view.col));
+                }
                 view.row =
                     (view.top + (mouse.row - view.viewport.y) as usize).min(view.lines.len() - 1);
                 view.col = byte_at_cell(
                     &view.lines[view.row],
                     view.left + (mouse.column - view.viewport.x) as usize,
                 );
+                view.anchor.get_or_insert((view.row, view.col));
+                view.dragging = true;
             }
+            MouseEventKind::Drag(MouseButton::Left)
+                if view.dragging && view.viewport.width > 0 && view.viewport.height > 0 =>
+            {
+                if mouse.row < view.viewport.y {
+                    view.top = view.top.saturating_sub(1);
+                }
+                if mouse.row >= view.viewport.bottom() {
+                    view.top = (view.top + 1).min(view.lines.len() - 1);
+                }
+                let y = mouse.row.clamp(view.viewport.y, view.viewport.bottom() - 1);
+                view.row = (view.top + (y - view.viewport.y) as usize).min(view.lines.len() - 1);
+                let x = mouse
+                    .column
+                    .clamp(view.viewport.x, view.viewport.right() - 1);
+                view.col = byte_at_cell(
+                    &view.lines[view.row],
+                    view.left + (x - view.viewport.x) as usize,
+                );
+            }
+            MouseEventKind::Up(MouseButton::Left) => view.dragging = false,
             MouseEventKind::ScrollUp => view.up_down(-3),
             MouseEventKind::ScrollDown => view.up_down(3),
             _ => {}
@@ -446,6 +687,11 @@ impl App {
 pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: Palette) {
     frame.render_widget(Clear, area);
     let saving = app.editing.saving();
+    let binding_help = app.keys.editor_help();
+    let close_help = format!(
+        "Unsaved · Enter/Esc Keep editing · {} Save & close · D Discard & close",
+        app.keys.action_key("save")
+    );
     let Some(view) = &mut app.editing.view else {
         frame.render_widget(
             Paragraph::new("Loading text… · Esc cancel").block(
@@ -518,18 +764,44 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
             .style(Style::default().fg(p.fg_dim)),
             Rect::new(rows[0].x, y, gutter, 1),
         );
-        let expanded = line.replace('\t', "    ");
+        let selection = view.selection();
+        let highlight = Style::default().fg(p.on_accent).bg(p.selection);
+        let mut spans: Vec<Span> = line
+            .char_indices()
+            .map(|(byte, ch)| {
+                let selected = selection
+                    .is_some_and(|(start, end)| (offset, byte) >= start && (offset, byte) < end);
+                let text = if ch == '\t' {
+                    "    ".into()
+                } else {
+                    ch.to_string()
+                };
+                Span::styled(
+                    text,
+                    if selected {
+                        highlight
+                    } else {
+                        Style::default()
+                    },
+                )
+            })
+            .collect();
+        if selection
+            .is_some_and(|(start, end)| (offset, line.len()) >= start && (offset, line.len()) < end)
+        {
+            spans.push(Span::styled(" ", highlight));
+        }
         frame.render_widget(
-            Paragraph::new(expanded).scroll((0, view.left.min(u16::MAX as usize) as u16)),
+            Paragraph::new(Line::from(spans)).scroll((0, view.left.min(u16::MAX as usize) as u16)),
             Rect::new(text_area.x, y, text_area.width, 1),
         );
     }
     let help = if saving {
         "Saving…"
     } else if view.confirm_close {
-        "Unsaved changes · Ctrl-S Save & close · Enter Discard · Esc Keep editing"
+        &close_help
     } else {
-        "Ctrl-S Save · Esc Close · Ctrl-Z Undo · Ctrl-Y Redo · Paste / arrows / mouse"
+        &binding_help
     };
     let message = format!(
         "{}:{}  {}",
@@ -627,6 +899,9 @@ mod tests {
         assert!(!app.editing.view.as_ref().unwrap().confirm_close);
         key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.editing.active(), "Enter should keep the draft");
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Char('d'), KeyModifiers::NONE);
         assert!(!app.editing.active());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "original");
         app.open_text_editor(path.clone(), 1);
@@ -677,6 +952,136 @@ mod tests {
                 .draw(|frame| draw_editor(frame, frame.area(), &mut app, Palette::default()))
                 .unwrap();
         }
+    }
+
+    #[tokio::test]
+    async fn selection_copy_cut_line_delete_paste_and_undo() {
+        let (_dir, mut app, path) = fixture("中文\nsecond\nlast");
+        app.open_text_editor(path.clone(), 1);
+        finish(&mut app).await;
+        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert!(app.editing.active());
+        assert!(!app.session.should_quit);
+        key(&mut app, KeyCode::Right, KeyModifiers::SHIFT);
+        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(app.editing.clipboard, "中");
+        key(&mut app, KeyCode::Delete, KeyModifiers::NONE);
+        assert_eq!(
+            app.editing.view.as_ref().unwrap().value(),
+            "文\nsecond\nlast"
+        );
+        key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.editing.view.as_ref().unwrap().value(),
+            "中文\nsecond\nlast"
+        );
+        key(&mut app, KeyCode::Left, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(app.editing.clipboard, "中文\n");
+        assert_eq!(app.editing.view.as_ref().unwrap().value(), "second\nlast");
+        key(&mut app, KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.editing.view.as_ref().unwrap().value(),
+            "中文\nsecond\nlast"
+        );
+        key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        app.handle_editor_paste("replacement");
+        assert_eq!(app.editing.view.as_ref().unwrap().value(), "replacement");
+        key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.editing.view.as_ref().unwrap().value(),
+            "中文\nsecond\nlast"
+        );
+        for line in [2, 3] {
+            app.editing.view = Some(TextEditor::new(
+                text::load(_dir.path(), &path).unwrap(),
+                line,
+            ));
+            key(&mut app, KeyCode::Char('x'), KeyModifiers::CONTROL);
+            let expected = if line == 2 {
+                "中文\nlast"
+            } else {
+                "中文\nsecond"
+            };
+            assert_eq!(app.editing.view.as_ref().unwrap().value(), expected);
+            key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+            assert_eq!(
+                app.editing.view.as_ref().unwrap().value(),
+                "中文\nsecond\nlast"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn copy_without_selection_copies_line_without_changing_cursor_or_document() {
+        let (_dir, mut app, path) = fixture("中文\nlast\n");
+        app.open_text_editor(path, 1);
+        finish(&mut app).await;
+        key(&mut app, KeyCode::Right, KeyModifiers::NONE);
+        let before = app.editing.view.as_ref().unwrap().snapshot();
+        key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(app.editing.clipboard, "中文\n");
+        assert!(app.editing.clipboard_line);
+        let view = app.editing.view.as_ref().unwrap();
+        assert_eq!(
+            (view.row, view.col, view.anchor),
+            (before.row, before.col, before.anchor)
+        );
+        assert_eq!(view.value(), before.text);
+        assert!(!view.dirty());
+        assert!(view.undo.is_empty());
+        key(&mut app, KeyCode::Char('v'), KeyModifiers::CONTROL);
+        assert_eq!(
+            app.editing.view.as_ref().unwrap().value(),
+            "中文\n中文\nlast\n"
+        );
+        key(&mut app, KeyCode::End, KeyModifiers::CONTROL);
+        key(&mut app, KeyCode::Insert, KeyModifiers::CONTROL);
+        assert_eq!(app.editing.clipboard, "\n");
+        assert!(!app.session.should_quit);
+    }
+
+    #[tokio::test]
+    async fn mouse_drag_highlights_unicode_selection_and_backspace_deletes_it() {
+        let (_dir, mut app, path) = fixture("中abc\nnext");
+        app.open_text_editor(path, 1);
+        finish(&mut app).await;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 12)).unwrap();
+        terminal
+            .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+            .unwrap();
+        let area = app.editing.view.as_ref().unwrap().viewport;
+        for (kind, x) in [
+            (MouseEventKind::Down(MouseButton::Left), area.x),
+            (MouseEventKind::Drag(MouseButton::Left), area.x + 3),
+            (MouseEventKind::Up(MouseButton::Left), area.x + 3),
+        ] {
+            app.handle_editor_mouse(MouseEvent {
+                kind,
+                column: x,
+                row: area.y,
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        assert_eq!(
+            app.editing
+                .view
+                .as_ref()
+                .unwrap()
+                .selected_text()
+                .as_deref(),
+            Some("中a")
+        );
+        terminal
+            .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+            .unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(area.x, area.y)].bg,
+            Palette::default().selection
+        );
+        key(&mut app, KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(app.editing.view.as_ref().unwrap().value(), "bc\nnext");
     }
 
     #[tokio::test]

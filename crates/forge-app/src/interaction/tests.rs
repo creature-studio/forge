@@ -149,6 +149,82 @@ async fn whole_file_and_hunk_stage_unstage_follow_focus() {
     }
 }
 
+async fn finish_write_and_status(app: &mut App) {
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            app.poll_pending_write();
+            app.poll_pending_status();
+            app.poll_pending_diff();
+            app.poll_pending_list();
+            if app.scm.pending_write.is_none()
+                && app.scm.pending_status.is_none()
+                && !app.scm.status_rerun
+                && app.preview_state.pending_diff.is_none()
+                && app.files.pending_lists.is_empty()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        !app.session.status.contains("failed:"),
+        "{}",
+        app.session.status
+    );
+}
+
+#[tokio::test]
+async fn stage_then_unstage_follows_same_file_across_git_sections() {
+    let (dir, mut app) = fixture();
+    app.scm.scm_selected = scm_jump_to_column(&app.scm_rows(), StagingColumn::Unstaged);
+    app.session.focus = PaneFocus::List;
+    assert_eq!(app.selected_scm_entry().unwrap().path, "a.txt");
+    assert_eq!(app.selected_scm_entry().unwrap().side, DiffSide::Unstaged);
+
+    // No manual navigation between actions. Previously this selected a
+    // STAGED group heading after the list shrank.
+    press(&mut app, 's');
+    finish_write_and_status(&mut app).await;
+    assert_eq!(app.selected_scm_entry().unwrap().path, "a.txt");
+    assert_eq!(app.selected_scm_entry().unwrap().side, DiffSide::Staged);
+    assert!(matches!(
+        app.selected_scm_row(),
+        Some(ScmRow::Change { .. })
+    ));
+    assert!(app.scm.pending_transfer.is_none());
+
+    press(&mut app, 'u');
+    finish_write_and_status(&mut app).await;
+    assert_eq!(app.selected_scm_entry().unwrap().path, "a.txt");
+    assert_eq!(app.selected_scm_entry().unwrap().side, DiffSide::Unstaged);
+    assert!(app.scm.pending_transfer.is_none());
+    assert_eq!(
+        git(dir.path(), &["show", "HEAD:a.txt"]),
+        git(dir.path(), &["show", ":a.txt"])
+    );
+}
+
+#[tokio::test]
+async fn manual_navigation_cancels_pending_stage_focus_transfer() {
+    let (_dir, mut app) = fixture();
+    app.scm.scm_selected = scm_jump_to_column(&app.scm_rows(), StagingColumn::Unstaged);
+    app.session.focus = PaneFocus::List;
+    press(&mut app, 's');
+    assert!(app.scm.pending_transfer.is_some());
+    // Moving away while the write is pending must not steal the user's focus
+    // after the asynchronous Git status response.
+    app.move_scm(-1);
+    assert!(app.scm.pending_transfer.is_none());
+    finish_write_and_status(&mut app).await;
+    assert!(matches!(
+        app.selected_scm_row(),
+        Some(ScmRow::Section { .. })
+    ));
+}
+
 #[tokio::test]
 async fn navigation_and_menus_use_the_same_scope_as_shortcuts() {
     let (_dir, mut app) = fixture();
@@ -274,7 +350,8 @@ async fn help_consumes_keys_and_mouse_then_restores_focus_and_selection() {
     assert_eq!(app.scm.scm_selected, selected);
     press(&mut app, '?');
     app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-    assert!(app.session.should_quit);
+    assert!(!app.session.should_quit);
+    assert!(!app.session.help_open);
 }
 
 #[tokio::test]

@@ -6,9 +6,12 @@
 
 mod context_menu;
 mod file_list;
+mod graph;
 mod icons;
+mod markdown;
 mod preview_pane;
 mod staging;
+mod sticky;
 mod style;
 mod tree;
 
@@ -20,19 +23,26 @@ pub use context_menu::{
 };
 pub use file_list::{draw_file_list, ensure_selected_visible, list_index_at, FileListState};
 pub use forge_theme::ColorMode;
+pub use graph::{
+    change_color, dir_key, flatten_changes, lane_color, layout_graph, ChangeRow, GraphCell,
+    GraphLayout, GraphRow, LANE_WIDTH,
+};
 pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, IconMode, Icons};
+pub use markdown::{wrap_line as wrap_text_line, MarkdownPreview};
 pub use preview_pane::{
     diff_render_hunk_start, draw_preview, preview_line_count, scroll_to_hunk, PreviewView,
-    SplitRowsCache, TextLang,
+    SplitRowsCache, TextLang, TextRowsCache,
 };
 pub use staging::{
-    build_scm_rows, draw_commit_modal, draw_git_strip, draw_scm_sidebar, draw_staging,
-    expand_ancestors_for_path, find_scm_parent_row, scm_entry, scm_index_at, scm_jump_to_column,
-    staging_index_at, ScmRow, StagingColumn, StagingLayout, StagingState,
+    build_scm_rows, compact_scm_rows, draw_commit_modal, draw_git_strip, draw_scm_sidebar,
+    draw_staging, expand_ancestors_for_path, find_scm_parent_row, scm_entry, scm_index_at,
+    scm_jump_to_column, staging_index_at, HistoryView, ScmRow, StagingColumn, StagingLayout,
+    StagingState,
 };
+pub use sticky::index_at as sticky_index_at;
 pub use style::rgb as to_color;
 pub use style::{color_mode, set_color_mode};
-pub use tree::{find_parent_row, flatten_tree, TreeRow};
+pub use tree::{compact_tree_rows, find_parent_row, flatten_tree, TreeRow};
 
 /// Legacy constant — bottom staging strip removed (VS Code sidebar layout).
 #[allow(dead_code)]
@@ -67,9 +77,15 @@ pub struct PaneLayout {
     pub list_inner: Rect,
     pub preview: Rect,
     pub preview_inner: Rect,
+    pub markdown_preview_tab: Rect,
+    pub markdown_code_tab: Rect,
+    /// Clickable Open file action in the Git Diff header.
+    pub open_file_tab: Rect,
     pub staging: StagingLayout,
     pub header: Rect,
     pub footer: Rect,
+    /// Clickable Git branch / ahead / behind / sync status chip.
+    pub git_sync_status: Rect,
     pub hotkeys: Rect,
     /// Visible Files/Git tab strip.
     pub activity: Rect,

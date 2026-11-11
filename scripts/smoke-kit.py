@@ -82,7 +82,7 @@ def smoke():
             drain(1)
             assert b"Files" in transcript
             send(b"g")
-            assert b"Source control" in transcript
+            assert b"Git" in transcript
             send(b"s")
             wait_for(lambda: "a.txt" in git("diff", "--cached", "--name-only"), "stage failed")
             assert git("show", ":a.txt") == changed.strip(), "sidebar staged only a hunk"
@@ -142,7 +142,7 @@ def smoke():
             (root / "folder-sibling/keep.txt").write_text("leave unstaged\n")
             send(b"r")
             send(b"\x1b[Hj")  # Home selects Changes; j selects its first folder.
-            menu = send(b"\x1b[<2;5;6M\x1b[<2;5;6m")
+            menu = send(b"\x1b[<2;5;4M\x1b[<2;5;4m")
             assert b"Stage folder" in menu, "right-click did not open folder actions"
             send(b"\r")
             wait_for(lambda: "folder/nested/b.txt" in git("diff", "--cached", "--name-only"), "folder stage failed")
@@ -153,6 +153,27 @@ def smoke():
             send(b"u")
             wait_for(lambda: "folder/nested/b.txt" not in git("diff", "--cached", "--name-only"), "folder unstage failed")
             assert (root / "folder/nested/b.txt").read_text() == "nested change\n"
+
+            # History accordion: G focuses the newest commit, Enter expands it, Esc leaves.
+            mark = len(transcript)
+            send(b"G")
+            # The status bar redraws incrementally, so match a stable fragment.
+            wait_for(
+                lambda: b"changed files" in transcript[mark:],
+                "G did not focus the newest commit in the sidebar",
+            )
+            send(b"\r")
+            wait_for(
+                lambda: b"collapses files" in transcript[mark:],
+                "commit did not expand inside the sidebar",
+            )
+            send(b"\x1b")
+            drain(0.5)
+            mark = len(transcript)
+            send(b"?")
+            # The overlay draws its title in pieces; the footer proves help opened.
+            wait_for(lambda: b"Close help" in transcript[mark:], "history kept keyboard focus after Esc")
+            send(b"\x1b")
 
             resize(45, 12)
             send(b"\t")
@@ -166,7 +187,9 @@ def smoke():
             drain(1)
             assert not drain(0.3), "runtime keeps producing output while idle"
             send(b"?")
-            send(b"\x03")
+            send(b"\x03")  # Ctrl-C closes help without quitting
+            assert os.waitpid(pid, os.WNOHANG)[0] == 0
+            send(b"q")
             deadline = time.monotonic() + 5
             while time.monotonic() < deadline:
                 result, status = os.waitpid(pid, os.WNOHANG)

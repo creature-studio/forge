@@ -15,22 +15,27 @@ pub enum FsError {
     NotADirectory(PathBuf),
 }
 
-pub(crate) async fn list_dir(
-    dir: PathBuf,
-    next_id: Arc<AtomicU64>,
-) -> Result<Vec<Entry>, FsError> {
-    let meta = tokio::fs::metadata(&dir).await?;
-    if !meta.is_dir() {
+/// Read a complete directory within a single blocking worker.
+///
+/// Tokio's async read_dir/file_type previously scheduled two filesystem
+/// operations *per entry*. On very wide project roots this meant thousands
+/// of worker handoffs before the first Files row could be shown.
+pub(crate) async fn list_dir(dir: PathBuf, next_id: Arc<AtomicU64>) -> Result<Vec<Entry>, FsError> {
+    tokio::task::spawn_blocking(move || list_dir_blocking(dir, next_id))
+        .await
+        .map_err(|err| FsError::Io(std::io::Error::other(format!("directory worker: {err}"))))?
+}
+
+fn list_dir_blocking(dir: PathBuf, next_id: Arc<AtomicU64>) -> Result<Vec<Entry>, FsError> {
+    if !std::fs::metadata(&dir)?.is_dir() {
         return Err(FsError::NotADirectory(dir));
     }
-
-    let mut rd = tokio::fs::read_dir(&dir).await?;
     let mut entries = Vec::new();
-
-    while let Some(ent) = rd.next_entry().await? {
+    for item in std::fs::read_dir(&dir)? {
+        let ent = item?;
         let name = ent.file_name().to_string_lossy().into_owned();
         let path = ent.path();
-        let file_type = ent.file_type().await?;
+        let file_type = ent.file_type()?;
         let kind = if file_type.is_dir() {
             EntryKind::Directory
         } else if file_type.is_symlink() {
@@ -40,26 +45,21 @@ pub(crate) async fn list_dir(
         } else {
             EntryKind::Other
         };
-
-        let id = PathId(next_id.fetch_add(1, Ordering::Relaxed));
         entries.push(Entry {
-            id,
+            id: PathId(next_id.fetch_add(1, Ordering::Relaxed)),
             name,
             path,
             kind,
         });
     }
-
     entries.sort_by(|a, b| {
         let dir_first = |k: EntryKind| !matches!(k, EntryKind::Directory);
         dir_first(a.kind)
             .cmp(&dir_first(b.kind))
             .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
     });
-
     Ok(entries)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -72,6 +72,8 @@ mod tests {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let entries = list_dir(dir, Arc::new(AtomicU64::new(1))).await.unwrap();
         assert!(entries.iter().any(|e| e.name == "Cargo.toml"));
-        assert!(entries.iter().any(|e| e.name == "crates" && e.kind == EntryKind::Directory));
+        assert!(entries
+            .iter()
+            .any(|e| e.name == "crates" && e.kind == EntryKind::Directory));
     }
 }

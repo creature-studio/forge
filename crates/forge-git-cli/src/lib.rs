@@ -4,6 +4,9 @@
 
 #![forbid(unsafe_code)]
 
+mod blame;
+pub use blame::BlameLine;
+
 use std::path::Path;
 use std::process::{Output, Stdio};
 
@@ -39,6 +42,85 @@ pub enum GitWriteError {
 pub struct CliWriteBackend;
 
 impl CliWriteBackend {
+    /// Bounded, read-only worktree/index query for the source gutter. No
+    /// untracked fallback, external diff drivers, textconv or optional locks.
+    pub async fn gutter_diff(&self, repo: &Path, path: &str) -> Result<FileDiff, GitWriteError> {
+        use tokio::io::AsyncReadExt;
+        const LIMIT: usize = 2 * 1024 * 1024;
+        let read = async {
+            let mut child = Command::new("git")
+                .current_dir(repo)
+                .args([
+                    "--no-optional-locks",
+                    "--literal-pathspecs",
+                    "-c",
+                    "diff.suppressBlankEmpty=false",
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-color",
+                    "--unified=3",
+                    "--output-indicator-new=+",
+                    "--output-indicator-old=-",
+                    "--output-indicator-context= ",
+                    "--",
+                    path,
+                ])
+                .stdin(Stdio::null())
+                .stderr(Stdio::null())
+                .stdout(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()?;
+            let mut bytes = Vec::new();
+            child
+                .stdout
+                .take()
+                .unwrap()
+                .take((LIMIT + 1) as u64)
+                .read_to_end(&mut bytes)
+                .await?;
+            if bytes.len() > LIMIT {
+                return Err(std::io::Error::other("gutter diff exceeds 2 MiB"));
+            }
+            if !child.wait().await?.success() {
+                return Err(std::io::Error::other("gutter diff failed"));
+            }
+            Ok(bytes)
+        };
+        let bytes = tokio::time::timeout(std::time::Duration::from_secs(3), read)
+            .await
+            .map_err(|_| std::io::Error::other("gutter diff timed out"))??;
+        let mut in_hunk = false;
+        let lines = String::from_utf8_lossy(&bytes)
+            .lines()
+            .map(|text| {
+                let kind = if text.starts_with("@@ ") {
+                    in_hunk = true;
+                    DiffLineKind::Header
+                } else if in_hunk {
+                    match text.as_bytes().first() {
+                        Some(b'+') => DiffLineKind::Add,
+                        Some(b'-') => DiffLineKind::Delete,
+                        Some(b' ') => DiffLineKind::Context,
+                        _ => DiffLineKind::Meta,
+                    }
+                } else {
+                    DiffLineKind::Meta
+                };
+                DiffLine {
+                    kind,
+                    text: text.to_owned(),
+                }
+            })
+            .collect();
+        Ok(FileDiff {
+            repo_root: repo.to_owned(),
+            path: path.to_owned(),
+            side: DiffSide::Unstaged,
+            lines,
+        })
+    }
+
     pub fn new() -> Self {
         Self
     }

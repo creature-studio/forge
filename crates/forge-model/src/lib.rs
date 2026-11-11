@@ -450,6 +450,102 @@ impl StatusSnapshot {
     }
 }
 
+/// Which namespace a [`GraphRef`] decoration came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GraphRefKind {
+    /// The symbolic `HEAD` ref.
+    Head,
+    /// `refs/heads/*`
+    LocalBranch,
+    /// `refs/remotes/*`
+    RemoteBranch,
+    /// `refs/tags/*`
+    Tag,
+}
+
+impl GraphRefKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            GraphRefKind::Head => "HEAD",
+            GraphRefKind::LocalBranch => "branch",
+            GraphRefKind::RemoteBranch => "remote",
+            GraphRefKind::Tag => "tag",
+        }
+    }
+}
+/// One ref badge drawn next to a commit row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphRef {
+    /// Short display name (`dev`, `origin/dev`, `v1.2.0`, `HEAD`).
+    pub name: String,
+    pub kind: GraphRefKind,
+}
+
+/// One commit row in the history graph (newest first).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphCommit {
+    /// Full hex object id.
+    pub id: String,
+    /// Abbreviated object id (7 chars).
+    pub short: String,
+    /// Full hex ids of the parent commits, in `git log` order.
+    pub parents: Vec<String>,
+    /// Refs pointing at this commit.
+    pub refs: Vec<GraphRef>,
+    pub author: String,
+    /// Commit time as seconds since the unix epoch.
+    pub time: i64,
+    /// First line of the commit message.
+    pub subject: String,
+}
+
+/// History graph payload for one repository.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct GraphSnapshot {
+    pub repo_root: PathBuf,
+    /// Abbreviated current `HEAD` id, if any.
+    pub head: Option<String>,
+    /// Current branch name, or a detached-head description.
+    pub branch: String,
+    /// Commits in traversal order (children before parents).
+    pub commits: Vec<GraphCommit>,
+}
+
+/// How a file changed inside a commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+    TypeChanged,
+}
+
+impl CommitChangeKind {
+    /// Single-letter badge matching `git diff --name-status`.
+    pub fn badge(self) -> &'static str {
+        match self {
+            CommitChangeKind::Added => "A",
+            CommitChangeKind::Modified => "M",
+            CommitChangeKind::Deleted => "D",
+            CommitChangeKind::Renamed => "R",
+            CommitChangeKind::Copied => "C",
+            CommitChangeKind::TypeChanged => "T",
+        }
+    }
+}
+
+/// One file touched by a commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitChange {
+    /// New / current path relative to the worktree (`/` separators).
+    pub path: String,
+    /// Source path for renames and copies.
+    pub old_path: Option<String>,
+    pub kind: CommitChangeKind,
+}
+
 fn dedup_changes(list: &mut Vec<ChangeEntry>) {
     if list.is_empty() {
         return;

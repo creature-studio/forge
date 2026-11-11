@@ -386,3 +386,322 @@ async fn clean_files_have_no_synthetic_diff_and_deleted_versions_can_be_compared
     assert_eq!(older.len(), 1);
     assert_eq!(older[0].id, items[1].id);
 }
+
+#[tokio::test]
+async fn commit_file_diff_matches_first_parent_for_merges_and_roots() {
+    let dir = fixture();
+    let root = dir.path();
+    let cli = CliWriteBackend;
+
+    // Root commit: the file is new, so the diff is an addition.
+    let root_oid = git(root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let diff = cli
+        .commit_file_diff(root, &root_oid, "a.txt")
+        .await
+        .unwrap();
+    assert!(diff.lines.iter().any(|line| line.text == "+alpha"));
+    assert!(diff.lines.iter().any(|line| line.text.starts_with("@@")));
+
+    // Merge commit: plain `git show` prints a combined diff (empty here); the
+    // first-parent diff must still show the file the merge brought in.
+    git(root, &["checkout", "-qb", "feature"]);
+    fs::write(root.join("b.txt"), "from feature\n").unwrap();
+    git(root, &["add", "b.txt"]);
+    git(root, &["commit", "-qm", "feature adds b"]);
+    git(root, &["checkout", "-q", "main"]);
+    fs::write(root.join("a.txt"), "alpha\nbeta\ngamma\ndelta\nmain\n").unwrap();
+    git(root, &["commit", "-qam", "main edits a"]);
+    git(
+        root,
+        &["merge", "--no-ff", "-m", "merge feature", "feature"],
+    );
+    let merge_oid = git(root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let diff = cli
+        .commit_file_diff(root, &merge_oid, "b.txt")
+        .await
+        .unwrap();
+    assert!(
+        diff.lines.iter().any(|line| line.text == "+from feature"),
+        "{:?}",
+        diff.lines
+    );
+
+    // A file the commit did not touch yields no lines.
+    let diff = cli
+        .commit_file_diff(root, &merge_oid, "missing.txt")
+        .await
+        .unwrap();
+    assert!(diff.lines.is_empty(), "{:?}", diff.lines);
+}
+
+#[tokio::test]
+async fn publish_branch_selects_remote_sets_upstream_and_refuses_repeat_or_stale_selection() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote_owner = tempfile::tempdir().unwrap();
+    let origin = remote_owner.path().join("origin.git");
+    let backup = remote_owner.path().join("backup.git");
+    git(
+        remote_owner.path(),
+        &["init", "--bare", "-q", origin.to_str().unwrap()],
+    );
+    git(
+        remote_owner.path(),
+        &["init", "--bare", "-q", backup.to_str().unwrap()],
+    );
+    let cli = CliWriteBackend::new();
+    let (none, _) = cli
+        .query(root, GitQuery::PublishRemotes("feature/dev".into()))
+        .await
+        .unwrap();
+    assert!(none.is_empty(), "no remote picker must not invent origin");
+
+    git(root, &["remote", "add", "origin", origin.to_str().unwrap()]);
+    git(root, &["remote", "add", "backup", backup.to_str().unwrap()]);
+    git(root, &["switch", "-qc", "feature/dev"]);
+    let (remotes, detail) = cli
+        .query(root, GitQuery::PublishRemotes("feature/dev".into()))
+        .await
+        .unwrap();
+    assert_eq!(remotes.len(), 2);
+    assert!(remotes.iter().any(|r| r.id == "origin"));
+    assert!(remotes.iter().any(|r| r.id == "backup"));
+    assert!(detail.contains("feature/dev"));
+
+    let wrong = cli
+        .action(
+            root,
+            GitAction::PublishBranch {
+                remote: "backup".into(),
+                branch: "feature/other".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        wrong.to_string().contains("Current branch changed"),
+        "{wrong}"
+    );
+    assert!(!git(root, &["branch", "-r"]).contains("feature/other"));
+
+    let missing = cli
+        .action(
+            root,
+            GitAction::PublishBranch {
+                remote: "missing".into(),
+                branch: "feature/dev".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(missing.to_string().contains("not configured"), "{missing}");
+
+    let msg = cli
+        .action(
+            root,
+            GitAction::PublishBranch {
+                remote: "backup".into(),
+                branch: "feature/dev".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(msg.contains("Published feature/dev to backup"), "{msg}");
+    assert_eq!(
+        git(root, &["config", "--get", "branch.feature/dev.remote"]).trim(),
+        "backup"
+    );
+    assert_eq!(
+        git(root, &["config", "--get", "branch.feature/dev.merge"]).trim(),
+        "refs/heads/feature/dev"
+    );
+    assert!(git(root, &["status", "-sb"]).contains("feature/dev...backup/feature/dev"));
+    let head = git(root, &["rev-parse", "HEAD"]).trim().to_owned();
+    let remote_oid = git(
+        remote_owner.path(),
+        &[
+            "--git-dir",
+            backup.to_str().unwrap(),
+            "rev-parse",
+            "refs/heads/feature/dev",
+        ],
+    );
+    assert_eq!(remote_oid.trim(), head);
+    assert!(
+        git(
+            remote_owner.path(),
+            &["--git-dir", origin.to_str().unwrap(), "branch", "--list"]
+        )
+        .trim()
+        .is_empty(),
+        "publishing to backup must not touch origin"
+    );
+
+    let repeat = cli
+        .action(
+            root,
+            GitAction::PublishBranch {
+                remote: "origin".into(),
+                branch: "feature/dev".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(repeat.to_string().contains("upstream"), "{repeat}");
+    assert!(
+        git(
+            remote_owner.path(),
+            &["--git-dir", origin.to_str().unwrap(), "branch", "--list"]
+        )
+        .trim()
+        .is_empty(),
+        "repeated Publish must not change origin"
+    );
+}
+
+#[tokio::test]
+async fn publish_branch_rejects_nonfastforward_and_unborn_branch_without_upstream() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote_owner = tempfile::tempdir().unwrap();
+    let bare = remote_owner.path().join("origin.git");
+    git(
+        remote_owner.path(),
+        &["init", "--bare", "-q", bare.to_str().unwrap()],
+    );
+    git(root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    git(root, &["switch", "-qc", "feature/dev"]);
+    // Give the remote a future commit on the same branch while the local
+    // branch remains at the base commit; a non-force push must be rejected.
+    std::fs::write(root.join("a.txt"), "remote ahead\n").unwrap();
+    git(root, &["add", "a.txt"]);
+    git(root, &["commit", "-qm", "remote ahead"]);
+    let remote_oid = git(root, &["rev-parse", "HEAD"]);
+    // Populate the remote object database without setting local upstream.
+    git(
+        root,
+        &[
+            "push",
+            "origin",
+            "refs/heads/feature/dev:refs/heads/feature/dev",
+        ],
+    );
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]); // fixture-only repo
+    let cli = CliWriteBackend::new();
+    let failure = cli
+        .action(
+            root,
+            GitAction::PublishBranch {
+                remote: "origin".into(),
+                branch: "feature/dev".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        failure.to_string().contains("non-fast-forward")
+            || failure.to_string().contains("fetch first"),
+        "{failure}"
+    );
+    assert_eq!(
+        git(
+            remote_owner.path(),
+            &[
+                "--git-dir",
+                bare.to_str().unwrap(),
+                "rev-parse",
+                "refs/heads/feature/dev"
+            ]
+        )
+        .trim(),
+        remote_oid.trim()
+    );
+    assert!(
+        std::process::Command::new("git")
+            .args(["config", "--get", "branch.feature/dev.remote"])
+            .current_dir(root)
+            .output()
+            .unwrap()
+            .status
+            .code()
+            != Some(0),
+        "failed Publish must not establish upstream"
+    );
+
+    let unborn = tempfile::tempdir().unwrap();
+    git(unborn.path(), &["init", "-qb", "new"]);
+    git(
+        unborn.path(),
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    let err = cli
+        .action(
+            unborn.path(),
+            GitAction::PublishBranch {
+                remote: "origin".into(),
+                branch: "new".into(),
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("HEAD"), "{err}");
+}
+
+#[tokio::test]
+async fn stash_apply_index_restores_staged_changes_and_pop_removes_only_after_success() {
+    let dir = fixture();
+    let root = dir.path();
+    let cli = CliWriteBackend;
+    fs::write(root.join("a.txt"), "original staged\n").unwrap();
+    git(root, &["add", "a.txt"]);
+    git(root, &["stash", "push", "-m", "indexed"]);
+    let id = git(root, &["stash", "list", "--format=%H"])
+        .trim()
+        .to_owned();
+    assert!(!id.is_empty());
+
+    let reply = cli
+        .action(root, GitAction::ApplyStashIndexed(id.clone()))
+        .await
+        .unwrap();
+    assert!(reply.contains("staged"), "{reply}");
+    assert_eq!(
+        git(root, &["diff", "--cached", "--name-only"]).trim(),
+        "a.txt"
+    );
+    assert!(git(root, &["stash", "list"]).contains("indexed"));
+    git(root, &["reset", "-q", "--hard", "HEAD"]);
+
+    // The reflog may have shifted in the meantime; Pop is pinned to its OID,
+    // so selecting an entry can never pop the wrong stash by stale index.
+    git(root, &["stash", "push", "-m", "empty"]); // no change: no new entry
+    let reply = cli.action(root, GitAction::PopStash(id)).await.unwrap();
+    assert!(reply.contains("Popped"), "{reply}");
+    assert_eq!(
+        fs::read_to_string(root.join("a.txt")).unwrap(),
+        "original staged\n"
+    );
+    assert!(git(root, &["stash", "list"]).trim().is_empty());
+}
+
+#[tokio::test]
+async fn stash_pop_conflict_keeps_stash_and_worktree_error_visible() {
+    let dir = fixture();
+    let root = dir.path();
+    let cli = CliWriteBackend;
+    fs::write(root.join("a.txt"), "stash version\n").unwrap();
+    git(root, &["stash", "push", "-m", "conflict-entry"]);
+    let id = git(root, &["stash", "list", "--format=%H"])
+        .trim()
+        .to_owned();
+    fs::write(root.join("a.txt"), "different working version\n").unwrap();
+    let err = cli.action(root, GitAction::PopStash(id)).await.unwrap_err();
+    assert!(
+        err.to_string().contains("stash") || err.to_string().contains("overwrite"),
+        "real git failure should surface: {err}"
+    );
+    assert!(
+        git(root, &["stash", "list"]).contains("conflict-entry"),
+        "Pop must not remove stash if apply fails"
+    );
+}

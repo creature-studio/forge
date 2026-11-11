@@ -10,8 +10,9 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::icons::{icon_mode, IconMode, Icons};
+use crate::sticky;
 use crate::style::{self, rgb};
-use crate::tree::TreeRow;
+use crate::tree::{find_parent_row, fit_compact_label, TreeRow};
 
 /// Borrowed view model for the file list pane.
 #[derive(Debug)]
@@ -24,6 +25,10 @@ pub struct FileListState<'a> {
     pub git: Option<&'a StatusSnapshot>,
     /// Whether the list pane currently has keyboard focus.
     pub focused: bool,
+    pub sticky_scroll: bool,
+    /// Wheel scrolling is independent of the keyboard selection.
+    pub follow_selection: bool,
+    pub sticky_headers: &'a mut Vec<usize>,
 }
 
 /// Keep `selected` inside the visible window `[scroll, scroll + height)`.
@@ -60,17 +65,35 @@ pub fn draw_file_list(
     style::fill_panel(frame, area, theme);
 
     let viewport = area.height as usize;
-    ensure_selected_visible(state.selected, state.scroll, viewport, state.rows.len());
-
+    let headers = if state.sticky_scroll {
+        sticky::layout(
+            state.rows.len(),
+            state.selected,
+            state.scroll,
+            viewport,
+            |i| find_parent_row(state.rows, i),
+            state.follow_selection,
+        )
+    } else {
+        if state.follow_selection {
+            ensure_selected_visible(state.selected, state.scroll, viewport, state.rows.len());
+        } else {
+            *state.scroll = (*state.scroll).min(state.rows.len().saturating_sub(viewport));
+        }
+        Vec::new()
+    };
+    *state.sticky_headers = headers.clone();
     let start = *state.scroll;
-    let end = (start + viewport).min(state.rows.len());
+    let end = (start + viewport.saturating_sub(headers.len())).min(state.rows.len());
     let row_width = area.width;
     let focused = state.focused;
-    let items: Vec<ListItem<'_>> = state.rows[start..end]
+    let items: Vec<ListItem<'_>> = headers
         .iter()
-        .enumerate()
-        .map(|(row, tree_row)| {
-            let index = start + row;
+        .copied()
+        .chain(start..end)
+        .map(|index| {
+            let tree_row = &state.rows[index];
+            let pinned = headers.contains(&index);
             list_item(
                 theme,
                 index,
@@ -79,12 +102,14 @@ pub fn draw_file_list(
                 state.git,
                 row_width,
                 focused,
+                pinned,
             )
         })
         .collect();
 
     let list = List::new(items).style(Style::default().bg(rgb(theme.panel_bg)));
     frame.render_widget(list, area);
+    sticky::paint(frame, area, theme, &headers, state.selected);
     area
 }
 
@@ -116,6 +141,7 @@ fn list_item(
     git: Option<&StatusSnapshot>,
     row_width: u16,
     focused: bool,
+    pinned: bool,
 ) -> ListItem<'static> {
     let entry = &row.entry;
     let git_status = git
@@ -131,6 +157,8 @@ fn list_item(
         } else {
             theme.pill_bg
         }
+    } else if pinned {
+        theme.pill_bg
     } else {
         theme.panel_bg
     };
@@ -195,10 +223,12 @@ fn list_item(
     let prefix_width = left_inset.width() + indent.width() + chevron_tok.width() + icon_tok.width();
     let changed = !matches!(git_status, GitStatus::Clean | GitStatus::Ignored);
     let suffix_width = if changed { 3 } else { 1 };
-    let name = fit_name(
-        &name,
-        (row_width as usize).saturating_sub(prefix_width + suffix_width),
-    );
+    let max_name = (row_width as usize).saturating_sub(prefix_width + suffix_width);
+    let name = if is_dir && name.contains(" / ") {
+        fit_compact_label(&name, max_name)
+    } else {
+        fit_name(&name, max_name)
+    };
     let trailing = " ".repeat(
         (row_width as usize).saturating_sub(prefix_width + name.width() + suffix_width - 1),
     );
@@ -265,6 +295,83 @@ fn git_color(theme: &Theme, git: GitStatus) -> forge_theme::Rgb {
 mod tests {
     use super::{ensure_selected_visible, fit_name, list_index_at};
     use ratatui::layout::Rect;
+
+    #[test]
+    fn sticky_headers_have_full_width_colored_background_only_when_enabled() {
+        use super::{draw_file_list, FileListState};
+        use crate::sticky;
+        use crate::tree::TreeRow;
+        use forge_model::{Entry, EntryKind, PathId};
+        use forge_theme::Theme;
+        use ratatui::{backend::TestBackend, Terminal};
+        use std::path::PathBuf;
+
+        let theme = Theme::modern_ide();
+        let root = PathBuf::from("/tmp/example");
+        let mut rows = vec![TreeRow {
+            entry: Entry {
+                id: PathId(0),
+                name: "src".into(),
+                path: root.join("src"),
+                kind: EntryKind::Directory,
+            },
+            expanded: true,
+            depth: 0,
+        }];
+        for i in 0..30 {
+            rows.push(TreeRow {
+                entry: Entry {
+                    id: PathId(i + 1),
+                    name: format!("file_{i:02}.rs"),
+                    path: root.join(format!("src/file_{i:02}.rs")),
+                    kind: EntryKind::File,
+                },
+                expanded: false,
+                depth: 1,
+            });
+        }
+
+        for enabled in [true, false] {
+            let mut terminal = Terminal::new(TestBackend::new(36, 8)).unwrap();
+            let mut scroll = 9;
+            let mut headers = vec![];
+            terminal
+                .draw(|frame| {
+                    draw_file_list(
+                        frame,
+                        Rect::new(0, 0, 36, 8),
+                        &theme,
+                        &mut FileListState {
+                            rows: &rows,
+                            selected: 2,
+                            scroll: &mut scroll,
+                            git: None,
+                            focused: true,
+                            sticky_scroll: enabled,
+                            follow_selection: false,
+                            sticky_headers: &mut headers,
+                        },
+                    );
+                })
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let normal = super::rgb(theme.panel_bg);
+            if enabled {
+                assert_eq!(headers, vec![0]);
+                let pinned = sticky::background(&theme);
+                assert_ne!(pinned, normal);
+                for x in 0..36 {
+                    assert_eq!(buffer[(x, 0)].bg, pinned, "sticky cell {x} not filled");
+                }
+                assert_eq!(buffer[(0, 0)].symbol(), "▏");
+                assert_eq!(buffer[(35, 1)].bg, normal);
+            } else {
+                assert!(headers.is_empty());
+                assert_eq!(buffer[(35, 0)].bg, normal);
+                assert_ne!(buffer[(0, 0)].symbol(), "▏");
+            }
+        }
+    }
 
     #[test]
     fn long_names_fit_terminal_cells_without_cutting_wide_characters() {
