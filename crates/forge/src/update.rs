@@ -123,7 +123,7 @@ fn curl_latest(head: bool) -> std::io::Result<std::process::Output> {
 
 fn download(url: &str, destination: &Path) -> Result<()> {
     let status = Command::new("curl")
-        .args(["-fL", "--retry", "3", "--connect-timeout", "15", "-o"])
+        .args(["-fsSL", "--retry", "3", "--connect-timeout", "15", "-o"])
         .arg(destination)
         .arg(url)
         .status()
