@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <title>Forge — 终端里的 Git 工作台与文件管理器</title>
+  <meta name="description" content="Forge 是运行在终端里的 Git 工作台：文件树、Markdown 与代码预览、并排 Diff、逐行暂存、历史、分支、Stash、Worktree 和全局搜索，一个键盘完成整套工作流。Rust 构建，MIT 开源。">
+  <meta name="keywords" content="终端 Git 工具, TUI Git 客户端, Git 工作台, 终端文件管理器, 代码预览, 并排 Diff, 逐行暂存, Rust, Ratatui, 开源">
+  <meta name="author" content="Forge contributors">
+  <meta name="application-name" content="Forge">
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="theme-color" content="#0b0d10">
+  <meta name="color-scheme" content="dark">
+
+  <!-- 部署到自定义域名时，同步替换 canonical、og:url、og:image、twitter:image、JSON-LD 和 sitemap.xml 中的站点地址。 -->
+  <link rel="canonical" href="https://creature-studio.github.io/forge/">
+  <link rel="sitemap" type="application/xml" title="Sitemap" href="sitemap.xml">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="site.webmanifest">
+
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Forge">
+  <meta property="og:locale" content="zh_CN">
+  <meta property="og:url" content="https://creature-studio.github.io/forge/">
+  <meta property="og:title" content="Forge — 终端里的 Git 工作台">
+  <meta property="og:description" content="文件树、Diff、历史、搜索和预览，一个终端完成整套 Git 工作流。Rust 构建，MIT 开源。">
+  <meta property="og:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Forge 终端 Git 工作台：左侧为文件树，右侧为 Markdown 预览">
+
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Forge — 终端里的 Git 工作台">
+  <meta name="twitter:description" content="文件树、Diff、历史、搜索和预览，一个终端完成整套 Git 工作流。">
+  <meta name="twitter:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
+  <meta name="twitter:image:alt" content="Forge 终端 Git 工作台界面">
+
+  <script>
+    document.documentElement.classList.add('js');
+    window.setTimeout(function () {
+      if (!document.documentElement.classList.contains('reveal-ready')) {
+        document.documentElement.classList.remove('js');
+      }
+    }, 2200);
+  </script>
+  <link rel="preload" as="image" href="assets/forge-workspace-1800.webp"
+        imagesrcset="assets/forge-workspace-900.webp 900w, assets/forge-workspace-1800.webp 1800w"
+        imagesizes="(min-width: 981px) 58vw, 100vw">
+  <link rel="stylesheet" href="styles.css">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "https://creature-studio.github.io/forge/#website",
+        "url": "https://creature-studio.github.io/forge/",
+        "name": "Forge",
+        "description": "终端里的 Git 工作台与文件管理器",
+        "inLanguage": "zh-CN"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "https://creature-studio.github.io/forge/#software",
+        "name": "Forge",
+        "alternateName": "Forge TUI",
+        "applicationCategory": "DeveloperApplication",
+        "applicationSubCategory": "Version Control",
+        "operatingSystem": "Linux, macOS",
+        "softwareVersion": "0.1.0",
+        "description": "Forge 是运行在终端里的 Git 工作台：文件树、语法高亮预览、并排 Diff、逐行暂存、历史、分支、Stash、Worktree 与全局搜索。",
+        "url": "https://creature-studio.github.io/forge/",
+        "codeRepository": "https://github.com/creature-studio/forge",
+        "license": "https://opensource.org/license/mit",
+        "screenshot": "https://creature-studio.github.io/forge/assets/forge-workspace.png",
+        "image": "https://creature-studio.github.io/forge/assets/og-cover.png",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        },
+        "featureList": [
+          "文件树与 Git 状态",
+          "Markdown 与代码语法高亮预览",
+          "并排 Diff 与文件、目录、Hunk、行级暂存",
+          "提交历史、分支、Stash 与 Worktree 管理",
+          "文件名模糊搜索与全局内容搜索",
+          "命令面板、自定义快捷键与内置主题"
+        ]
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://creature-studio.github.io/forge/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Forge 是什么？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Forge 是一个运行在终端里的 Git 工作台和文件管理器。它把文件树、文件预览、并排 Diff、暂存、提交、历史、分支、Stash、Worktree 和搜索放进同一个 TUI 界面，使用 Rust 构建。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Forge 和普通 Git 命令行有什么区别？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Forge 不替代 Git，而是在 Git 之上提供一个持续可见的工作区。你仍然可以使用熟悉的 Git 语义，但可以在一个界面里浏览文件、查看并排 Diff、按文件或 Hunk 暂存、审阅历史并完成远程同步。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "运行 Forge 需要什么环境？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "需要 Rust 1.89 或更高版本以及 Git。当前主要在 Linux 和 macOS 上开发和验证；其他平台可以通过 Cargo 自行构建，实际体验取决于终端对 ANSI 颜色、鼠标和剪贴板的支持。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "需要安装 Nerd Font 吗？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "不需要。Forge 默认使用内置 Unicode 图标；也可以通过 FORGE_ICONS=nerd 启用 Nerd Font 图标，或使用 FORGE_ICONS=ascii 切换到 ASCII。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "支持哪些语言的语法高亮？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Forge 的预览支持 Rust、Markdown、Python、Shell、JavaScript、TypeScript、JSON、YAML 和 SQL，并保留行号复制。你还可以把 Sublime 的 .sublime-syntax 文件放入 ~/.config/forge/syntaxes/ 来扩展或覆盖语法。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "Forge 会自动修改或覆盖我的仓库吗？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "Forge 的写操作都有明确边界。Stage 和 Unstage 不会丢弃工作区编辑；Discard 和 Delete 需要单独确认；不会自动提交合并结果，也不会强制覆盖远程历史。"
+            }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到主要内容</a>
+
+  <header class="site-header" id="site-header">
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="Forge 首页">
+        <svg class="brand-mark" width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+          <rect x="1" y="1" width="24" height="24" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M8 19V7h10M8 13h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"/>
+        </svg>
+        <span class="brand-word">FORGE</span>
+        <span class="brand-tag">TUI</span>
+      </a>
+
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="打开导航菜单">
+        <span></span><span></span>
+      </button>
+
+      <nav class="site-nav" id="site-nav" aria-label="主导航">
+        <a href="#features">功能</a>
+        <a href="#workflow">工作流</a>
+        <a href="#keyboard">快捷键</a>
+        <a href="#install">安装</a>
+        <a href="#faq">FAQ</a>
+        <a class="nav-github" href="https://github.com/creature-studio/forge" target="_blank" rel="noopener noreferrer">GitHub <span aria-hidden="true">↗</span></a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-glow" aria-hidden="true"></div>
+      <div class="hero-grid-lines" aria-hidden="true"></div>
+
+      <div class="hero-inner">
+        <div class="hero-copy">
+          <p class="kicker" data-reveal><span class="kicker-dot" aria-hidden="true"></span>Rust · Terminal native · MIT</p>
+          <h1 id="hero-title" data-reveal>终端里的<br><em>Git 工作台</em></h1>
+          <p class="hero-lede" data-reveal>文件树、Diff、历史与搜索，收进一个界面。<br class="desktop-only">键盘驱动，鼠标可用，打开仓库就能开始。</p>
+
+          <div class="hero-actions" data-reveal>
+            <a class="button button-primary" href="#install">开始安装 <span aria-hidden="true">→</span></a>
+            <a class="button button-ghost" href="#features">浏览功能</a>
+          </div>
+
+          <ul class="hero-notes" data-reveal aria-label="产品特点">
+            <li>无需 Electron</li>
+            <li>默认不需要 Nerd Font</li>
+            <li>单二进制</li>
+          </ul>
+        </div>
+
+        <figure class="hero-visual" data-reveal>
+          <a class="terminal-frame" href="assets/forge-workspace.png" target="_blank" rel="noopener">
+            <div class="terminal-bar">
+              <span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="terminal-title">forge — ~/aurora</span>
+              <span class="terminal-size">180 × 42</span>
+            </div>
+            <picture>
+              <source type="image/webp"
+                      srcset="assets/forge-workspace-900.webp 900w, assets/forge-workspace-1800.webp 1800w"
+                      sizes="(min-width: 981px) 58vw, 100vw">
+              <img src="assets/forge-workspace.png"
+                   width="1800" height="882"
+                   alt="Forge 工作区截图：左侧是带 Git 状态的文件树，右侧显示带排版的 README Markdown 预览和快捷键栏。"
+                   fetchpriority="high" decoding="async">
+            </picture>
+          </a>
+          <figcaption>真实界面：Files 文件树与 Markdown 预览（示例仓库 aurora），180 列终端。</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <div class="proof-strip" aria-label="技术概览">
+      <div class="proof-inner">
+        <span>Rust + Ratatui</span>
+        <span>gix 读取 Git</span>
+        <span>无 Electron</span>
+        <span>ANSI16 / 256 / Truecolor</span>
+        <span>MIT License</span>
+      </div>
+    </div>
+
+    <section class="section features" id="features" aria-labelledby="features-title">
+      <div class="section-head" data-reveal>
+        <p class="eyebrow">01 / One workspace</p>
+        <h2 id="features-title">文件、Git 和预览，<br>不再来回切换。</h2>
+        <p class="section-lede">Forge 把一条仓库工作流收进左右两栏。左边是文件和变更，右边始终是你正在看的内容。</p>
+      </div>
+
+      <div class="feature-columns">
+        <article class="feature" data-reveal>
+          <span class="feature-num">01</span>
+          <h3>Files</h3>
+          <p>按需展开的大仓库文件树，带 Git 状态、过滤、隐藏文件和紧凑目录。预览永远跟着当前文件。</p>
+          <ul>
+            <li>文件名模糊搜索与内容搜索</li>
+            <li>新建、重命名、复制、移动、删除</li>
+            <li>内置多行编辑器，保留换行与权限</li>
+          </ul>
+        </article>
+
+        <article class="feature" data-reveal>
+          <span class="feature-num">02</span>
+          <h3>Git</h3>
+          <p>CHANGES 与 STAGED 清楚分开。文件、目录、Hunk 或单行，都可以精确暂存，不需要离开当前视图。</p>
+          <ul>
+            <li>并排 Diff 与逐行审阅</li>
+            <li>分支、提交历史、Stash、Worktree</li>
+            <li>Fetch / Pull / Push 与 upstream 状态</li>
+          </ul>
+        </article>
+
+        <article class="feature" data-reveal>
+          <span class="feature-num">03</span>
+          <h3>Preview</h3>
+          <p>Markdown 排版、代码语法高亮、行号与 blame 在同一个阅读区。按 F3 在渲染结果和源码之间切换。</p>
+          <ul>
+            <li>Rust / Markdown / Python / Shell / TS / SQL</li>
+            <li>拖拽选中，Ctrl+C 复制</li>
+            <li>可选 Nerd Font 与 ASCII 图标</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section diff-section" id="diff" aria-labelledby="diff-title">
+      <div class="diff-inner">
+      <figure class="shot-block" data-reveal>
+        <a class="terminal-frame" href="assets/forge-diff.png" target="_blank" rel="noopener">
+          <div class="terminal-bar">
+            <span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="terminal-title">forge — diff — src/workspace.rs</span>
+            <span class="terminal-size">hunk 1 / 3</span>
+          </div>
+          <picture>
+            <source type="image/webp"
+                    srcset="assets/forge-diff-900.webp 900w, assets/forge-diff-1800.webp 1800w"
+                    sizes="(min-width: 1101px) 62vw, 100vw">
+            <img src="assets/forge-diff.png"
+                 width="1800" height="882" loading="lazy" decoding="async"
+                 alt="Forge 并排 Diff 截图：左侧是 CHANGES、STAGED 和提交历史，右侧用左右两栏展示 Rust 代码的逐行新增。">
+          </picture>
+        </a>
+        <figcaption>真实界面：并排 Diff、CHANGES / STAGED 分组与提交历史（示例仓库 aurora）。</figcaption>
+      </figure>
+
+      <div class="split-copy" data-reveal>
+        <p class="eyebrow">02 / Review with precision</p>
+        <h2 id="diff-title">审阅不只是看。<br><em>精确到一行。</em></h2>
+        <p>先看整体，再落到细节。Forge 的 Diff 支持文件、目录、Hunk 和单行操作，暂存与取消暂存都保留工作区里的编辑。</p>
+        <ul class="check-list">
+          <li><span class="keys"><kbd>s</kbd><kbd>u</kbd></span> 暂存 / 取消暂存选中的文件、目录或 Hunk</li>
+          <li><span class="keys"><kbd>I</kbd></span> 打开改动行列表，只操作当前一行</li>
+          <li><span class="keys"><kbd>n</kbd><kbd>N</kbd></span> 在 Hunk 之间跳转</li>
+          <li><span class="keys"><kbd>c</kbd></span> 打开提交弹窗，Enter 提交暂存内容</li>
+        </ul>
+        <a class="text-link" href="https://github.com/creature-studio/forge/blob/master/README.md#键位" target="_blank" rel="noopener noreferrer">查看完整 Git 操作 <span aria-hidden="true">↗</span></a>
+      </div>
+      </div>
+    </section>
+
+    <section class="section keyboard-section" id="keyboard" aria-labelledby="keyboard-title">
+      <div class="keyboard-inner">
+      <div class="keyboard-copy" data-reveal>
+        <p class="eyebrow">03 / Keyboard first</p>
+        <h2 id="keyboard-title">键盘优先，<br>但不必背下所有键。</h2>
+        <p>常用操作只需要一个字母。忘记时按 <kbd>?</kbd> 打开帮助，按 <kbd>:</kbd> 或 <kbd>Ctrl K</kbd> 搜索全部命令，也可以在设置里重新绑定。</p>
+        <p class="muted">鼠标同样可用：单击选择、双击打开、右键菜单、滚轮滚动。</p>
+      </div>
+
+      <div class="key-list" data-reveal aria-label="常用快捷键">
+        <div class="key-row"><span class="key-desc">搜索文件名</span><span class="keys"><kbd>Ctrl</kbd><kbd>P</kbd></span></div>
+        <div class="key-row"><span class="key-desc">搜索文件内容 / 正则</span><span class="keys"><kbd>Ctrl</kbd><kbd>F</kbd></span></div>
+        <div class="key-row"><span class="key-desc">命令面板</span><span class="keys"><kbd>:</kbd></span></div>
+        <div class="key-row"><span class="key-desc">切换 Files / Git</span><span class="keys"><kbd>F1</kbd><kbd>F2</kbd></span></div>
+        <div class="key-row"><span class="key-desc">Markdown 预览 / 源码</span><span class="keys"><kbd>F3</kbd></span></div>
+        <div class="key-row"><span class="key-desc">暂存 / 取消暂存</span><span class="keys"><kbd>s</kbd><kbd>u</kbd></span></div>
+        <div class="key-row"><span class="key-desc">提交</span><span class="keys"><kbd>c</kbd></span></div>
+        <div class="key-row"><span class="key-desc">全部快捷键</span><span class="keys"><kbd>?</kbd></span></div>
+      </div>
+      </div>
+    </section>
+
+    <section class="section workflow-section" id="workflow" aria-labelledby="workflow-title">
+      <div class="section-head" data-reveal>
+        <p class="eyebrow">04 / One continuous flow</p>
+        <h2 id="workflow-title">从打开仓库，<br>到推送完成。</h2>
+        <p class="section-lede">六个步骤，不必离开终端。上下文、选中位置和预览都会跟着你。</p>
+      </div>
+
+      <ol class="workflow-list">
+        <li data-reveal>
+          <span class="step-num">01</span>
+          <div><h3>打开</h3><p>在仓库目录运行 <code>forge</code>，根目录立即出现。</p></div>
+          <span class="keys"><kbd>forge</kbd></span>
+        </li>
+        <li data-reveal>
+          <span class="step-num">02</span>
+          <div><h3>浏览</h3><p>展开目录、过滤状态、预览 Markdown 或代码。</p></div>
+          <span class="keys"><kbd>F1</kbd></span>
+        </li>
+        <li data-reveal>
+          <span class="step-num">03</span>
+          <div><h3>搜索</h3><p>文件名模糊匹配，或直接搜索仓库内容与正则。</p></div>
+          <span class="keys"><kbd>Ctrl P</kbd><kbd>Ctrl F</kbd></span>
+        </li>
+        <li data-reveal>
+          <span class="step-num">04</span>
+          <div><h3>审阅</h3><p>并排 Diff 里按文件、Hunk 或单行完成暂存。</p></div>
+          <span class="keys"><kbd>F2</kbd></span>
+        </li>
+        <li data-reveal>
+          <span class="step-num">05</span>
+          <div><h3>提交</h3><p>写说明、提交暂存内容，历史立即更新。</p></div>
+          <span class="keys"><kbd>c</kbd></span>
+        </li>
+        <li data-reveal>
+          <span class="step-num">06</span>
+          <div><h3>同步</h3><p>查看 ahead / behind，Fetch、Pull 或 Push。</p></div>
+          <span class="keys"><kbd>S</kbd></span>
+        </li>
+      </ol>
+    </section>
+
+    <section class="section details-section" id="details" aria-labelledby="details-title">
+      <div class="details-head" data-reveal>
+        <p class="eyebrow">05 / Built for real repositories</p>
+        <h2 id="details-title">为真实仓库而做。</h2>
+        <p>不只是把 Git 命令搬进 TUI。Forge 在大仓库、中文路径和不稳定的终端环境里同样认真。</p>
+      </div>
+
+      <dl class="detail-list">
+        <div data-reveal>
+          <dt>按需加载</dt>
+          <dd>首次只读取根目录，展开时才异步加载子目录。文件监听只注册已加载的位置，不递归扫描整个依赖树。</dd>
+        </div>
+        <div data-reveal>
+          <dt>搜索不阻塞</dt>
+          <dd>文件名与内容搜索在后台运行，遵守 .gitignore 与排除目录。输入变化会取消旧查询，结果保持可用的行号。</dd>
+        </div>
+        <div data-reveal>
+          <dt>写入有边界</dt>
+          <dd>Stage / Unstage 保留工作区编辑；Discard 与 Delete 需要单独确认；文件操作限制在当前工作区，不跟随越界符号链接。</dd>
+        </div>
+        <div data-reveal>
+          <dt>Git 原生语义</dt>
+          <dd>使用 gix 读取状态与历史，使用 git CLI 执行写入。分支、Stash、Worktree 和远程操作都遵循 Git 自己的规则。</dd>
+        </div>
+        <div data-reveal>
+          <dt>终端适配</dt>
+          <dd>支持 ANSI16、ANSI256 与 Truecolor，内置 5 套主题；默认 Unicode 图标，无需 Nerd Font；处理 CJK 宽字符换行。</dd>
+        </div>
+        <div data-reveal>
+          <dt>明确的失败</dt>
+          <dd>Git 错误、冲突和远程拒绝会保留原始信息，不把失败伪装成成功；批量文件操作会报告已完成与未执行的项目。</dd>
+        </div>
+      </dl>
+    </section>
+
+    <section class="section faq-section" id="faq" aria-labelledby="faq-title">
+      <div class="faq-inner">
+      <div class="faq-head" data-reveal>
+        <p class="eyebrow">06 / Questions</p>
+        <h2 id="faq-title">开始之前。</h2>
+      </div>
+
+      <div class="faq-list" data-reveal>
+        <details open>
+          <summary>Forge 是什么？</summary>
+          <p>Forge 是一个运行在终端里的 Git 工作台和文件管理器。它把文件树、文件预览、并排 Diff、暂存、提交、历史、分支、Stash、Worktree 和搜索放进同一个 TUI 界面，使用 Rust 构建。</p>
+        </details>
+        <details>
+          <summary>Forge 和普通 Git 命令行有什么区别？</summary>
+          <p>Forge 不替代 Git，而是在 Git 之上提供一个持续可见的工作区。你仍然使用熟悉的 Git 语义，但可以在一个界面里浏览文件、查看并排 Diff、按文件或 Hunk 暂存、审阅历史并完成远程同步。</p>
+        </details>
+        <details>
+          <summary>运行 Forge 需要什么环境？</summary>
+          <p>需要 Rust 1.89 或更高版本以及 Git。当前主要在 Linux 和 macOS 上开发和验证；其他平台可以通过 Cargo 自行构建，实际体验取决于终端对 ANSI 颜色、鼠标和剪贴板的支持。</p>
+        </details>
+        <details>
+          <summary>需要安装 Nerd Font 吗？</summary>
+          <p>不需要。Forge 默认使用内置 Unicode 图标；也可以通过 <code>FORGE_ICONS=nerd</code> 启用 Nerd Font 图标，或使用 <code>FORGE_ICONS=ascii</code> 切换到 ASCII。</p>
+        </details>
+        <details>
+          <summary>支持哪些语言的语法高亮？</summary>
+          <p>Forge 的预览支持 Rust、Markdown、Python、Shell、JavaScript、TypeScript、JSON、YAML 和 SQL，并保留行号复制。你还可以把 Sublime 的 <code>.sublime-syntax</code> 文件放入 <code>~/.config/forge/syntaxes/</code> 来扩展或覆盖语法。</p>
+        </details>
+        <details>
+          <summary>Forge 会自动修改或覆盖我的仓库吗？</summary>
+          <p>Forge 的写操作都有明确边界。Stage 和 Unstage 不会丢弃工作区编辑；Discard 和 Delete 需要单独确认；不会自动提交合并结果，也不会强制覆盖远程历史。</p>
+        </details>
+      </div>
+      </div>
+    </section>
+
+    <section class="section install-section" id="install" aria-labelledby="install-title">
+      <div class="install-inner">
+      <div class="install-copy" data-reveal>
+        <p class="eyebrow">07 / Get started</p>
+        <h2 id="install-title">把仓库交给<br><em>Forge。</em></h2>
+        <p>需要 Rust 1.89+ 与 Git。当前从源码构建，几分钟即可运行。</p>
+        <div class="install-actions">
+          <a class="button button-primary" href="https://github.com/creature-studio/forge" target="_blank" rel="noopener noreferrer">在 GitHub 查看 <span aria-hidden="true">↗</span></a>
+          <a class="text-link" href="https://github.com/creature-studio/forge/blob/master/README.md" target="_blank" rel="noopener noreferrer">阅读 README</a>
+        </div>
+      </div>
+
+      <div class="install-terminal" data-reveal>
+        <div class="install-terminal-bar">
+          <span>quick start</span>
+          <button class="copy-button" type="button" data-copy-target="install-command">复制</button>
+        </div>
+        <pre id="install-command"><code><span class="c-muted"># 克隆并构建</span>
+git clone https://github.com/creature-studio/forge.git
+<span class="c-keyword">cd</span> forge
+cargo build --release -p forge
+
+<span class="c-muted"># 在当前仓库启动</span>
+./target/release/forge</code></pre>
+        <p class="copy-status" role="status" aria-live="polite"></p>
+      </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-brand">
+        <span class="brand-word">FORGE</span>
+        <p>终端里的 Git 工作台。用 Rust、Ratatui 和 gix 构建。</p>
+      </div>
+      <nav class="footer-links" aria-label="页脚导航">
+        <a href="#features">功能</a>
+        <a href="#workflow">工作流</a>
+        <a href="#install">安装</a>
+        <a href="https://github.com/creature-studio/forge" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/creature-studio/forge/blob/master/README.md" target="_blank" rel="noopener noreferrer">文档</a>
+      </nav>
+      <p class="footer-meta">© 2026 Forge · MIT License · Made for the terminal.</p>
+    </div>
+  </footer>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

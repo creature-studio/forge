@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>https://creature-studio.github.io/forge/</loc>
+    <lastmod>2026-11-12</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://creature-studio.github.io/forge/assets/forge-workspace.png</image:loc>
+      <image:title>Forge 终端工作区</image:title>
+      <image:caption>Forge 的文件树、Git 状态与 Markdown 预览</image:caption>
+    </image:image>
+    <image:image>
+      <image:loc>https://creature-studio.github.io/forge/assets/forge-diff.png</image:loc>
+      <image:title>Forge 并排 Diff</image:title>
+      <image:caption>Forge 的文件、Hunk 与行级暂存界面</image:caption>
+    </image:image>
+  </url>
+</urlset>

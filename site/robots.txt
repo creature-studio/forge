@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://creature-studio.github.io/forge/sitemap.xml
