@@ -9,12 +9,14 @@ python3 -m http.server 4173 --directory site
 # 打开 http://localhost:4173/
 ```
 
-## GitHub Pages 发布
+## GitHub Pages 自动发布
 
-站点通过 `gh-pages` 分支发布，分支根目录对应 `site/` 的内容：
+站点由 GitHub Actions 自动发布，Pages 来源设置为 **GitHub Actions**：
 
+- 工作流：`.github/workflows/pages.yml`
+- 触发条件：推送 `master` 且改动 `site/` 或工作流文件；也可以在 Actions 页面手动运行。
 - 线上地址：`https://creature-studio.github.io/forge/`
-- 更新页面后，将 `site/` 内容同步到 `gh-pages` 根目录并推送，GitHub Pages 会自动重新构建。
+- 本地修改 `site/` 后提交并推送 `master` 即可，不需要维护额外的发布分支。
 - 如果绑定自定义域名，请全局替换以下文件中的站点地址：
   - `index.html`：`<link rel="canonical">`、`og:url`、`og:image`、`twitter:image`、JSON-LD 中的 URL
   - `robots.txt`：`Sitemap`
