@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: Ruby
+file_extensions: [rb, rake, gemspec]
+scope: source.ruby
+contexts:
+  main:
+    - match: '=begin'
+      push: block-comment
+    - match: '#.*$'
+      scope: comment.line.ruby
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.ruby
+    - match: '\b(?:alias|and|begin|break|case|class|def|defined|do|else|elsif|end|ensure|false|for|if|in|module|next|nil|not|or|redo|rescue|retry|return|self|super|then|true|undef|unless|until|when|while|yield)\b'
+      scope: keyword.control.ruby
+    - match: '\b(?:true|false|nil)\b'
+      scope: constant.language.ruby
+  double-string:
+    - meta_scope: string.quoted.ruby
+    - match: '\\.'
+      scope: constant.character.escape.ruby
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.ruby
+    - match: '\\.'
+      scope: constant.character.escape.ruby
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.ruby
+    - match: '=end'
+      pop: true

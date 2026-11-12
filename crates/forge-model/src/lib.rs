@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 /// Opaque identifier for a filesystem entry within the app model.
@@ -139,6 +139,9 @@ pub struct FileDiff {
     pub path: String,
     pub side: DiffSide,
     pub lines: Vec<DiffLine>,
+    /// Complete new-side file content for VS Code-style full-file display.
+    /// The original `lines` remain the authoritative patch for hunk operations.
+    pub full_new_lines: Option<Vec<String>>,
 }
 
 /// One `@@ … @@` hunk inside a [`FileDiff`].
@@ -499,6 +502,21 @@ pub struct GraphCommit {
     pub subject: String,
 }
 
+/// Status of the current local branch's fetch upstream, using only local
+/// remote-tracking refs. It never claims to have contacted the remote server.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum UpstreamStatus {
+    /// Detached HEAD (or no active local branch).
+    #[default]
+    Detached,
+    /// The current branch has no upstream configured.
+    NotConfigured,
+    /// An upstream is configured but its tracking ref cannot be resolved.
+    Unavailable,
+    /// The upstream's local tracking ref name, e.g. origin/main.
+    Tracking(String),
+}
+
 /// History graph payload for one repository.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GraphSnapshot {
@@ -509,6 +527,10 @@ pub struct GraphSnapshot {
     pub branch: String,
     /// Commits in traversal order (children before parents).
     pub commits: Vec<GraphCommit>,
+    pub upstream: UpstreamStatus,
+    /// Commits reachable from current HEAD but not from the upstream tip.
+    /// Contains at most the graph page limit, and only when upstream exists.
+    pub unpushed: HashSet<String>,
 }
 
 /// How a file changed inside a commit.

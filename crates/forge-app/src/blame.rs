@@ -118,10 +118,9 @@ async fn read_blame(
     if let Some(cached) = cached.filter(|c| c.key == key) {
         return Ok(ReadResult { cached, refreshed });
     }
-    let count = match fresh.content {
-        PreviewContent::Text { ref lines, .. } => lines.len(),
-        _ => 0,
-    };
+    // Blame is a separate, bounded source analysis. Its scope must cover
+    // all actual file lines, not just the first preview page (400 lines).
+    let count = String::from_utf8_lossy(&bytes).lines().count();
     let lines = git
         .blame(&repo, &path, count)
         .await
@@ -226,13 +225,27 @@ impl App {
                 match result {
                     Ok(Ok(read)) => {
                         if let Some(fresh) = read.refreshed {
-                            // Preserve visual position while refreshing the viewed file.
-                            // This also works when a folder is selected in the sidebar.
-                            self.preview_state.preview = Some(fresh);
-                            self.preview_state.markdown = MarkdownPreview::default();
-                            self.preview_state.text_rows.clear();
-                            self.preview_state.selection.clear();
-                            self.blame.cursor = None;
+                            // The blame reader only snapshots the first 64 KiB.
+                            // Never install that truncated snapshot over an
+                            // incrementally loaded preview (even after EOF),
+                            // or line numbers and the byte cursor become invalid.
+                            let current_complete = matches!(
+                                self.preview_state.preview.as_ref().map(|p| &p.content),
+                                Some(PreviewContent::Text { truncated: false, .. })
+                            );
+                            let fresh_complete = matches!(
+                                &fresh.content,
+                                PreviewContent::Text { truncated: false, .. }
+                            );
+                            if current_complete && fresh_complete {
+                                // Small, fully loaded files retain the existing
+                                // blame-driven external edit refresh behavior.
+                                self.preview_state.preview = Some(fresh);
+                                self.preview_state.markdown = MarkdownPreview::default();
+                                self.preview_state.text_rows.clear();
+                                self.preview_state.selection.clear();
+                                self.blame.cursor = None;
+                            }
                         }
                         self.blame.cache.retain(|c| c.key.path != path);
                         if self.blame.cache.len() >= CACHE_FILES {

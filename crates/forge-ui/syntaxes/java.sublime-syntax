@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: Java
+file_extensions: [java]
+scope: source.java
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.java
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.java
+    - match: '\b(?:abstract|assert|boolean|break|byte|case|catch|char|class|const|continue|default|do|double|else|enum|extends|final|finally|float|for|if|implements|import|instanceof|int|interface|long|native|new|package|private|protected|public|return|short|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|void|volatile|while|record|sealed|permits)\b'
+      scope: keyword.control.java
+    - match: '\b(?:true|false|null)\b'
+      scope: constant.language.java
+  double-string:
+    - meta_scope: string.quoted.java
+    - match: '\\.'
+      scope: constant.character.escape.java
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.java
+    - match: '\\.'
+      scope: constant.character.escape.java
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.java
+    - match: '\*/'
+      pop: true

@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: Kotlin
+file_extensions: [kt, kts]
+scope: source.kotlin
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.kotlin
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.kotlin
+    - match: '\b(?:as|break|by|catch|class|companion|const|constructor|continue|data|delegate|do|else|enum|expect|external|false|final|finally|for|fun|if|import|in|init|inline|inner|interface|internal|is|lateinit|object|open|operator|out|override|package|private|protected|public|reified|return|sealed|suspend|super|tailrec|this|throw|true|try|typealias|val|var|when|where|while)\b'
+      scope: keyword.control.kotlin
+    - match: '\b(?:true|false|null)\b'
+      scope: constant.language.kotlin
+  double-string:
+    - meta_scope: string.quoted.kotlin
+    - match: '\\.'
+      scope: constant.character.escape.kotlin
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.kotlin
+    - match: '\\.'
+      scope: constant.character.escape.kotlin
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.kotlin
+    - match: '\*/'
+      pop: true

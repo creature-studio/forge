@@ -1,0 +1,29 @@
+%YAML 1.2
+---
+name: Shell
+file_extensions: [sh, bash, zsh, fish]
+scope: source.shell
+contexts:
+  main:
+    - match: '#.*$'
+      scope: comment.line.shell
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\b'
+      scope: constant.numeric.shell
+    - match: '\b(?:if|then|fi|for|in|do|done|while|until|case|esac|function|local|export|readonly|declare|typeset|select|return|break|continue|source|alias|set|unset|trap)\b'
+      scope: keyword.control.shell
+  double-string:
+    - meta_scope: string.quoted.double.shell
+    - match: '\\.'
+      scope: constant.character.escape.shell
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.shell
+    - match: '\\.'
+      scope: constant.character.escape.shell
+    - match: "'"
+      pop: true

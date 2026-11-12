@@ -105,7 +105,7 @@ async fn untracked_binary_large_and_cache_invalidation() {
         GitService::new(),
         dir.path().to_owned(),
         path.clone(),
-        Some((first.key.clone(), Vec::new())),
+        Some((first.key.clone(), Vec::new(), Vec::new())),
     )
     .await
     .unwrap();
@@ -115,7 +115,7 @@ async fn untracked_binary_large_and_cache_invalidation() {
         GitService::new(),
         dir.path().to_owned(),
         path.clone(),
-        Some((first.key.clone(), Vec::new())),
+        Some((first.key.clone(), Vec::new(), Vec::new())),
     )
     .await
     .unwrap();
@@ -136,6 +136,54 @@ async fn untracked_binary_large_and_cache_invalidation() {
     assert!(read(GitService::new(), dir.path().to_owned(), path, None)
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn staged_and_unstaged_marks_are_both_visible_and_mapped() {
+    let (dir, path) = fixture("one\ntwo\nthree\nfour\nfive\n");
+    git(dir.path(), &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base"]);
+    // First edit is staged, a second independent edit remains unstaged.
+    std::fs::write(&path, "one\nSTAGED\nthree\nfour\nfive\n").unwrap();
+    git(dir.path(), &["add", "sample.md"]);
+    std::fs::write(&path, "INSERTED\none\nSTAGED\nthree\nfour\nWORKTREE\n").unwrap();
+    let loaded = load(dir.path(), &path).await;
+    assert!(loaded.staged_hunks.iter().flat_map(|h| &h.marks)
+        .any(|(n, c)| *n == 3 && *c == Change::Modified), "staged marks not mapped: {:?}", loaded.staged_hunks.iter().flat_map(|h| h.marks.iter().map(|(n, _)| *n)).collect::<Vec<_>>());
+    assert!(loaded.hunks.iter().flat_map(|h| &h.marks)
+        .any(|(n, c)| *n == 1 && *c == Change::Added));
+    let mut app = app(dir.path(), &path).await;
+    let index = app.inline_active().unwrap().hunks.len();
+    app.toggle_inline_hunk(index);
+    assert_eq!(app.inline_diff.open, Some(index));
+    assert!(matches!(App::selected_hunk(app.inline_active().unwrap(), index), Some((_, DiffSide::Staged))));
+    app.close_inline_peek();
+    app.session.layout.preview_inner = Rect::new(10, 2, 46, 12);
+    let line = app.inline_active().unwrap().staged_hunks[0].marks[0].0;
+    let y = 2 + app.preview_state.text_rows.source_to_row(line) as u16;
+    assert!(app.inline_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert_eq!(app.inline_diff.open, Some(index));
+    app.config.git.show_staged_gutter = false;
+    app.close_inline_peek();
+    assert!(!app.inline_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: y,
+        modifiers: KeyModifiers::NONE,
+    }));
+    app.toggle_inline_peek();
+    assert!(app.inline_diff.open.is_some_and(|i| i < index), "disabled staged layer must be skipped");
+}
+
+#[tokio::test]
+async fn staged_only_changes_have_gutter_marks() {
+    let (dir, path) = fixture("one\ntwo\nthree\n");
+    git(dir.path(), &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base"]);
+    std::fs::write(&path, "one\nSTAGED\nthree\n").unwrap();
+    git(dir.path(), &["add", "sample.md"]);
+    let loaded = load(dir.path(), &path).await;
+    assert!(loaded.hunks.is_empty());
+    assert_eq!(loaded.staged_hunks[0].marks, [(2, Change::Modified)]);
 }
 
 #[tokio::test]
@@ -198,10 +246,13 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
         .draw(|f| app.draw_inline_diff(f, app.session.layout.preview_inner))
         .unwrap();
     let buffer = terminal.backend().buffer();
-    assert_eq!(buffer[(10, 2)].fg, Color::Yellow);
+    // Both layers overlap on a newly added (uncommitted) file. The staged
+    // blue lane remains distinct from the vivid unstaged line-number tint.
+    assert_eq!(buffer[(10, 2)].fg, Color::LightBlue);
+    assert_eq!(buffer[(11, 2)].fg, Color::Yellow);
     assert_ne!(
         buffer[(10, 3)].fg,
-        Color::Yellow,
+        Color::LightBlue,
         "continuation must not be marked"
     );
     assert!(app.inline_diff.popup.width > 0);

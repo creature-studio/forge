@@ -54,6 +54,8 @@ pub enum GitAction {
         branch: String,
     },
     SaveStash(String),
+    /// Stash only worktree changes; retain staged/index content.
+    SaveStashUnstaged(String),
     ApplyStash(String),
     /// Like Apply, but restore the original staged/index state.
     ApplyStashIndexed(String),
@@ -117,6 +119,7 @@ impl CliWriteBackend {
             repo_root: repo.to_path_buf(),
             path: path.to_string(),
             side: DiffSide::Unstaged,
+            full_new_lines: git_blob_lines(repo, &format!("{oid}:{path}")).await,
             lines: parse_unified_diff(&text),
         })
     }
@@ -484,6 +487,7 @@ impl CliWriteBackend {
                 format!("Published {branch} to {remote} and set upstream")
             }
             GitAction::SaveStash(_) => "Saved tracked and untracked changes to stash".into(),
+            GitAction::SaveStashUnstaged(_) => "Stashed unstaged changes; staged changes kept".into(),
             GitAction::ApplyStash(_) => "Applied stash; saved stash kept".into(),
             GitAction::ApplyStashIndexed(_) => {
                 "Applied stash with original staged state; saved stash kept".into()
@@ -616,6 +620,9 @@ impl CliWriteBackend {
             }
             GitAction::SaveStash(message) => {
                 args = strings(&["stash", "push", "--include-untracked", "-m", &message])
+            }
+            GitAction::SaveStashUnstaged(message) => {
+                args = strings(&["stash", "push", "--keep-index", "--include-untracked", "-m", &message])
             }
             GitAction::ApplyStash(id) => args = strings(&["stash", "apply", &id]),
             GitAction::ApplyStashIndexed(id) => args = strings(&["stash", "apply", "--index", &id]),

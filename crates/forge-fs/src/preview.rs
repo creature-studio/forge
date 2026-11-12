@@ -8,9 +8,83 @@ use forge_model::EntryKind;
 
 use crate::list::{self, FsError};
 
-/// Soft caps for MVP preview reads.
+/// Page budgets, not a total file-size / line-count limit.
 pub const PREVIEW_MAX_BYTES: usize = 64 * 1024;
 pub const PREVIEW_MAX_LINES: usize = 400;
+/// Prevent one giant source line from exhausting memory or the TUI renderer.
+const PREVIEW_MAX_LINE_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone)]
+pub struct TextPage {
+    pub lines: Vec<String>,
+    /// Absolute byte offset of the next complete source line.
+    pub next_offset: u64,
+    pub eof: bool,
+}
+
+/// Read a bounded page of complete source lines, without losing UTF-8
+/// characters or duplicating partial lines at a page boundary.
+/// A pathological giant line is scanned in bounded buffers and shown with
+/// an explicit marker rather than being allocated in full.
+pub async fn read_text_page(path: PathBuf, offset: u64) -> Result<TextPage, FsError> {
+    use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
+    let file = tokio::fs::File::open(&path).await?;
+    let size = file.metadata().await?.len();
+    if offset > size {
+        return Err(FsError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file shrank while reading pages",
+        )));
+    }
+    let mut reader = tokio::io::BufReader::new(file);
+    reader.seek(std::io::SeekFrom::Start(offset)).await?;
+    let mut lines = Vec::new();
+    let mut consumed = 0usize;
+    while offset.saturating_add(consumed as u64) < size
+        && consumed < PREVIEW_MAX_BYTES
+        && lines.len() < PREVIEW_MAX_LINES
+    {
+        let mut line = Vec::new();
+        let mut full_len = 0usize;
+        loop {
+            let buffered = reader.fill_buf().await?;
+            if buffered.is_empty() {
+                break;
+            }
+            let newline = buffered.iter().position(|b| *b == b'\n');
+            let take = newline.map_or(buffered.len(), |i| i + 1);
+            let store = take.min(PREVIEW_MAX_LINE_BYTES.saturating_sub(line.len()));
+            line.extend_from_slice(&buffered[..store]);
+            full_len += take;
+            consumed += take;
+            reader.consume(take);
+            if newline.is_some() {
+                break;
+            }
+        }
+        if full_len == 0 {
+            break;
+        }
+        if line.last() == Some(&b'\n') {
+            line.pop();
+        }
+        if line.last() == Some(&b'\r') {
+            line.pop();
+        }
+        let mut text = String::from_utf8_lossy(&line).into_owned();
+        if full_len > PREVIEW_MAX_LINE_BYTES {
+            text.push_str(" … [very long line shortened]");
+        }
+        lines.push(text);
+    }
+    let next_offset = offset + consumed as u64;
+    Ok(TextPage {
+        lines,
+        next_offset,
+        eof: next_offset >= size,
+    })
+}
+
 /// Cap for directory child listings in the preview pane.
 pub const DIR_PREVIEW_MAX_CHILDREN: usize = 80;
 /// Sample size used for binary sniffing.
@@ -26,10 +100,7 @@ pub enum PreviewContent {
         bytes_read: usize,
     },
     /// Non-text / binary file — do not dump hex yet.
-    Binary {
-        size: u64,
-        notice: String,
-    },
+    Binary { size: u64, notice: String },
     /// Selected entry is a directory (or symlink-to-dir style).
     Directory {
         name: String,
@@ -41,9 +112,7 @@ pub enum PreviewContent {
     /// Empty selection / nothing to show.
     Empty,
     /// I/O or other failure.
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 /// Preview payload tied to an absolute path.
@@ -90,10 +159,7 @@ impl Preview {
 /// Read a capped preview for `path`.
 ///
 /// Directories return a short notice with child names; binary files return a notice without dumping.
-pub async fn preview_path(
-    path: PathBuf,
-    kind: EntryKind,
-) -> Result<Preview, FsError> {
+pub async fn preview_path(path: PathBuf, kind: EntryKind) -> Result<Preview, FsError> {
     match kind {
         EntryKind::Directory => preview_directory(path).await,
         EntryKind::Other => Ok(Preview {
@@ -130,17 +196,12 @@ async fn list_dir_children(dir: &Path) -> Result<(Vec<(bool, String)>, bool), Fs
 }
 
 async fn preview_file(path: PathBuf) -> Result<Preview, FsError> {
+    use tokio::io::AsyncReadExt;
     let meta = tokio::fs::metadata(&path).await?;
     if meta.is_dir() {
         return preview_directory(path).await;
     }
-
     let size = meta.len();
-    let file = tokio::fs::File::open(&path).await?;
-    use tokio::io::AsyncReadExt;
-    let mut reader = tokio::io::BufReader::new(file);
-
-    let mut buf = vec![0u8; PREVIEW_MAX_BYTES.min(size as usize).max(1).min(PREVIEW_MAX_BYTES)];
     if size == 0 {
         return Ok(Preview {
             path,
@@ -151,41 +212,26 @@ async fn preview_file(path: PathBuf) -> Result<Preview, FsError> {
             },
         });
     }
-
-    let n = reader.read(&mut buf).await?;
-    buf.truncate(n);
-
-    if looks_binary(&buf) {
+    let mut sample = [0u8; SNIFF_BYTES];
+    let mut file = tokio::fs::File::open(&path).await?;
+    let n = size.min(SNIFF_BYTES as u64) as usize;
+    file.read_exact(&mut sample[..n]).await?;
+    if looks_binary(&sample[..n]) {
         return Ok(Preview {
             path,
             content: PreviewContent::Binary {
                 size,
-                notice: format!(
-                    "binary file - {} - preview skipped",
-                    format_size(size)
-                ),
+                notice: format!("binary file - {} - preview skipped", format_size(size)),
             },
         });
     }
-
-    let truncated = (n as u64) < size || n >= PREVIEW_MAX_BYTES;
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-    // Preserve a trailing empty line if the file ended with \n and we still have room.
-    if text.ends_with('\n') && lines.len() < PREVIEW_MAX_LINES {
-        // `lines()` drops the final empty; UI doesn't need an extra blank for MVP.
-    }
-    let line_trunc = lines.len() > PREVIEW_MAX_LINES;
-    if line_trunc {
-        lines.truncate(PREVIEW_MAX_LINES);
-    }
-
+    let page = read_text_page(path.clone(), 0).await?;
     Ok(Preview {
         path,
         content: PreviewContent::Text {
-            lines,
-            truncated: truncated || line_trunc,
-            bytes_read: n,
+            lines: page.lines,
+            truncated: !page.eof,
+            bytes_read: page.next_offset as usize,
         },
     })
 }
@@ -269,12 +315,92 @@ mod tests {
         tokio::fs::write(&path, "hello\nworld\n").await.unwrap();
         let preview = preview_path(path.clone(), EntryKind::File).await.unwrap();
         match preview.content {
-            PreviewContent::Text { lines, truncated, .. } => {
+            PreviewContent::Text {
+                lines, truncated, ..
+            } => {
                 assert_eq!(lines, vec!["hello", "world"]);
                 assert!(!truncated);
             }
             other => panic!("expected text, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn thousands_of_lines_stream_without_missing_or_duplicate_lines() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("many.rs");
+        let source = (0..3000)
+            .map(|n| format!("// 行 {n:04}  🌐 let value = {n};\r\n"))
+            .collect::<String>();
+        tokio::fs::write(&path, source).await.unwrap();
+        let preview = preview_path(path.clone(), EntryKind::File).await.unwrap();
+        let PreviewContent::Text {
+            mut lines,
+            mut truncated,
+            mut bytes_read,
+        } = preview.content
+        else {
+            panic!("source file should be text");
+        };
+        assert!(truncated);
+        assert!(lines.len() <= PREVIEW_MAX_LINES);
+        let mut pages = 1;
+        while truncated {
+            let old = bytes_read;
+            let page = read_text_page(path.clone(), old as u64).await.unwrap();
+            assert!(page.next_offset > old as u64);
+            assert!(page.lines.len() <= PREVIEW_MAX_LINES);
+            lines.extend(page.lines);
+            bytes_read = page.next_offset as usize;
+            truncated = !page.eof;
+            pages += 1;
+            assert!(pages < 100, "pagination must reach EOF");
+        }
+        assert_eq!(pages, 8);
+        assert_eq!(lines.len(), 3000);
+        assert_eq!(lines.first().unwrap(), "// 行 0000  🌐 let value = 0;");
+        assert_eq!(lines.last().unwrap(), "// 行 2999  🌐 let value = 2999;");
+        assert_eq!(
+            bytes_read,
+            tokio::fs::metadata(&path).await.unwrap().len() as usize
+        );
+    }
+
+    #[tokio::test]
+    async fn pagination_keeps_unicode_and_long_lines_on_exact_source_boundaries() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("utf8.rs");
+        let mut source = format!(
+            "{}\n{}\n{}",
+            "a".repeat(20_000),
+            "b".repeat(20_000),
+            "c".repeat(23_000)
+        );
+        source.push_str("🦀");
+        source.push_str("\nlast line\n");
+        source.push_str(&"x".repeat(90_000));
+        source.push_str("\nfinished\n");
+        tokio::fs::write(&path, source).await.unwrap();
+
+        let mut offset = 0;
+        let mut lines = Vec::new();
+        loop {
+            let page = read_text_page(path.clone(), offset).await.unwrap();
+            assert!(page.next_offset > offset);
+            offset = page.next_offset;
+            lines.extend(page.lines);
+            if page.eof {
+                break;
+            }
+        }
+        assert!(
+            lines[2].ends_with("🦀"),
+            "cross-boundary UTF-8 must survive"
+        );
+        assert_eq!(lines[3], "last line");
+        assert!(lines[4].contains("[very long line shortened]"));
+        assert_eq!(lines[5], "finished");
+        assert_eq!(offset, tokio::fs::metadata(&path).await.unwrap().len());
     }
 
     #[tokio::test]
@@ -289,10 +415,18 @@ mod tests {
     #[tokio::test]
     async fn directory_lists_children_dirs_first() {
         let dir = tempdir().unwrap();
-        tokio::fs::create_dir(dir.path().join("zebra")).await.unwrap();
-        tokio::fs::create_dir(dir.path().join("alpha")).await.unwrap();
-        tokio::fs::write(dir.path().join("readme.txt"), "x").await.unwrap();
-        tokio::fs::write(dir.path().join("a.txt"), "y").await.unwrap();
+        tokio::fs::create_dir(dir.path().join("zebra"))
+            .await
+            .unwrap();
+        tokio::fs::create_dir(dir.path().join("alpha"))
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("readme.txt"), "x")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("a.txt"), "y")
+            .await
+            .unwrap();
 
         let preview = preview_path(dir.path().to_path_buf(), EntryKind::Directory)
             .await
@@ -327,7 +461,11 @@ mod tests {
             .await
             .unwrap();
         match preview.content {
-            PreviewContent::Directory { children, truncated, .. } => {
+            PreviewContent::Directory {
+                children,
+                truncated,
+                ..
+            } => {
                 assert!(children.is_empty());
                 assert!(!truncated);
             }

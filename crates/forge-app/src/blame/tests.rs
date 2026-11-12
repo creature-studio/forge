@@ -292,6 +292,52 @@ async fn uncommitted_config_switches_and_non_text_are_respected() {
 }
 
 #[tokio::test]
+async fn blame_never_overwrites_a_partially_loaded_source_preview() {
+    let (dir, path) = fixture();
+    std::fs::write(&path,
+        (0..2400).map(|i| format!("// very long source line {i:04} with padding padding padding\n"))
+            .collect::<String>()
+    ).unwrap();
+    assert!(std::fs::metadata(&path).unwrap().len() > forge_fs::PREVIEW_MAX_BYTES as u64);
+    let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+    app.files.pending_lists.clear();
+    app.scm.pending_status = None;
+    app.preview_state.preview = Some(
+        app.services.fs.preview_now(path.clone(), EntryKind::File).await.unwrap()
+    );
+    app.preview_state.preview_loading = false;
+    app.preview_state.markdown_code = true;
+    app.session.layout.preview_inner.height = 24;
+    let before_offset = match &app.preview_state.preview.as_ref().unwrap().content {
+        PreviewContent::Text { lines, truncated: true, bytes_read } => {
+            assert_eq!(lines.len(), 400);
+            *bytes_read
+        }
+        other => panic!("expected first partial page, got {other:?}"),
+    };
+
+    app.tick_blame();
+    tokio::time::timeout(Duration::from_secs(7), async {
+        while app.blame.pending.is_some() {
+            app.poll_blame();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }).await.unwrap();
+    let PreviewContent::Text { lines, bytes_read, .. } =
+        &app.preview_state.preview.as_ref().unwrap().content else { panic!() };
+    assert_eq!(lines.len(), 400, "blame must not install a truncated file snapshot");
+    assert_eq!(*bytes_read, before_offset);
+
+    // The second page must follow line 400, not jump to the 64KiB offset
+    // of blame's independent snapshot.
+    let page = forge_fs::read_text_page(path.clone(), *bytes_read as u64).await.unwrap();
+    assert_eq!(page.lines[0], "// very long source line 0400 with padding padding padding");
+    assert!(page.next_offset > *bytes_read as u64);
+    assert!(app.blame.active.is_some(), "blame should stay available for source lines");
+    assert!(app.blame.active.as_ref().unwrap().lines.as_ref().unwrap().len() >= 2400);
+}
+
+#[tokio::test]
 async fn background_edit_refresh_installs_matching_preview_and_attribution() {
     let (dir, path) = fixture();
     let mut app = app_with_blame(dir.path(), &path).await;

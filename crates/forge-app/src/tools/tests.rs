@@ -2522,3 +2522,163 @@ async fn no_git_repository_command_palette_filters_git_actions() {
     assert!(panel.rows.is_empty());
     assert!(panel.message.contains("Git operations need a repository"));
 }
+
+#[tokio::test]
+async fn scm_section_right_click_has_group_actions_with_safe_discard() {
+    let (dir, mut app) = fixture();
+    let root = dir.path();
+    app.session.activity = ActivityTab::Git;
+    let section = app
+        .scm_rows()
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                ScmRow::Section {
+                    column: StagingColumn::Unstaged,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    app.open_staging_section_menu(section, 3, 4);
+    let menu = app.session.context_menu.as_ref().unwrap();
+    assert_eq!(
+        menu.target,
+        ContextTarget::StagingSection {
+            column: StagingColumn::Unstaged
+        }
+    );
+    assert_eq!(
+        menu.items
+            .iter()
+            .map(|item| item.action)
+            .collect::<Vec<_>>(),
+        vec![
+            ContextAction::DiscardAllChanges,
+            ContextAction::StageAllChanges,
+            ContextAction::StashUnstagedChanges,
+            ContextAction::StashAllChanges,
+        ]
+    );
+    assert!(menu.items.iter().all(|item| item.enabled));
+
+    std::fs::write(root.join("new-untracked"), "preserve me\n").unwrap();
+    app.apply_context_action(ContextAction::DiscardAllChanges);
+    assert!(matches!(
+        app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Confirm(Operation::Git(GitAction::Discard(_))))
+    ));
+    assert!(root.join("new-untracked").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.rs")).unwrap(),
+        "changed\n"
+    );
+}
+
+#[tokio::test]
+async fn scm_section_stage_all_then_unstage_all_preserves_worktree() {
+    let (dir, mut app) = fixture();
+    let root = dir.path();
+    app.session.activity = ActivityTab::Git;
+    std::fs::write(root.join("untracked-file"), "new\n").unwrap();
+    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    let section = app
+        .scm_rows()
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                ScmRow::Section {
+                    column: StagingColumn::Unstaged,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    app.open_staging_section_menu(section, 3, 4);
+    app.apply_context_action(ContextAction::StageAllChanges);
+    assert!(app.scm.pending_write.is_some());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if app.poll_pending_write() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!git(root, &["diff", "--cached", "--name-only"]).is_empty());
+    assert!(git(root, &["status", "--porcelain"])
+        .lines()
+        .all(|line| !line.starts_with("??")));
+
+    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    let staged = app
+        .scm_rows()
+        .iter()
+        .position(|row| {
+            matches!(
+                row,
+                ScmRow::Section {
+                    column: StagingColumn::Staged,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    app.open_staging_section_menu(staged, 3, 4);
+    assert_eq!(
+        app.session.context_menu.as_ref().unwrap().items[0].action,
+        ContextAction::UnstageAllChanges
+    );
+    app.apply_context_action(ContextAction::UnstageAllChanges);
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if app.poll_pending_write() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(git(root, &["diff", "--cached", "--name-only"]).is_empty());
+    assert!(root.join("untracked-file").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.rs")).unwrap(),
+        "changed\n"
+    );
+}
+
+#[tokio::test]
+async fn scm_section_right_click_and_keyboard_open_same_menu() {
+    let (_dir, mut app) = fixture();
+    app.session.activity = ActivityTab::Git;
+    app.session.layout.list = Rect::new(0, 0, 45, 25);
+    app.session.layout.list_inner = Rect::new(0, 0, 45, 25);
+    app.scm.scroll_scm = 0;
+    app.handle_mouse_content(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: 2,
+        row: 0,
+        modifiers: KeyModifiers::NONE,
+    });
+    assert!(matches!(
+        app.session.context_menu.as_ref().map(|menu| &menu.target),
+        Some(ContextTarget::StagingSection {
+            column: StagingColumn::Unstaged
+        })
+    ));
+    app.dismiss_menu();
+    app.scm.scm_selected = 0;
+    app.session.focus = PaneFocus::List;
+    app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
+    assert!(matches!(
+        app.session.context_menu.as_ref().map(|menu| &menu.target),
+        Some(ContextTarget::StagingSection {
+            column: StagingColumn::Unstaged
+        })
+    ));
+}

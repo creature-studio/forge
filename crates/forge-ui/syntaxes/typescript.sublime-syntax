@@ -1,0 +1,35 @@
+%YAML 1.2
+---
+name: TypeScript
+file_extensions: [ts, tsx, mts, cts]
+scope: source.ts
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.typescript
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\b'
+      scope: constant.numeric.typescript
+    - match: '\b(?:abstract|any|as|asserts|async|await|break|case|catch|class|const|constructor|continue|declare|default|delete|do|else|enum|export|extends|false|finally|for|from|function|get|if|implements|import|in|infer|instanceof|interface|is|keyof|let|module|namespace|never|new|null|number|object|of|override|private|protected|public|readonly|require|return|satisfies|set|static|string|super|switch|symbol|this|throw|true|try|type|typeof|undefined|unique|unknown|var|void|while|with|yield)\b'
+      scope: keyword.control.typescript
+  double-string:
+    - meta_scope: string.quoted.double.typescript
+    - match: '\\.'
+      scope: constant.character.escape.typescript
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.typescript
+    - match: '\\.'
+      scope: constant.character.escape.typescript
+    - match: "'"
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.typescript
+    - match: '\*/'
+      pop: true

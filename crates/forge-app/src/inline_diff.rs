@@ -154,7 +154,69 @@ struct Key {
 struct Read {
     key: Key,
     fresh: Preview,
+    /// Working tree relative to index.
     hunks: Vec<Hunk>,
+    /// Index relative to HEAD, mapped onto current worktree line numbers.
+    staged_hunks: Vec<Hunk>,
+}
+
+/// Project all staged Index line numbers through the unstaged patch in a
+/// single ordered pass. Avoid O(staged_marks * unstaged_diff_lines) on big files.
+/// Removed Index lines anchor to the next surviving worktree line.
+fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
+    let mut targets = staged.iter().flat_map(|h| h.marks.iter().map(|(n, _)| *n))
+        .collect::<Vec<_>>();
+    targets.sort_unstable();
+    targets.dedup();
+    let mut resolved = std::collections::HashMap::with_capacity(targets.len());
+    let (mut old_line, mut new_line, mut cursor) = (1usize, 1usize, 0usize);
+    let parse = |part: &str| -> Option<usize> {
+        let raw = part.get(1..)?;
+        let (number, length) = raw.split_once(',').unwrap_or((raw, "1"));
+        let n = number.parse::<usize>().ok()?;
+        Some(if length == "0" { n.saturating_add(1) } else { n })
+    };
+    for target in targets {
+        let mapped = loop {
+            let Some(line) = diff.lines.get(cursor) else {
+                break new_line.saturating_add(target.saturating_sub(old_line));
+            };
+            match line.kind {
+                DiffLineKind::Header => {
+                    let mut words = line.text.split_whitespace();
+                    if words.next() != Some("@@") { cursor += 1; continue; }
+                    let (Some(old), Some(new)) = (words.next(), words.next()) else {
+                        cursor += 1; continue;
+                    };
+                    let (Some(old), Some(new)) = (parse(old), parse(new)) else {
+                        cursor += 1; continue;
+                    };
+                    if target < old {
+                        break new_line.saturating_add(target.saturating_sub(old_line));
+                    }
+                    old_line = old;
+                    new_line = new;
+                    cursor += 1;
+                }
+                DiffLineKind::Context | DiffLineKind::Delete => {
+                    if target == old_line { break new_line; }
+                    old_line = old_line.saturating_add(1);
+                    if matches!(line.kind, DiffLineKind::Context) {
+                        new_line = new_line.saturating_add(1);
+                    }
+                    cursor += 1;
+                }
+                DiffLineKind::Add => { new_line = new_line.saturating_add(1); cursor += 1; }
+                DiffLineKind::Meta => cursor += 1,
+            }
+        };
+        resolved.insert(target, mapped.clamp(1, count.max(1)));
+    }
+    for hunk in staged {
+        for (line, _) in &mut hunk.marks {
+            if let Some(mapped) = resolved.get(line) { *line = *mapped; }
+        }
+    }
 }
 
 async fn snapshot(git: GitService, repo: &Path, path: &Path) -> Result<(Key, Preview)> {
@@ -195,24 +257,28 @@ async fn read(
     git: GitService,
     repo: PathBuf,
     path: PathBuf,
-    cached: Option<(Key, Vec<Hunk>)>,
+    cached: Option<(Key, Vec<Hunk>, Vec<Hunk>)>,
 ) -> Result<Read> {
     let (key, fresh) = snapshot(git, &repo, &path).await?;
-    if let Some((_, hunks)) = cached.filter(|(k, _)| k == &key) {
-        return Ok(Read { key, fresh, hunks });
+    if let Some((_, hunks, staged_hunks)) = cached.filter(|(k, _, _)| k == &key) {
+        return Ok(Read { key, fresh, hunks, staged_hunks });
     }
     let rel = forge_model::path_to_rela(path.strip_prefix(&repo)?);
-    let diff = git.write.gutter_diff(&repo, &rel).await?;
+    let diff = git.write.gutter_diff_side(&repo, &rel, DiffSide::Unstaged).await?;
+    let staged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Staged).await?;
     let (after, _) = snapshot(git, &repo, &path).await?;
     anyhow::ensure!(key == after, "source or index changed during diff");
     let count = match &fresh.content {
         PreviewContent::Text { lines, .. } => lines.len(),
         _ => 0,
     };
+    let mut staged_hunks = hunks(&staged, usize::MAX);
+    map_staged_marks(&diff, &mut staged_hunks, count);
     Ok(Read {
         key,
         fresh,
         hunks: hunks(&diff, count),
+        staged_hunks,
     })
 }
 
@@ -265,7 +331,7 @@ impl App {
             .inline_diff
             .active
             .as_ref()
-            .map(|r| (r.key.clone(), r.hunks.clone()));
+            .map(|r| (r.key.clone(), r.hunks.clone(), r.staged_hunks.clone()));
         let git = self.services.git;
         let target = path.clone();
         let handle =
@@ -325,6 +391,22 @@ impl App {
         })
     }
 
+    fn layer_enabled(&self, side: DiffSide) -> bool {
+        match side {
+            DiffSide::Unstaged => self.config.git.show_unstaged_gutter,
+            DiffSide::Staged => self.config.git.show_staged_gutter,
+        }
+    }
+
+    fn visible_hunk_count(read: &Read) -> usize {
+        read.hunks.len() + read.staged_hunks.len()
+    }
+
+    fn selected_hunk(read: &Read, index: usize) -> Option<(&Hunk, DiffSide)> {
+        if index < read.hunks.len() { read.hunks.get(index).map(|h| (h, DiffSide::Unstaged)) }
+        else { read.staged_hunks.get(index - read.hunks.len()).map(|h| (h, DiffSide::Staged)) }
+    }
+
     fn toggle_inline_hunk(&mut self, index: usize) {
         self.inline_diff.open = if self.inline_diff.open == Some(index) {
             None
@@ -337,30 +419,26 @@ impl App {
     }
 
     pub(super) fn toggle_inline_peek(&mut self) {
-        if self.inline_path().is_none() {
-            return;
-        }
-        let row = self.preview_state.preview_scroll;
-        let index = self.inline_active().and_then(|r| {
-            r.hunks
-                .iter()
-                .position(|h| {
-                    h.marks
-                        .iter()
-                        .any(|(n, _)| self.preview_state.text_rows.source_to_row(*n) >= row)
-                })
-                .or_else(|| (!r.hunks.is_empty()).then_some(0))
+        if self.inline_path().is_none() { return; }
+        let top = self.preview_state.preview_scroll;
+        let index = self.inline_active().and_then(|read| {
+            (0..Self::visible_hunk_count(read))
+                .filter_map(|index| Self::selected_hunk(read, index)
+                    .and_then(|(hunk, side)| self.layer_enabled(side).then_some((index, hunk))))
+                .find(|(_, hunk)| hunk.marks.iter().any(|(line, _)|
+                    self.preview_state.text_rows.source_to_row(*line) >= top))
+                .map(|(index, _)| index)
+                .or_else(|| (0..Self::visible_hunk_count(read)).find(|index| {
+                    Self::selected_hunk(read, *index).is_some_and(|(_, side)| self.layer_enabled(side))
+                }))
         });
-        if let Some(index) = index {
-            self.toggle_inline_hunk(index);
-        } else {
-            self.session.status =
-                "No unstaged source changes · click a colored line number to peek".into();
-        }
+        if let Some(index) = index { self.toggle_inline_hunk(index); }
+        else { self.session.status = "No source changes to peek".into(); }
     }
 
     pub(super) fn inline_diff_hint(&self) -> bool {
-        self.inline_active().is_some_and(|r| !r.hunks.is_empty())
+        self.inline_active().is_some_and(|r| (!r.hunks.is_empty() && self.layer_enabled(DiffSide::Unstaged))
+            || (!r.staged_hunks.is_empty() && self.layer_enabled(DiffSide::Staged)))
     }
 
     pub(super) fn inline_popup_contains(&self, column: u16, row: u16) -> bool {
@@ -401,12 +479,16 @@ impl App {
             && mouse.column < region.x.saturating_add(5).min(region.right())
         {
             let row = self.preview_state.preview_scroll + (mouse.row - region.y) as usize;
+            let staged_column = mouse.column == region.x;
             let index = self.inline_active().and_then(|r| {
-                r.hunks.iter().position(|h| {
-                    h.marks
-                        .iter()
-                        .any(|(n, _)| self.preview_state.text_rows.source_to_row(*n) == row)
-                })
+                let matches = |h: &Hunk| h.marks.iter().any(|(n, _)|
+                    self.preview_state.text_rows.source_to_row(*n) == row);
+                let staged = || self.layer_enabled(DiffSide::Staged)
+                    .then(|| r.staged_hunks.iter().position(matches).map(|i| r.hunks.len() + i)).flatten();
+                let unstaged = || self.layer_enabled(DiffSide::Unstaged)
+                    .then(|| r.hunks.iter().position(matches)).flatten();
+                if staged_column { staged().or_else(unstaged) }
+                else { unstaged().or_else(staged) }
             });
             if let Some(index) = index {
                 self.toggle_inline_hunk(index);
@@ -431,23 +513,21 @@ impl App {
             return;
         };
         let scroll = self.preview_state.preview_scroll;
-        for hunk in &active.hunks {
+        let show_unstaged = self.config.git.show_unstaged_gutter;
+        let show_staged = self.config.git.show_staged_gutter;
+        // Unstaged keeps the existing vivid line-number decoration. Staged
+        // uses a separate subdued blue lane; both remain visible on overlap.
+        if show_unstaged { for hunk in &active.hunks {
             for (n, change) in &hunk.marks {
                 let row = self.preview_state.text_rows.source_to_row(*n);
-                if row < scroll || row >= scroll + area.height as usize {
-                    continue;
-                }
+                if row < scroll || row >= scroll + area.height as usize { continue; }
                 let y = area.y + (row - scroll) as u16;
                 let width = n.to_string().len().max(4) as u16;
                 for x in area.x..area.x.saturating_add(width + 1).min(area.right()) {
                     frame.buffer_mut()[(x, y)].set_style(
-                        Style::default()
-                            .fg(change.color())
-                            .add_modifier(Modifier::BOLD),
-                    );
+                        Style::default().fg(change.color()).add_modifier(Modifier::BOLD));
                 }
-                if matches!(&active.fresh.content, PreviewContent::Text { lines, .. } if lines.is_empty())
-                {
+                if matches!(&active.fresh.content, PreviewContent::Text { lines, .. } if lines.is_empty()) {
                     frame.render_widget(
                         Paragraph::new("   1│").style(Style::default().fg(change.color())),
                         Rect::new(area.x, y, area.width.min(5), 1),
@@ -455,9 +535,32 @@ impl App {
                 }
             }
         }
-        let Some(hunk) = self.inline_diff.open.and_then(|i| active.hunks.get(i)) else {
+        }
+        if show_staged { for hunk in &active.staged_hunks {
+            for (n, _) in &hunk.marks {
+                let row = self.preview_state.text_rows.source_to_row(*n);
+                if row < scroll || row >= scroll + area.height as usize { continue; }
+                let y = area.y + (row - scroll) as u16;
+                // One blue-background cell is reserved for staged changes.
+                // If no unstaged change overlaps, tint the line number too.
+                let has_unstaged = active.hunks.iter().any(|h| h.marks.iter().any(|(line, _)| line == n));
+                if !has_unstaged {
+                    for x in area.x..area.x.saturating_add(5).min(area.right()) {
+                        frame.buffer_mut()[(x, y)].set_style(Style::default().fg(Color::Blue)
+                            .add_modifier(Modifier::BOLD));
+                    }
+                }
+                if area.x < area.right() {
+                    frame.buffer_mut()[(area.x, y)]
+                        .set_style(Style::default().fg(Color::LightBlue).bg(Color::Blue));
+                }
+            }
+        }
+        }
+        let Some((hunk, side)) = self.inline_diff.open.and_then(|i| Self::selected_hunk(active, i)) else {
             return;
         };
+        if !self.layer_enabled(side) { return; }
         let anchor = hunk
             .marks
             .iter()
@@ -494,7 +597,8 @@ impl App {
             })
             .collect::<Vec<_>>();
         let title = format!(
-            " [×] Esc · {}/{} · {} ",
+            " [×] Esc · {} · {}/{} · {} ",
+            if matches!(side, DiffSide::Staged) { "Staged" } else { "Unstaged" },
             offset + 1,
             hunk.lines.len(),
             hunk.header

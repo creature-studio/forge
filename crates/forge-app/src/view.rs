@@ -24,7 +24,41 @@ fn workspace_palette() -> Palette {
     palette
 }
 
-static PALETTE: Atom<Palette> = Atom::new(workspace_palette);
+/// Theme presets reuse the existing Ratatui Kit palette and persist via Config.theme.
+/// Keep the original palette as the backwards-compatible default.
+fn theme_palette(name: Option<&str>) -> Palette {
+    let mut p = workspace_palette();
+    let (bg, _surface, fg, dim, accent, border, selection) = match name.unwrap_or("current") {
+        "vscode-dark" => (
+            0x1e1e1e, 0x252526, 0xd4d4d4, 0x858585, 0x569cd6, 0x3c3c3c, 0x264f78,
+        ),
+        "vscode-black" => (
+            0x080808, 0x151515, 0xd4d4d4, 0x858585, 0x569cd6, 0x333333, 0x223852,
+        ),
+        "github-dark" => (
+            0x0d1117, 0x161b22, 0xe6edf3, 0x8b949e, 0x58a6ff, 0x30363d, 0x264f78,
+        ),
+        "nord" => (
+            0x2e3440, 0x3b4252, 0xeceff4, 0x9aa6b2, 0x88c0d0, 0x4c566a, 0x434c5e,
+        ),
+        _ => return p,
+    };
+    let color = |hex: u32| Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+    p.bg = color(bg);
+    p.fg = color(fg);
+    p.fg_dim = color(dim);
+    p.accent = color(accent);
+    p.border = color(border);
+    p.border_active = color(accent);
+    p.selection = color(selection);
+    p.on_accent = color(fg);
+    p.success = color(0x4ec9b0);
+    p.warning = color(0xdcdcaa);
+    p.error = color(0xf48771);
+    p.info = color(accent);
+    // Surface is used by the sidebar/header; the source preview retains `bg`.
+    p
+}
 
 #[derive(Default, Props)]
 pub struct WorkspaceProps {
@@ -46,7 +80,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             .take()
             .unwrap_or_else(|| create_workspace(props.color_mode))
     });
-    let palette = hooks.use_atom(&PALETTE).get();
+    let palette = theme_palette(app.read().config.theme.as_deref());
     let completed = app.read().services.jobs.completion_notifier();
     hooks.use_future(async move {
         loop {
@@ -55,6 +89,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             model.poll_pending_list();
             model.poll_pending_status();
             model.poll_pending_preview();
+            model.poll_pending_page();
             model.poll_pending_diff();
             model.poll_pending_write();
             model.poll_tools();
@@ -175,9 +210,15 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                     {
                         continue;
                     }
+                    let changed_paths: Vec<PathBuf> = changes
+                        .iter()
+                        .filter(|event| super::auto_refresh::relevant(event, &root))
+                        .flat_map(|event| event.paths.iter().cloned())
+                        .collect();
                     let mut model = observed_app.write();
                     if model.files.tree_root == root {
                         model.refresh_external_changes(git_metadata_changed);
+                        model.refresh_preview_if_affected(&changed_paths);
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
@@ -312,7 +353,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                 }
             }
             if commit_open {
-                Modal(open: true, width: Constraint::Percentage(70), height: Constraint::Length(7)) {
+                Modal(open: true, width: Constraint::Percentage(80), height: Constraint::Length(height.saturating_sub(2).min(20).max(7))) {
                     CommitEditor()
                 }
             }
@@ -384,54 +425,9 @@ fn Tools(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     element!(NativePane(kind: PaneKind::Tools))
 }
 
-#[component]
-fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
-    let app = *hooks.use_context::<State<App>>();
-    let palette = hooks.use_palette();
-    let draft = hooks.use_state(tui_input::Input::default);
-    hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
-                KeyCode::Esc => {
-                    let mut model = app.write();
-                    model.session.commit_open = false;
-                    model.session.status = "commit cancelled".into();
-                }
-                KeyCode::Enter => {
-                    let message = draft.read().value().trim().to_owned();
-                    let mut model = app.write();
-                    if message.is_empty() {
-                        model.session.status = "empty commit message".into();
-                    } else {
-                        model.session.commit_open = false;
-                        model.request_commit(message);
-                    }
-                }
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {}
-                _ => {
-                    draft.write().handle_event(&Event::Key(key));
-                }
-            },
-            Event::Paste(text) => {
-                let mut input = draft.write();
-                for ch in text.chars().filter(|ch| !ch.is_control()) {
-                    input.handle_event(&Event::Key(KeyEvent::new(
-                        KeyCode::Char(ch),
-                        KeyModifiers::NONE,
-                    )));
-                }
-            }
-            _ => {}
-        }
-        EventResult::Consumed
-    });
-    element!(Border(top_title: Line::from(" Commit "), flex_direction: Direction::Vertical) {
-        View(height: Constraint::Length(1)) { Text(text: "Commits ALL staged files in this repository", style: Style::default().fg(palette.fg_dim)) }
-        View(height: Constraint::Length(1)) { Input(input: draft.read().clone(), placeholder: "Commit message") }
-        View(height: Constraint::Length(1)) { Text(text: "Enter commit   Esc cancel", style: Style::default().fg(palette.fg_dim)) }
-        View(height: Constraint::Length(1)) { Text(text: app.read().session.status.clone(), style: Style::default().fg(palette.warning)) }
-    })
-}
+#[path = "commit_composer.rs"]
+mod commit_composer;
+use commit_composer::CommitEditor;
 
 #[component]
 fn BlamePopup(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
@@ -1323,7 +1319,7 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     let rows_y = inner.y + 2;
-    let visible = (inner.bottom().saturating_sub(rows_y)).min(4);
+    let visible = (inner.bottom().saturating_sub(rows_y)).min(7);
     panel.list_area = Rect::new(inner.x, rows_y, inner.width, visible);
 
     for i in 0..visible as usize {
@@ -1340,6 +1336,9 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
             0 => "Tree Sticky Scroll",
             1 => "Compact Folders",
             2 => "Show hidden files",
+            3 => "Color theme",
+            4 => "Git Gutter: staged",
+            5 => "Git Gutter: unstaged",
             _ => "Keyboard shortcuts",
         };
         let value = match i {
@@ -1364,6 +1363,15 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
                     "[ Off ]"
                 }
             }
+            3 => match model.config.theme.as_deref().unwrap_or("current") {
+                "vscode-dark" => "[ VS Code Dark ]",
+                "vscode-black" => "[ VS Code Black ]",
+                "github-dark" => "[ GitHub Dark ]",
+                "nord" => "[ Nord ]",
+                _ => "[ Current ]",
+            },
+            4 => if model.config.git.show_staged_gutter { "[ On ]" } else { "[ Off ]" },
+            5 => if model.config.git.show_unstaged_gutter { "[ On ]" } else { "[ Off ]" },
             _ => "[ Open F4 ]",
         };
         let width = inner.width as usize;
@@ -1380,11 +1388,14 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
         );
     }
     if inner.height >= 10 {
-        let detail_y = rows_y + 6;
+        let detail_y = rows_y + 9;
         let desc = match panel.selected {
             0 => "Pin expanded parent directories above the scrolled tree.\nApplies to Files, Git Changes/Staged and Commit History.",
             1 => "Join consecutive single-child folder paths into one row.\nApplies to Files, Git Changes/Staged and Commit History.",
             2 => "Show dotfiles in the Files tree.\n.git remains hidden; tracked changes in Git are unaffected.",
+            3 => "Enter/Space cycles Current, VS Code Dark, VS Code Black, GitHub Dark and Nord.\nTheme changes apply immediately and persist across restarts.",
+            4 => "Show HEAD → Index staged changes in a secondary blue source gutter lane.\nCan overlap vivid unstaged markers; click the blue lane to peek.",
+            5 => "Show Index → Working Tree changes in source line numbers.\nClick a changed number to inspect its unstaged hunk.",
             _ => "Open the searchable F4 keyboard shortcuts view.\nExisting custom bindings remain unchanged.",
         };
         let detail = format!(" DESCRIPTION\n\n{desc}\n\nChanges save to forge/config.toml and survive a restart.\n{}",
@@ -2087,7 +2098,7 @@ fn preview_content(model: &App) -> (String, PreviewView<'_>) {
 
 /// Adapt semantic kit colors for the existing syntax/diff renderers. Reset
 /// colors use neutral fallbacks because the legacy token type stores RGB only.
-fn bridge_theme(p: Palette) -> forge_theme::Theme {
+pub(super) fn bridge_theme(p: Palette) -> forge_theme::Theme {
     use forge_theme::{vga, Rgb};
     fn rgb(c: Color, fallback: Rgb) -> Rgb {
         match c {
@@ -2133,6 +2144,19 @@ fn bridge_theme(p: Palette) -> forge_theme::Theme {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn theme_presets_have_distinct_backgrounds_and_current_preserves_legacy() {
+        assert_eq!(theme_palette(None).bg, workspace_palette().bg);
+        assert_eq!(theme_palette(Some("current")).bg, workspace_palette().bg);
+        let backgrounds: std::collections::HashSet<_> =
+            ["vscode-dark", "vscode-black", "github-dark", "nord"]
+                .into_iter()
+                .map(|theme| format!("{:?}", theme_palette(Some(theme)).bg))
+                .collect();
+        assert_eq!(backgrounds.len(), 4);
+        assert_eq!(theme_palette(Some("vscode-black")).bg, Color::Rgb(8, 8, 8));
+    }
+
     use super::*;
     use ratatui_kit::test_util::render_frames;
 
@@ -2370,6 +2394,7 @@ mod tests {
         app.session.focus = PaneFocus::Preview;
         app.scm.scm_selected = scm_jump_to_column(&app.scm_rows(), StagingColumn::Unstaged);
         app.set_file_diff(FileDiff {
+            full_new_lines: None,
             repo_root: dir.path().to_owned(),
             path: "中文文件.rs".into(),
             side: DiffSide::Unstaged,
@@ -2875,8 +2900,8 @@ mod tests {
             25,
             3,
         ));
-        // The block cursor covers the first placeholder character.
-        assert!(screen.contains("ommit message"), "{screen}");
+        assert!(screen.contains("STAGED") && screen.contains("SUBJECT")
+            && screen.contains("review"), "{screen}");
         let mut app = fixture(dir.path());
         app.open_file_context_menu(0, 5, 5);
         let screen = text(&render_frames(
@@ -2962,6 +2987,7 @@ mod tests {
                 app.preview_state.preview_mode = PreviewMode::Diff;
                 app.preview_state.hunk_index = Some(0);
                 app.set_file_diff(FileDiff {
+            full_new_lines: None,
                     repo_root: dir.path().to_owned(),
                     path: "中文文件.rs".into(),
                     side,

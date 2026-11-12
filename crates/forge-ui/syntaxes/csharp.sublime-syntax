@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: C#
+file_extensions: [cs, csx]
+scope: source.csharp
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.csharp
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.csharp
+    - match: '\b(?:abstract|as|async|await|base|bool|break|byte|case|catch|char|checked|class|const|continue|decimal|default|delegate|do|double|else|enum|event|explicit|extern|false|finally|fixed|float|for|foreach|goto|if|implicit|in|int|interface|internal|is|lock|long|namespace|new|null|object|operator|out|override|params|private|protected|public|readonly|ref|return|sbyte|sealed|short|sizeof|stackalloc|static|string|struct|switch|this|throw|true|try|typeof|uint|ulong|unchecked|unsafe|ushort|using|var|virtual|void|volatile|while|yield|record)\b'
+      scope: keyword.control.csharp
+    - match: '\b(?:true|false|null)\b'
+      scope: constant.language.csharp
+  double-string:
+    - meta_scope: string.quoted.csharp
+    - match: '\\.'
+      scope: constant.character.escape.csharp
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.csharp
+    - match: '\\.'
+      scope: constant.character.escape.csharp
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.csharp
+    - match: '\*/'
+      pop: true

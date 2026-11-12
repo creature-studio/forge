@@ -7,18 +7,21 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::Frame;
+use unicode_width::UnicodeWidthChar;
 
 use crate::markdown::wrap_line;
 use crate::style::{self, fg_bg, rgb};
 use crate::MarkdownPreview;
 
 /// Lightweight language hint for plain-text preview coloring.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TextLang {
     #[default]
     Plain,
     Rust,
     Markdown,
+    /// A minimal Syntect grammar (built-in or user-installed plugin).
+    Syntax(String),
 }
 
 impl TextLang {
@@ -30,13 +33,24 @@ impl TextLang {
         } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
             Self::Markdown
         } else {
-            Self::Plain
+            // Dotless special filenames are not file extensions.
+            let basename = lower.rsplit(['/', '\\']).next().unwrap_or(&lower);
+            let extension = if basename == "dockerfile" || basename.starts_with("dockerfile.") {
+                "dockerfile"
+            } else {
+                lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("")
+            };
+            if !extension.is_empty() && crate::syntax::supports_extension(extension) {
+                Self::Syntax(extension.to_string())
+            } else {
+                Self::Plain
+            }
         }
     }
 }
 
 /// Borrowed view for the preview pane (keeps forge-ui free of forge-fs).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum PreviewView<'a> {
     Loading,
     Idle,
@@ -126,10 +140,21 @@ impl TextRowsCache {
         let width = width.max(1);
         self.rows.reserve(lines.len());
         self.source_starts.reserve(lines.len());
-        for (index, line) in lines.iter().enumerate() {
-            self.source_starts.push(self.rows.len());
-            let source = text_line_numbered(theme, index + 1, line, language);
-            self.rows.extend(wrap_line(&source, width));
+        match &language {
+            TextLang::Syntax(extension) => {
+                crate::syntax::highlight_lines(theme, extension, lines, |index, body| {
+                    self.source_starts.push(self.rows.len());
+                    let source = numbered_line_with_body(theme, index + 1, body);
+                    self.rows.extend(wrap_line(&source, width));
+                });
+            }
+            _ => {
+                for (index, line) in lines.iter().enumerate() {
+                    self.source_starts.push(self.rows.len());
+                    let source = text_line_numbered(theme, index + 1, line, &language);
+                    self.rows.extend(wrap_line(&source, width));
+                }
+            }
         }
         self.source_rows = self.rows.len();
         if lines.is_empty() {
@@ -141,7 +166,7 @@ impl TextRowsCache {
         if truncated {
             self.rows.push(Line::from(""));
             let footer = Line::from(Span::styled(
-                format!("  ... truncated - {bytes_read} bytes shown"),
+                format!("  ↓ Scroll for more · {bytes_read} B"),
                 style::muted(theme),
             ));
             self.rows.extend(wrap_line(&footer, width));
@@ -195,6 +220,7 @@ impl TextRowsCache {
 pub struct SplitRowsCache {
     lines_ptr: usize,
     lines_len: usize,
+    full_new_lines: Option<Vec<String>>,
     rows: Vec<SplitRow>,
 }
 
@@ -202,7 +228,14 @@ impl SplitRowsCache {
     pub fn clear(&mut self) {
         self.lines_ptr = 0;
         self.lines_len = 0;
+        self.full_new_lines = None;
         self.rows.clear();
+    }
+
+    /// Complete file data remains separate from the actionable patch.
+    pub fn set_full_new_lines(&mut self, lines: Option<&[String]>) {
+        self.clear();
+        self.full_new_lines = lines.map(|s| s.to_vec());
     }
 
     fn rows_for(&mut self, lines: &[DiffLine]) -> &[SplitRow] {
@@ -211,7 +244,11 @@ impl SplitRowsCache {
         if self.lines_ptr != ptr || self.lines_len != len {
             self.lines_ptr = ptr;
             self.lines_len = len;
-            self.rows = build_split_rows(lines);
+            let partial = build_split_rows(lines);
+            self.rows = self.full_new_lines.as_deref()
+                .and_then(|full| build_complete_split_rows(partial.clone(), full))
+                .unwrap_or(partial);
+            annotate_split_line_numbers(&mut self.rows);
         }
         &self.rows
     }
@@ -262,7 +299,7 @@ pub fn draw_preview(
     style::fill_panel(frame, inner, theme);
 
     let viewport = inner.height as usize;
-    let total = preview_line_count(view, split_cache);
+    let total = preview_line_count(view.clone(), split_cache);
     let max_scroll = total.saturating_sub(viewport);
     if *scroll > max_scroll {
         *scroll = max_scroll;
@@ -274,7 +311,7 @@ pub fn draw_preview(
         return inner;
     }
     // Virtualize: only allocate Line/Span for the visible window.
-    let visible = build_visible_lines(theme, view, inner.width, start, end, split_cache);
+    let visible = build_visible_lines(theme, view.clone(), inner.width, start, end, split_cache);
 
     let style = Style::default().bg(rgb(theme.panel_bg)).fg(rgb(theme.fg));
     // Diff rows are pre-fitted to width; wrapping would break the split columns.
@@ -402,7 +439,7 @@ fn build_visible_lines(
                         )));
                     } else if truncated && idx == total.saturating_sub(1) {
                         out.push(Line::from(Span::styled(
-                            format!("  ... truncated - {bytes_read} bytes shown"),
+                            format!("  ↓ Scroll for more · {bytes_read} B"),
                             style::muted(theme),
                         )));
                     } else if truncated && idx == total.saturating_sub(2) {
@@ -412,14 +449,14 @@ fn build_visible_lines(
                 }
                 let body_len = lines.len();
                 if idx < body_len {
-                    out.push(text_line_numbered(theme, idx + 1, &lines[idx], language));
+                    out.push(text_line_numbered(theme, idx + 1, &lines[idx], &language));
                 } else if truncated {
                     let footer_i = idx - body_len;
                     if footer_i == 0 {
                         out.push(Line::from(""));
                     } else {
                         out.push(Line::from(Span::styled(
-                            format!("  ... truncated - {bytes_read} bytes shown"),
+                            format!("  ↓ Scroll for more · {bytes_read} B"),
                             style::muted(theme),
                         )));
                     }
@@ -428,31 +465,44 @@ fn build_visible_lines(
             out
         }
         PreviewView::Diff {
+            path,
             lines,
             hunk_start,
             hunk_end,
             ..
         } => {
-            if lines.is_empty() {
+            let rows = split_cache.rows_for(lines);
+            if rows.is_empty() {
                 return slice_static(
                     start,
                     end,
                     &[Line::from(Span::styled("  (no diff)", style::muted(theme)))],
                 );
             }
-            let rows = split_cache.rows_for(lines);
             let end = end.min(rows.len());
             let start = start.min(end);
-            rows[start..end]
-                .iter()
-                .map(|row| {
-                    let in_hunk = match (hunk_start, hunk_end) {
-                        (Some(s), Some(e)) => row.src_indices.iter().any(|&i| i >= s && i < e),
-                        _ => false,
-                    };
-                    render_split_row(theme, row, width, in_hunk)
-                })
-                .collect()
+            let (left_w, right_w) = split_half_widths(width as usize).unwrap_or((0, 0));
+            let visible = &rows[start..end];
+            // Parse each side independently, once per visible window. Source and
+            // viewport remain bounded; never tokenize the entire Git history.
+            let left_text: Vec<String> = visible.iter().map(|row| match &row.kind {
+                SplitRowKind::Pair { old, .. } => fit_cell(old.as_deref().unwrap_or(""), left_w.saturating_sub(6)),
+                _ => String::new(),
+            }).collect();
+            let right_text: Vec<String> = visible.iter().map(|row| match &row.kind {
+                SplitRowKind::Pair { new, .. } => fit_cell(new.as_deref().unwrap_or(""), right_w.saturating_sub(6)),
+                _ => String::new(),
+            }).collect();
+            let left_syntax = highlight_code_lines(theme, path, &left_text);
+            let right_syntax = highlight_code_lines(theme, path, &right_text);
+            visible.iter().enumerate().map(|(index, row)| {
+                let in_hunk = match (hunk_start, hunk_end) {
+                    (Some(s), Some(e)) => row.src_indices.iter().any(|&i| i >= s && i < e),
+                    _ => false,
+                };
+                render_split_row(theme, row, width, in_hunk,
+                    Some((&left_syntax[index], &right_syntax[index])))
+            }).collect()
         }
     }
 }
@@ -480,7 +530,7 @@ fn build_lines(
     width: u16,
     split_cache: &mut SplitRowsCache,
 ) -> Vec<Line<'static>> {
-    let total = preview_line_count(view, split_cache);
+    let total = preview_line_count(view.clone(), split_cache);
     build_visible_lines(theme, view, width, 0, total, split_cache)
 }
 
@@ -516,7 +566,7 @@ fn gutter_num_fg(theme: &Theme) -> forge_theme::Rgb {
     )
 }
 
-fn text_line_numbered(theme: &Theme, n: usize, raw: &str, language: TextLang) -> Line<'static> {
+fn numbered_line_with_body(theme: &Theme, n: usize, body: Line<'static>) -> Line<'static> {
     let num = Span::styled(
         format!("{n:>4}"),
         Style::default()
@@ -530,17 +580,42 @@ fn text_line_numbered(theme: &Theme, n: usize, raw: &str, language: TextLang) ->
             .fg(rgb(theme.muted))
             .bg(rgb(theme.panel_bg)),
     );
+    let mut spans = vec![num, sep];
+    spans.extend(body.spans);
+    Line::from(spans)
+}
+
+/// Shared syntax palette for preview, editor, and Diff. No source mutation.
+/// Parsing is bounded by the caller; keep one parser state per supplied batch.
+pub fn highlight_code_lines(theme: &Theme, path: &str, lines: &[String]) -> Vec<Line<'static>> {
+    let language = TextLang::from_name(path);
+    match language {
+        TextLang::Syntax(extension) => {
+            let mut out = Vec::with_capacity(lines.len());
+            crate::syntax::highlight_lines(theme, &extension, lines, |_, line| out.push(line));
+            out
+        }
+        TextLang::Rust | TextLang::Markdown => lines.iter().map(|s| match language {
+            TextLang::Rust => rust_line(theme, s),
+            TextLang::Markdown => markdown_line(theme, s),
+            _ => unreachable!(),
+        }).collect(),
+        TextLang::Plain => lines.iter().map(|line| Line::from(Span::styled(
+            line.clone(), fg_bg(theme.fg, theme.panel_bg),
+        ))).collect(),
+    }
+}
+
+fn text_line_numbered(theme: &Theme, n: usize, raw: &str, language: &TextLang) -> Line<'static> {
     let body = match language {
         TextLang::Rust => rust_line(theme, raw),
         TextLang::Markdown => markdown_line(theme, raw),
-        TextLang::Plain => Line::from(Span::styled(
+        TextLang::Syntax(_) | TextLang::Plain => Line::from(Span::styled(
             raw.to_string(),
             fg_bg(theme.fg, theme.panel_bg),
         )),
     };
-    let mut spans = vec![num, sep];
-    spans.extend(body.spans);
-    Line::from(spans)
+    numbered_line_with_body(theme, n, body)
 }
 
 fn markdown_line(theme: &Theme, raw: &str) -> Line<'static> {
@@ -631,7 +706,8 @@ fn rust_line(theme: &Theme, raw: &str) -> Line<'static> {
             i += 1;
             while i < chars.len() {
                 if chars[i] == '\\' {
-                    i += 2;
+                    // A trailing escape must not advance beyond the source slice.
+                    i = (i + 2).min(chars.len());
                     continue;
                 }
                 if chars[i] == '"' {
@@ -661,7 +737,7 @@ fn rust_line(theme: &Theme, raw: &str) -> Line<'static> {
             let start = i;
             i += 1;
             if i < chars.len() && chars[i] == '\\' {
-                i += 2; // escape + char
+                i = (i + 2).min(chars.len()); // escape + char, possibly truncated
             } else if i < chars.len() {
                 i += 1; // single char
             }
@@ -706,6 +782,9 @@ fn rust_line(theme: &Theme, raw: &str) -> Line<'static> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SplitRow {
     kind: SplitRowKind,
+    /// Actual source line numbers on each side, if this row contains code.
+    old_num: Option<usize>,
+    new_num: Option<usize>,
     /// Original unified [`DiffLine`] indices contributing to this row.
     src_indices: Vec<usize>,
 }
@@ -744,6 +823,91 @@ fn is_file_meta(line: &DiffLine) -> bool {
     matches!(line.kind, DiffLineKind::Meta) && line.text.starts_with("diff ")
 }
 
+/// Infer both gutter line numbers from the original patch headers, while
+/// retaining native, independent numbering for inserted/deleted lines.
+fn annotate_split_line_numbers(rows: &mut [SplitRow]) {
+    fn start(token: &str) -> Option<usize> {
+        let range = token.get(1..)?;
+        let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+        let number = start.parse::<usize>().ok()?;
+        Some(if count == "0" { number.saturating_add(1) } else { number })
+    }
+    let (mut old, mut new) = (1usize, 1usize);
+    for row in rows {
+        match &row.kind {
+            SplitRowKind::Header(header) => {
+                let mut old_token = None;
+                let mut new_token = None;
+                for token in header.split_whitespace() {
+                    if token.starts_with('-') { old_token = Some(token); }
+                    if token.starts_with('+') { new_token = Some(token); }
+                }
+                if let Some(n) = old_token.and_then(start) { old = n; }
+                if let Some(n) = new_token.and_then(start) { new = n; }
+            }
+            SplitRowKind::Pair { old: left, new: right, .. } => {
+                if left.is_some() { row.old_num = Some(old); old = old.saturating_add(1); }
+                if right.is_some() { row.new_num = Some(new); new = new.saturating_add(1); }
+            }
+            SplitRowKind::Note(_) => {}
+        }
+    }
+}
+
+/// Reconstruct unmodified code omitted by `git diff --unified=3`.
+/// Hunk source indices remain bound to the original patch, so stage/unstage
+/// still operates on the exact, separate original hunks.
+fn build_complete_split_rows(rows: Vec<SplitRow>, full: &[String]) -> Option<Vec<SplitRow>> {
+    let mut result = Vec::with_capacity(full.len().saturating_add(rows.len()));
+    let mut next_line = 0usize;
+    for row in rows {
+        match &row.kind {
+            SplitRowKind::Header(text) => {
+                let plus = text.split_whitespace().find(|word| word.starts_with('+'))?;
+                let range = plus.trim_start_matches('+');
+                let (start, count) = range.split_once(',').unwrap_or((range, "1"));
+                let start = start.parse::<usize>().ok()?;
+                let count = count.parse::<usize>().ok()?;
+                // For deletion-only hunks the zero-length new range points
+                // after the preceding new-side line.
+                let target = if count == 0 { start } else { start.saturating_sub(1) };
+                if target < next_line || target > full.len() { return None; }
+                for source in &full[next_line..target] {
+                    result.push(SplitRow {
+                        kind: SplitRowKind::Pair {
+                            old: Some(source.clone()), new: Some(source.clone()),
+                            old_del: false, new_add: false,
+                        },
+                        old_num: None, new_num: None, src_indices: Vec::new(),
+                    });
+                }
+                next_line = target;
+                result.push(row);
+            }
+            SplitRowKind::Pair { new, .. } => {
+                if let Some(new) = new {
+                    // Never silently display a misaligned file: patch and blob
+                    // might have changed between the two independent reads.
+                    if full.get(next_line)? != new { return None; }
+                    next_line += 1;
+                }
+                result.push(row);
+            }
+            SplitRowKind::Note(_) => result.push(row),
+        }
+    }
+    for source in &full[next_line..] {
+        result.push(SplitRow {
+            kind: SplitRowKind::Pair {
+                old: Some(source.clone()), new: Some(source.clone()),
+                old_del: false, new_add: false,
+            },
+            old_num: None, new_num: None, src_indices: Vec::new(),
+        });
+    }
+    Some(result)
+}
+
 /// Transform unified diff lines into side-by-side rows (drops raw git chrome).
 fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
     let mut rows: Vec<SplitRow> = Vec::new();
@@ -767,7 +931,7 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
     if let Some((idx, text)) = note {
         rows.push(SplitRow {
             kind: SplitRowKind::Note(text),
-            src_indices: vec![idx],
+            old_num: None, new_num: None, src_indices: vec![idx],
         });
     }
 
@@ -781,7 +945,7 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
         if is_hunk_header(line) {
             rows.push(SplitRow {
                 kind: SplitRowKind::Header(line.text.clone()),
-                src_indices: vec![i],
+                old_num: None, new_num: None, src_indices: vec![i],
             });
             i += 1;
             while i < lines.len() {
@@ -802,7 +966,7 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
                                 old_del: false,
                                 new_add: false,
                             },
-                            src_indices: vec![i],
+                            old_num: None, new_num: None, src_indices: vec![i],
                         });
                         i += 1;
                     }
@@ -835,7 +999,7 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
                                     old_del: dels.get(k).is_some(),
                                     new_add: adds.get(k).is_some(),
                                 },
-                                src_indices: src,
+                                old_num: None, new_num: None, src_indices: src,
                             });
                         }
                     }
@@ -882,6 +1046,29 @@ fn fit_cell(s: &str, width: usize) -> String {
     out
 }
 
+/// Preserve syntax colors while hard-clipping to the assigned terminal cells.
+/// Adding line numbers must never cause code to spill into the other pane.
+fn fit_styled_cell(line: &Line<'_>, width: usize, bg: ratatui::style::Color) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut used = 0usize;
+    let mut clipped = false;
+    for span in &line.spans {
+        let mut text = String::new();
+        for ch in span.content.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + cw > width { clipped = true; break; }
+            text.push(ch);
+            used += cw;
+        }
+        if !text.is_empty() { out.push(Span::styled(text, span.style.bg(bg))); }
+        if clipped { break; }
+    }
+    if used < width {
+        out.push(Span::styled(" ".repeat(width - used), Style::default().bg(bg)));
+    }
+    out
+}
+
 /// accent(1) + left + │ + right == `total`. Returns `(left_w, right_w)`.
 fn split_half_widths(total: usize) -> Option<(usize, usize)> {
     if total < 5 {
@@ -898,6 +1085,7 @@ fn render_split_row(
     row: &SplitRow,
     width: u16,
     in_active_hunk: bool,
+    syntax: Option<(&Line<'_>, &Line<'_>)>,
 ) -> Line<'static> {
     let w = width as usize;
     let base_bg = if in_active_hunk {
@@ -956,8 +1144,18 @@ fn render_split_row(
             old_del,
             new_add,
         } => {
-            let left_txt = fit_cell(old.as_deref().unwrap_or(""), left_w);
-            let right_txt = fit_cell(new.as_deref().unwrap_or(""), right_w);
+            let old_gutter = left_w.min(6);
+            let new_gutter = right_w.min(6);
+            let left_txt = fit_cell(old.as_deref().unwrap_or(""), left_w - old_gutter);
+            let right_txt = fit_cell(new.as_deref().unwrap_or(""), right_w - new_gutter);
+            let number_text = |number: Option<usize>, width: usize| -> String {
+                if let Some(number) = number {
+                    fit_cell(&format!("{:>5} ", number), width)
+                } else {
+                    " ".repeat(width)
+                }
+            };
+            let numbers_style = Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg));
 
             let left_style = if *old_del {
                 Style::default()
@@ -978,12 +1176,22 @@ fn render_split_row(
                 Style::default().fg(rgb(theme.muted)).bg(rgb(base_bg))
             };
 
-            Line::from(vec![
-                Span::styled(accent_ch.to_string(), accent_style),
-                Span::styled(left_txt, left_style),
-                Span::styled("│".to_string(), sep_style),
-                Span::styled(right_txt, right_style),
-            ])
+            let mut spans = vec![Span::styled(accent_ch.to_string(), accent_style)];
+            spans.push(Span::styled(number_text(row.old_num, old_gutter), numbers_style));
+            if let Some((left, right)) = syntax {
+                let left_bg = if *old_del { theme.diff_del_bg } else { base_bg };
+                let right_bg = if *new_add { theme.diff_add_bg } else { base_bg };
+                spans.extend(fit_styled_cell(left, left_w - old_gutter, rgb(left_bg)));
+                spans.push(Span::styled("│".to_string(), sep_style));
+                spans.push(Span::styled(number_text(row.new_num, new_gutter), numbers_style));
+                spans.extend(fit_styled_cell(right, right_w - new_gutter, rgb(right_bg)));
+            } else {
+                spans.push(Span::styled(left_txt, left_style));
+                spans.push(Span::styled("│".to_string(), sep_style));
+                spans.push(Span::styled(number_text(row.new_num, new_gutter), numbers_style));
+                spans.push(Span::styled(right_txt, right_style));
+            }
+            Line::from(spans)
         }
     }
 }
@@ -1016,13 +1224,7 @@ pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCach
         PreviewView::Text {
             lines, truncated, ..
         } => text_preview_line_count(lines, truncated),
-        PreviewView::Diff { lines, .. } => {
-            if lines.is_empty() {
-                1
-            } else {
-                split_cache.ensure(lines).max(1)
-            }
-        }
+        PreviewView::Diff { lines, .. } => split_cache.ensure(lines).max(1),
     }
 }
 
@@ -1152,7 +1354,7 @@ mod tests {
     #[test]
     fn gutter_uses_brighter_muted_and_rule() {
         let theme = Theme::modern_ide();
-        let line = text_line_numbered(&theme, 7, "fn main() {}", TextLang::Plain);
+        let line = text_line_numbered(&theme, 7, "fn main() {}", &TextLang::Plain);
         assert!(line.spans.len() >= 2);
         assert_eq!(line.spans[0].content.as_ref(), "   7");
         assert_eq!(line.spans[1].content.as_ref(), "│");
@@ -1286,7 +1488,7 @@ mod tests {
             hunk_idx: Some((0, 1)),
         };
         let mut cache = SplitRowsCache::default();
-        let rendered = build_lines(&theme, view, 40, &mut cache);
+        let rendered = build_lines(&theme, view.clone(), 40, &mut cache);
         let joined: String = rendered
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.as_ref()))
@@ -1317,23 +1519,23 @@ mod tests {
                 old_del: true,
                 new_add: true,
             },
-            src_indices: vec![0, 1],
+            old_num: None, new_num: None, src_indices: vec![0, 1],
         };
-        let line = render_split_row(&theme, &row, 40, false);
+        let line = render_split_row(&theme, &row, 40, false, None);
         let spans: Vec<_> = line.spans.iter().collect();
-        assert!(spans.len() >= 4);
-        assert_eq!(spans[2].content.as_ref(), "│");
+        assert!(spans.len() >= 6);
+        assert_eq!(spans[3].content.as_ref(), "│");
         assert_eq!(
-            spans[1].style.bg,
+            spans[2].style.bg,
             Some(crate::style::rgb(theme.diff_del_bg))
         );
         assert_eq!(
-            spans[3].style.bg,
+            spans[5].style.bg,
             Some(crate::style::rgb(theme.diff_add_bg))
         );
-        assert_eq!(spans[2].style.fg, Some(crate::style::rgb(theme.muted)));
+        assert_eq!(spans[3].style.fg, Some(crate::style::rgb(theme.muted)));
         assert_ne!(
-            spans[2].style.fg,
+            spans[3].style.fg,
             Some(crate::style::rgb(theme.border_focus))
         );
     }
@@ -1346,7 +1548,7 @@ mod tests {
         let rows = [
             SplitRow {
                 kind: SplitRowKind::Header("@@ -1,3 +1,3 @@".into()),
-                src_indices: vec![0],
+                old_num: None, new_num: None, src_indices: vec![0],
             },
             SplitRow {
                 kind: SplitRowKind::Pair {
@@ -1355,7 +1557,7 @@ mod tests {
                     old_del: false,
                     new_add: false,
                 },
-                src_indices: vec![1],
+                old_num: None, new_num: None, src_indices: vec![1],
             },
             SplitRow {
                 kind: SplitRowKind::Pair {
@@ -1364,7 +1566,7 @@ mod tests {
                     old_del: true,
                     new_add: true,
                 },
-                src_indices: vec![2, 3],
+                old_num: None, new_num: None, src_indices: vec![2, 3],
             },
             SplitRow {
                 kind: SplitRowKind::Pair {
@@ -1373,18 +1575,18 @@ mod tests {
                     old_del: false,
                     new_add: false,
                 },
-                src_indices: vec![4],
+                old_num: None, new_num: None, src_indices: vec![4],
             },
         ];
         let rendered: Vec<_> = rows
             .iter()
-            .map(|r| render_split_row(&theme, r, width, true))
+            .map(|r| render_split_row(&theme, r, width, true, None))
             .collect();
         let left_widths: Vec<_> = rendered
             .iter()
             .map(|l| {
-                assert_eq!(l.spans[2].content.as_ref(), "│");
-                UnicodeWidthStr::width(l.spans[1].content.as_ref())
+                let sep = l.spans.iter().position(|s| s.content.as_ref() == "│").unwrap();
+                l.spans[1..sep].iter().map(|span| UnicodeWidthStr::width(span.content.as_ref())).sum::<usize>()
             })
             .collect();
         assert!(
@@ -1506,6 +1708,248 @@ mod tests {
     }
 
     #[test]
+    fn additional_languages_and_special_filenames_are_detected() {
+        for name in [
+            "main.go",
+            "main.c",
+            "include.hpp",
+            "worker.cpp",
+            "Demo.java",
+            "view.cs",
+            "page.html",
+            "component.vue",
+            "component.svelte",
+            "style.css",
+            "Cargo.toml",
+            "Dockerfile",
+            "Dockerfile.dev",
+            "module.lua",
+            "index.php",
+            "Gemfile.rb",
+            "App.kt",
+            "Main.swift",
+            "install.ps1",
+            "layout.xml",
+        ] {
+            assert!(
+                matches!(TextLang::from_name(name), TextLang::Syntax(_)),
+                "missing syntax for {name}"
+            );
+        }
+        assert!(matches!(TextLang::from_name("source.rs"), TextLang::Rust));
+        assert!(matches!(
+            TextLang::from_name("readme.md"),
+            TextLang::Markdown
+        ));
+        assert!(matches!(
+            TextLang::from_name("misc.unknown"),
+            TextLang::Plain
+        ));
+    }
+
+    #[test]
+    fn rust_highlighter_never_overruns_trailing_backslash() {
+        let theme = Theme::modern_ide();
+        for source in ["\"abc\\", "'\\", "\"", "'", "\"escaped \\\" then end\\", "\"Unicode中文\\"] {
+            let rendered = rust_line(&theme, source);
+            let joined: String = rendered.spans.iter().map(|span| span.content.as_ref()).collect();
+            assert_eq!(joined, source, "failed source: {source:?}");
+        }
+    }
+
+    #[test]
+    fn full_diff_preserves_all_unmodified_lines_between_distant_hunks() {
+        let diff = vec![
+            DiffLine { kind: DiffLineKind::Header, text: "@@ -2 +2 @@".into() },
+            DiffLine { kind: DiffLineKind::Delete, text: "-two".into() },
+            DiffLine { kind: DiffLineKind::Add, text: "+TWO".into() },
+            DiffLine { kind: DiffLineKind::Header, text: "@@ -5 +5 @@".into() },
+            DiffLine { kind: DiffLineKind::Delete, text: "-five".into() },
+            DiffLine { kind: DiffLineKind::Add, text: "+FIVE".into() },
+        ];
+        let full = ["one", "TWO", "three", "four", "FIVE", "six"]
+            .into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let mut cache = SplitRowsCache::default();
+        cache.set_full_new_lines(Some(&full));
+        let count = cache.ensure(&diff);
+        let new_code = cache.rows_for(&diff).iter().filter_map(|row| match &row.kind {
+            SplitRowKind::Pair { new, .. } => new.clone(),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(new_code, ["one", "TWO", "three", "four", "FIVE", "six"]);
+        assert_eq!(count, 8); // Six source rows plus two hunk headings.
+        assert_eq!(diff_render_hunk_start(&diff, 0, &mut cache), 1);
+        assert_eq!(diff_render_hunk_start(&diff, 3, &mut cache), 5);
+        let partial = build_split_rows(&diff);
+        assert!(partial.len() < count);
+    }
+
+    #[test]
+    fn full_diff_can_scroll_to_source_line_1062_outside_patch_context() {
+        let theme = Theme::modern_ide();
+        let mut full = (1..=1400).map(|i| format!("source line {i}")).collect::<Vec<_>>();
+        full[1099] = "updated source line 1100".into();
+        let diff = vec![
+            DiffLine { kind: DiffLineKind::Header, text: "@@ -1100 +1100 @@".into() },
+            DiffLine { kind: DiffLineKind::Delete, text: "-source line 1100".into() },
+            DiffLine { kind: DiffLineKind::Add, text: "+updated source line 1100".into() },
+        ];
+        let mut cache = SplitRowsCache::default();
+        cache.set_full_new_lines(Some(&full));
+        assert_eq!(cache.ensure(&diff), 1401); // one hunk heading + all source lines
+        // The original unified patch has only three lines, but the full
+        // display remains navigable at line 1062 without loading new hunks.
+        let view = PreviewView::Diff {
+            path: "example.rs", side: "unstaged", lines: &diff,
+            hunk_start: None, hunk_end: None, hunk_idx: None,
+        };
+        let rendered = build_visible_lines(&theme, view, 116, 1061, 1062, &mut cache);
+        let text = rendered[0].spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        assert!(text.contains("source line 1062"), "{text}");
+        assert_eq!(cache.rows_for(&diff)[1061].new_num, Some(1062));
+        assert_eq!(diff_render_hunk_start(&diff, 0, &mut cache), 1099);
+    }
+
+    #[test]
+    fn full_diff_mismatch_reverts_to_original_patch_rows() {
+        let diff = vec![
+            DiffLine { kind: DiffLineKind::Header, text: "@@ -2 +2 @@".into() },
+            DiffLine { kind: DiffLineKind::Delete, text: "-two".into() },
+            DiffLine { kind: DiffLineKind::Add, text: "+TWO".into() },
+        ];
+        let full = vec!["one".into(), "changed again".into(), "three".into()];
+        let mut cache = SplitRowsCache::default();
+        cache.set_full_new_lines(Some(&full));
+        assert_eq!(cache.ensure(&diff), build_split_rows(&diff).len());
+    }
+
+    #[test]
+    fn shared_highlight_is_reusable_across_code_views() {
+        let theme = Theme::modern_ide();
+        let code = ["const answer = 42; // shared".to_owned()];
+        let colored = highlight_code_lines(&theme, "example.ts", &code);
+        assert!(colored[0].spans.len() > 1);
+        assert_eq!(colored[0].spans.iter().map(|span| span.content.as_ref()).collect::<String>(), code[0]);
+    }
+
+    #[test]
+    fn diff_syntax_preserves_background_and_column_width() {
+        let theme = Theme::modern_ide();
+        let width = 80;
+        let (left_w, right_w) = split_half_widths(width).unwrap();
+        let old = fit_cell("const old = 1", left_w);
+        let new = fit_cell("const next = 2", right_w);
+        let old_lines = highlight_code_lines(&theme, "x.ts", &[old.clone()]);
+        let new_lines = highlight_code_lines(&theme, "x.ts", &[new.clone()]);
+        let row = SplitRow { kind: SplitRowKind::Pair {
+            old: Some("const old = 1".into()), new: Some("const next = 2".into()),
+            old_del: true, new_add: true,
+        }, old_num: None, new_num: None, src_indices: vec![0] };
+        let rendered = render_split_row(&theme, &row, width as u16, false,
+            Some((&old_lines[0], &new_lines[0])));
+        assert_eq!(rendered.width(), width);
+        assert!(rendered.spans.iter().any(|span| span.style.bg == Some(rgb(theme.diff_del_bg))));
+        assert!(rendered.spans.iter().any(|span| span.style.bg == Some(rgb(theme.diff_add_bg))));
+        assert!(rendered.spans.len() > 4);
+    }
+
+    #[test]
+    fn script_extensions_are_detected_without_changing_rust_markdown() {
+        for name in [
+            "demo.py",
+            "run.sh",
+            "app.js",
+            "widget.jsx",
+            "main.ts",
+            "view.tsx",
+            "settings.json",
+            "config.yaml",
+            "build.yml",
+            "query.sql",
+        ] {
+            assert!(
+                matches!(TextLang::from_name(name), TextLang::Syntax(_)),
+                "{name}"
+            );
+        }
+        assert_eq!(TextLang::from_name("lib.rs"), TextLang::Rust);
+        assert_eq!(TextLang::from_name("README.md"), TextLang::Markdown);
+        assert_eq!(TextLang::from_name("notes.txt"), TextLang::Plain);
+    }
+
+    #[test]
+    fn script_preview_highlights_keywords_without_changing_source_text() {
+        let theme = Theme::modern_ide();
+        let samples = [
+            ("py", "def greet(): print(\"hello\")"),
+            ("sh", "export VAR=\"hello\" # note"),
+            ("js", "const a = \"hello\"; // note"),
+            ("ts", "interface User { name: string }"),
+            ("json", "{\"active\": true, \"count\": 2}"),
+            ("yaml", "enabled: true # note"),
+            ("sql", "SELECT name FROM users WHERE id = 12"),
+        ];
+        for (extension, code) in samples {
+            let mut cache = TextRowsCache::default();
+            let input = vec![code.to_owned()];
+            cache.ensure(
+                &theme,
+                &input,
+                false,
+                code.len(),
+                TextLang::Syntax(extension.to_owned()),
+                180,
+            );
+            let displayed = &cache.rows()[0].spans[2..];
+            assert_eq!(
+                displayed
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>(),
+                code,
+                "lost source bytes for {extension}"
+            );
+            let distinct_colors: std::collections::HashSet<_> =
+                displayed.iter().map(|span| span.style.fg).collect();
+            assert!(
+                distinct_colors.len() > 1,
+                "{extension} not highlighted: {:?}",
+                displayed
+            );
+        }
+    }
+
+    #[test]
+    fn script_preview_cache_preserves_source_line_mapping() {
+        let theme = Theme::modern_ide();
+        let lines: Vec<_> = (0..400)
+            .map(|index| format!("const value_{index} = \"test\";"))
+            .collect();
+        let mut cache = TextRowsCache::default();
+        cache.ensure(
+            &theme,
+            &lines,
+            true,
+            65_536,
+            TextLang::Syntax("js".into()),
+            36,
+        );
+        let first_count = cache.line_count();
+        assert!(first_count >= 400);
+        assert_eq!(cache.row_to_source(cache.source_to_row(400)), 400);
+        cache.ensure(
+            &theme,
+            &lines,
+            true,
+            65_536,
+            TextLang::Syntax("js".into()),
+            36,
+        );
+        assert_eq!(cache.line_count(), first_count);
+        assert_eq!(cache.source_to_row(1), 0);
+    }
+
+    #[test]
     fn visible_text_window_matches_full_slice() {
         let theme = Theme::modern_ide();
         let lines = (1..=30).map(|i| format!("line {i}")).collect::<Vec<_>>();
@@ -1516,7 +1960,7 @@ mod tests {
             language: TextLang::Plain,
         };
         let mut cache = SplitRowsCache::default();
-        let full = build_lines(&theme, view, 40, &mut cache);
+        let full = build_lines(&theme, view.clone(), 40, &mut cache);
         let window = build_visible_lines(&theme, view, 40, 5, 15, &mut cache);
         assert_eq!(window.len(), 10);
         for (a, b) in window.iter().zip(full[5..15].iter()) {

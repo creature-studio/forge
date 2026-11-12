@@ -31,6 +31,38 @@ impl EditingState {
     }
 }
 
+/// Bounded syntax cache: cursor and selection changes do not reparse code.
+/// A small lookbehind preserves common multi-line scopes while scrolling.
+#[derive(Default)]
+struct EditorSyntaxCache {
+    start: usize,
+    source: Vec<String>,
+    path: String,
+    theme: Option<forge_theme::Theme>,
+    colored: Vec<Line<'static>>,
+}
+
+impl EditorSyntaxCache {
+    fn visible<'a>(
+        &'a mut self, theme: &forge_theme::Theme, path: &str,
+        lines: &[String], top: usize, end: usize,
+    ) -> &'a [Line<'static>] {
+        let start = top.saturating_sub(48);
+        let source = &lines[start..end];
+        if self.start != start || self.path != path || self.theme.as_ref() != Some(theme)
+            || self.source != source
+        {
+            self.start = start;
+            self.path = path.to_owned();
+            self.theme = Some(theme.clone());
+            self.source = source.to_vec();
+            let parsed = forge_ui::highlight_code_lines(theme, path, source);
+            self.colored = parsed.into_iter().skip(top - start).collect();
+        }
+        &self.colored
+    }
+}
+
 #[derive(Clone)]
 struct Snapshot {
     text: String,
@@ -53,6 +85,7 @@ pub(super) struct TextEditor {
     dragging: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    syntax_cache: EditorSyntaxCache,
 }
 
 impl TextEditor {
@@ -73,6 +106,7 @@ impl TextEditor {
             dragging: false,
             undo: Vec::new(),
             redo: Vec::new(),
+            syntax_cache: EditorSyntaxCache::default(),
         }
     }
     fn value(&self) -> String {
@@ -747,6 +781,15 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
     if cursor >= view.left + text_area.width as usize {
         view.left = cursor.saturating_sub(text_area.width.saturating_sub(1) as usize);
     }
+    // Only tokenize the visible editor window. Keep per-line styles separate
+    // from selection, which must always take precedence over syntax colors.
+    let syntax_theme = super::view::bridge_theme(p);
+    let syntax_path = view.document.path.to_string_lossy();
+    let visible_end = (view.top + text_area.height as usize).min(view.lines.len());
+    let selection = view.selection();
+    let colored = view.syntax_cache.visible(
+        &syntax_theme, &syntax_path, &view.lines, view.top, visible_end,
+    );
     for (offset, line) in view
         .lines
         .iter()
@@ -764,8 +807,18 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
             .style(Style::default().fg(p.fg_dim)),
             Rect::new(rows[0].x, y, gutter, 1),
         );
-        let selection = view.selection();
         let highlight = Style::default().fg(p.on_accent).bg(p.selection);
+        let mut syntax_styles = vec![Style::default(); line.len()];
+        let mut byte_pos = 0;
+        if let Some(styled) = colored.get(offset - view.top) {
+            for span in &styled.spans {
+                let end = (byte_pos + span.content.len()).min(syntax_styles.len());
+                for style in &mut syntax_styles[byte_pos.min(end)..end] {
+                    *style = span.style;
+                }
+                byte_pos = end;
+            }
+        }
         let mut spans: Vec<Span> = line
             .char_indices()
             .map(|(byte, ch)| {
@@ -781,7 +834,7 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
                     if selected {
                         highlight
                     } else {
-                        Style::default()
+                        syntax_styles.get(byte).copied().unwrap_or_default()
                     },
                 )
             })
@@ -835,6 +888,23 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn syntax_cache_tracks_edits_and_bounded_scroll_window() {
+        let mut cache = EditorSyntaxCache::default();
+        let theme = forge_theme::Theme::modern_ide();
+        let mut source = (0..200).map(|i| format!("const item{i} = {i};")).collect::<Vec<_>>();
+        let first = cache.visible(&theme, "example.ts", &source, 100, 120);
+        assert_eq!(first.len(), 20);
+        let initial = first[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert_eq!(initial, source[100]);
+        assert_eq!(cache.source.len(), 68); // 48 lookbehind + 20 visible
+        source[100] = "const updated = 999;".to_owned();
+        let edited = cache.visible(&theme, "example.ts", &source, 100, 120);
+        assert_eq!(edited[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>(), source[100]);
+        assert_eq!(cache.source.len(), 68);
+        assert_eq!(cache.visible(&theme, "example.ts", &source, 101, 121).len(), 20);
+    }
+
     use super::*;
 
     fn fixture(value: &str) -> (tempfile::TempDir, App, PathBuf) {

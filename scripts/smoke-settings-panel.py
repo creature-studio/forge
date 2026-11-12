@@ -48,10 +48,20 @@ with tempfile.TemporaryDirectory(prefix='forge-settings-') as folder:
         assert '.secret.txt' in screen(), 'hidden file did not appear after settings toggle'
 
         send(',')
+        for _ in range(4): send('Down')
+        send('Enter')  # staged gutter Off
+        assert 'show_staged_gutter = false' in path.read_text()
+        send('Down');send('Enter')  # unstaged gutter Off
+        assert 'show_unstaged_gutter = false' in path.read_text()
+        send('Enter')  # unstaged gutter On
+        send('Up');send('Enter')  # staged gutter On
+        assert 'show_staged_gutter = true' in path.read_text()
+        assert 'show_unstaged_gutter = true' in path.read_text()
+        for _ in range(4): send('Up')
         send('Enter') # sticky toggle
         assert 'Tree Sticky Scroll' in screen()
         assert 'tree_sticky_scroll = false' in path.read_text()
-        send('Down');send('Down');send('Down');send('Enter')
+        send('Down');send('Down');send('Down');send('Down');send('Down');send('Down');send('Enter')
         assert 'Keyboard shortcuts' in screen() and 'CONTEXT' in screen()
         send('Escape')
         send('q')

@@ -1,0 +1,41 @@
+%YAML 1.2
+---
+name: Python
+file_extensions: [py, pyw]
+scope: source.python
+contexts:
+  main:
+    - match: '"""'
+      push: triple-double
+    - match: "'''"
+      push: triple-single
+    - match: '#.*$'
+      scope: comment.line.python
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\b'
+      scope: constant.numeric.python
+    - match: '\b(?:and|as|assert|async|await|break|class|continue|def|del|elif|else|except|False|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|self|super|try|True|while|with|yield|None)\b'
+      scope: keyword.control.python
+  double-string:
+    - meta_scope: string.quoted.double.python
+    - match: '\\.'
+      scope: constant.character.escape.python
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.python
+    - match: '\\.'
+      scope: constant.character.escape.python
+    - match: "'"
+      pop: true
+  triple-double:
+    - meta_scope: string.quoted.triple.python
+    - match: '"""'
+      pop: true
+  triple-single:
+    - meta_scope: string.quoted.triple.python
+    - match: "'''"
+      pop: true

@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use forge_model::{ChangeEntry, CommitChange, DiffSide, GitStatus, GraphCommit};
+use forge_model::{ChangeEntry, CommitChange, DiffSide, GitStatus, GraphCommit, UpstreamStatus};
 use forge_theme::Theme;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
@@ -414,6 +414,9 @@ pub struct HistoryView<'a> {
     pub expanded_dirs: &'a HashSet<String>,
     /// Changed files per commit, loaded on first expansion.
     pub files: &'a HashMap<String, Vec<CommitChange>>,
+    /// The current branch's fetch upstream is local tracking state, not live remote data.
+    pub upstream: &'a UpstreamStatus,
+    pub unpushed: &'a HashSet<String>,
 }
 
 /// Append the HISTORY section and, when open, each commit plus the file tree of
@@ -697,7 +700,15 @@ pub fn draw_scm_sidebar(
                     let expanded = state.history.expanded_commits.contains(&commit.id);
                     let pending = expanded && !state.history.files.contains_key(&commit.id);
                     commit_item(
-                        theme, commit, glyphs, pending, is_sel, focused, body.width, pinned,
+                        theme,
+                        commit,
+                        glyphs,
+                        pending,
+                        commit_push_badge(commit, state.history),
+                        is_sel,
+                        focused,
+                        body.width,
+                        pinned,
                     )
                 }
                 ScmRow::CommitFolder {
@@ -858,12 +869,42 @@ fn history_child_visual_depth(depth: u16, glyphs: &[GraphCell], row_width: u16) 
     depth.saturating_add(extra.min(u16::MAX as usize) as u16)
 }
 
-/// One commit row: lane glyphs, short hash, the focused ref badge, subject.
+/// A badge is only shown for the currently checked-out branch. Other
+/// branches in the --all graph are not compared against this upstream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CommitPushBadge {
+    Unpushed,
+    Pushed,
+    NoUpstream,
+    Unavailable,
+}
+
+fn commit_push_badge(commit: &GraphCommit, history: &HistoryView<'_>) -> Option<CommitPushBadge> {
+    if history.unpushed.contains(&commit.id) {
+        return Some(CommitPushBadge::Unpushed);
+    }
+    let head = commit
+        .refs
+        .iter()
+        .any(|r| r.kind == forge_model::GraphRefKind::Head);
+    if !head {
+        return None;
+    }
+    match history.upstream {
+        UpstreamStatus::Tracking(_) => Some(CommitPushBadge::Pushed),
+        UpstreamStatus::NotConfigured => Some(CommitPushBadge::NoUpstream),
+        UpstreamStatus::Unavailable => Some(CommitPushBadge::Unavailable),
+        UpstreamStatus::Detached => None,
+    }
+}
+
+/// One commit row: lane glyphs, short hash, push indicator, ref badge, subject.
 fn commit_item(
     theme: &Theme,
     commit: &GraphCommit,
     glyphs: &[GraphCell],
     pending: bool,
+    push: Option<CommitPushBadge>,
     selected: bool,
     focused: bool,
     row_width: u16,
@@ -894,6 +935,31 @@ fn commit_item(
     ));
 
     let mut used = 1 + shown * LANE_WIDTH + commit.short.width() + 1;
+    if let Some(push) = push {
+        // Preserve the commit subject in a narrow TUI; still show a single
+        // status glyph when the complete label would crowd it out.
+        let (long, short, fg) = match push {
+            CommitPushBadge::Unpushed => ("↑ unpushed ", "↑ ", theme.warning),
+            CommitPushBadge::Pushed => ("✓ pushed ", "✓ ", theme.git_added),
+            CommitPushBadge::NoUpstream => ("no upstream ", "local ", theme.muted),
+            CommitPushBadge::Unavailable => ("upstream? ", "? ", theme.warning),
+        };
+        let label = if width >= 50 && used + long.width() + 8 <= width {
+            long
+        } else {
+            short
+        };
+        if used + label.width() + 4 <= width {
+            spans.push(Span::styled(
+                label,
+                Style::default()
+                    .fg(rgb(fg))
+                    .bg(rgb(bg))
+                    .add_modifier(Modifier::BOLD),
+            ));
+            used += label.width();
+        }
+    }
     // Local branches read better than the bare HEAD decoration.
     let badge = commit
         .refs
@@ -1623,6 +1689,8 @@ mod tests {
         expanded_commits: HashSet<String>,
         expanded_dirs: HashSet<String>,
         files: HashMap<String, Vec<CommitChange>>,
+        upstream: UpstreamStatus,
+        unpushed: HashSet<String>,
     }
 
     impl History {
@@ -1635,6 +1703,8 @@ mod tests {
                 expanded_commits: &self.expanded_commits,
                 expanded_dirs: &self.expanded_dirs,
                 files: &self.files,
+                upstream: &self.upstream,
+                unpushed: &self.unpushed,
             }
         }
     }
@@ -1649,6 +1719,89 @@ mod tests {
             time: 0,
             subject: subject.into(),
         }
+    }
+
+    #[test]
+    fn history_push_badges_distinguish_unpushed_synced_and_unconfigured() {
+        use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+        let theme = Theme::modern_ide();
+        let mut history = History::default();
+        let mut head = commit(
+            "abcdef0123456789",
+            "new local feature",
+            &["123456789abcdef0"],
+        );
+        head.refs.push(forge_model::GraphRef {
+            name: "HEAD".into(),
+            kind: forge_model::GraphRefKind::Head,
+        });
+        let other = commit("123456789abcdef0", "old shared commit", &[]);
+        history.commits = vec![head.clone(), other.clone()];
+        history.upstream = UpstreamStatus::Tracking("origin/main".into());
+        history.unpushed.insert(head.id.clone());
+        let badge = commit_push_badge(&head, &history.view());
+        assert_eq!(badge, Some(CommitPushBadge::Unpushed));
+        assert_eq!(commit_push_badge(&other, &history.view()), None);
+
+        let render = |badge| {
+            let item = commit_item(&theme, &head, &[], false, badge, false, false, 88, false);
+            let area = Rect::new(0, 0, 88, 1);
+            let mut buf = Buffer::empty(area);
+            List::new(vec![item]).render(area, &mut buf);
+            buf.content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>()
+        };
+        assert!(render(badge).contains("unpushed"));
+
+        history.unpushed.clear();
+        assert_eq!(
+            commit_push_badge(&head, &history.view()),
+            Some(CommitPushBadge::Pushed)
+        );
+        assert!(render(commit_push_badge(&head, &history.view())).contains("pushed"));
+        history.upstream = UpstreamStatus::NotConfigured;
+        assert_eq!(
+            commit_push_badge(&head, &history.view()),
+            Some(CommitPushBadge::NoUpstream)
+        );
+        assert!(render(commit_push_badge(&head, &history.view())).contains("no upstream"));
+        history.upstream = UpstreamStatus::Unavailable;
+        assert_eq!(
+            commit_push_badge(&head, &history.view()),
+            Some(CommitPushBadge::Unavailable)
+        );
+        history.upstream = UpstreamStatus::Detached;
+        assert_eq!(commit_push_badge(&head, &history.view()), None);
+    }
+
+    #[test]
+    fn history_push_badge_keeps_subject_in_narrow_sidebar() {
+        use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
+        let theme = Theme::modern_ide();
+        let commit = commit("abcdef0123456789", "feature", &[]);
+        let area = Rect::new(0, 0, 31, 1);
+        let mut buffer = Buffer::empty(area);
+        let item = commit_item(
+            &theme,
+            &commit,
+            &[],
+            false,
+            Some(CommitPushBadge::Unpushed),
+            false,
+            false,
+            area.width,
+            false,
+        );
+        List::new(vec![item]).render(area, &mut buffer);
+        let row = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(row.contains('↑'), "{row}");
+        assert!(row.contains("feature"), "{row}");
     }
 
     #[test]

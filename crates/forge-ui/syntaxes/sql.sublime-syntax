@@ -1,0 +1,35 @@
+%YAML 1.2
+---
+name: SQL
+file_extensions: [sql]
+scope: source.sql
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '--.*$'
+      scope: comment.line.sql
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\b'
+      scope: constant.numeric.sql
+    - match: '(?i)\b(?:select|from|where|join|inner|outer|left|right|full|cross|on|as|group|by|having|order|limit|offset|insert|into|values|update|set|delete|create|table|alter|drop|index|primary|key|foreign|references|constraint|not|null|is|and|or|like|ilike|between|distinct|union|all|case|when|then|else|end|with|recursive|exists|count|sum|avg|min|max|asc|desc|returning|begin|commit|rollback)\b'
+      scope: keyword.control.sql
+  double-string:
+    - meta_scope: string.quoted.double.sql
+    - match: '\\.'
+      scope: constant.character.escape.sql
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.sql
+    - match: '\\.'
+      scope: constant.character.escape.sql
+    - match: "'"
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.sql
+    - match: '\*/'
+      pop: true

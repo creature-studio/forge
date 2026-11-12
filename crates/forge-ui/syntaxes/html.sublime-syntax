@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: HTML
+file_extensions: [html, htm, vue, svelte]
+scope: text.html
+contexts:
+  main:
+    - match: '<!--'
+      push: comment
+    - match: '<[/!]?[A-Za-z][A-Za-z0-9:_-]*'
+      scope: entity.name.tag.html
+      push: attributes
+    - match: '&(?:[A-Za-z]+|#[0-9]+);'
+      scope: constant.character.entity.html
+  attributes:
+    - match: '>'
+      pop: true
+    - match: '[A-Za-z_:][-A-Za-z0-9_:.]*(?=\s*=)'
+      scope: keyword.other.attribute-name.html
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+    - match: '/?>'
+      pop: true
+  double-string:
+    - meta_scope: string.quoted.double.html
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.html
+    - match: "'"
+      pop: true
+  comment:
+    - meta_scope: comment.block.html
+    - match: '-->'
+      pop: true

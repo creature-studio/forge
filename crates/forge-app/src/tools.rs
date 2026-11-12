@@ -297,6 +297,7 @@ pub(super) enum PromptAction {
     Branch,
     RenameBranch(String),
     Stash,
+    StashUnstaged,
     Amend,
     Worktree,
 }
@@ -409,6 +410,9 @@ pub(super) enum Command {
     TreeStickyScroll,
     CompactFolders,
     Settings,
+    CycleTheme,
+    ToggleStagedGutter,
+    ToggleUnstagedGutter,
     ShortcutSettings,
     Discard,
     Branches,
@@ -1066,6 +1070,21 @@ impl App {
                     value: RowValue::Command(Command::Hidden),
                 },
                 ToolRow {
+                    label: format!(
+                        "Color theme [{}]",
+                        self.config.theme.as_deref().unwrap_or("current")
+                    ),
+                    value: RowValue::Command(Command::CycleTheme),
+                },
+                ToolRow {
+                    label: format!("Git Gutter: staged [{}]", if self.config.git.show_staged_gutter { "On" } else { "Off" }),
+                    value: RowValue::Command(Command::ToggleStagedGutter),
+                },
+                ToolRow {
+                    label: format!("Git Gutter: unstaged [{}]", if self.config.git.show_unstaged_gutter { "On" } else { "Off" }),
+                    value: RowValue::Command(Command::ToggleUnstagedGutter),
+                },
+                ToolRow {
                     label: "Keyboard shortcuts [F4]".into(),
                     value: RowValue::Command(Command::ShortcutSettings),
                 },
@@ -1304,13 +1323,22 @@ impl App {
         }));
     }
 
-    fn prompt(&mut self, action: PromptAction, title: &str, value: String, detail: &str) {
+    pub(super) fn prompt(
+        &mut self,
+        action: PromptAction,
+        title: &str,
+        value: String,
+        detail: &str,
+    ) {
         let is_child =
             self.tools
                 .panel
                 .as_ref()
                 .is_some_and(|panel| match (&action, &panel.kind) {
-                    (PromptAction::Stash, PanelKind::Git(GitQuery::Stashes))
+                    (
+                        PromptAction::Stash | PromptAction::StashUnstaged,
+                        PanelKind::Git(GitQuery::Stashes),
+                    )
                     | (
                         PromptAction::Branch | PromptAction::RenameBranch(_),
                         PanelKind::Git(GitQuery::Branches),
@@ -1341,12 +1369,14 @@ impl App {
                     (
                         Operation::Git(
                             GitAction::SaveStash(_)
+                            | GitAction::SaveStashUnstaged(_)
                             | GitAction::ApplyStash(_)
                             | GitAction::ApplyStashIndexed(_)
                             | GitAction::PopStash(_)
                             | GitAction::DropStash(_),
                         ),
-                        PanelKind::Git(GitQuery::Stashes) | PanelKind::Prompt(PromptAction::Stash),
+                        PanelKind::Git(GitQuery::Stashes)
+                        | PanelKind::Prompt(PromptAction::Stash | PromptAction::StashUnstaged),
                     )
                     | (
                         Operation::Git(GitAction::SwitchBranch(_) | GitAction::DeleteBranch(_)),
@@ -1401,6 +1431,55 @@ impl App {
             format!("{}/", relative(&parent))
         };
         match command {
+            ToggleStagedGutter | ToggleUnstagedGutter => {
+                let mut next = self.config.clone();
+                let staged = matches!(command, ToggleStagedGutter);
+                if staged { next.git.show_staged_gutter = !next.git.show_staged_gutter; }
+                else { next.git.show_unstaged_gutter = !next.git.show_unstaged_gutter; }
+                match next.save() {
+                    Ok(()) => {
+                        self.config = next;
+                        self.close_inline_peek();
+                        self.session.status = format!("Git {} gutter · saved", if staged { "staged" } else { "unstaged" });
+                        let selected = self.tools.panel.as_ref().map_or(0, |p| p.selected);
+                        self.reload_tools();
+                        if let Some(p) = &mut self.tools.panel { p.selected = selected.min(p.rows.len().saturating_sub(1)); }
+                    }
+                    Err(err) => {
+                        self.session.status = format!("Git gutter settings not saved: {err}");
+                        if let Some(p) = &mut self.tools.panel { p.message = self.session.status.clone(); }
+                    }
+                }
+            }
+            CycleTheme => {
+                let mut next = self.config.clone();
+                let theme = match next.theme.as_deref().unwrap_or("current") {
+                    "current" => "vscode-dark",
+                    "vscode-dark" => "vscode-black",
+                    "vscode-black" => "github-dark",
+                    "github-dark" => "nord",
+                    _ => "current",
+                };
+                next.theme = Some(theme.to_owned());
+                match next.save() {
+                    Ok(()) => {
+                        self.config = next;
+                        self.preview_state.text_rows.clear();
+                        self.session.status = format!("Theme: {theme} · saved");
+                        let selected = self.tools.panel.as_ref().map_or(0, |p| p.selected);
+                        self.reload_tools();
+                        if let Some(panel) = &mut self.tools.panel {
+                            panel.selected = selected.min(panel.rows.len().saturating_sub(1));
+                        }
+                    }
+                    Err(err) => {
+                        self.session.status = format!("Theme not saved: {err}");
+                        if let Some(panel) = &mut self.tools.panel {
+                            panel.message = self.session.status.clone();
+                        }
+                    }
+                }
+            }
             Settings => self.open_tools(PanelKind::Settings),
             ShortcutSettings => {
                 self.close_tools();
@@ -1616,6 +1695,7 @@ impl App {
                 new: value.clone(),
             }),
             Stash => Operation::Git(GitAction::SaveStash(value.clone())),
+            StashUnstaged => Operation::Git(GitAction::SaveStashUnstaged(value.clone())),
             Amend => Operation::Git(GitAction::Amend(value.clone())),
             Worktree => Operation::Git(GitAction::AddWorktree(if path.is_absolute() {
                 path
@@ -1628,16 +1708,22 @@ impl App {
             Operation::Git(GitAction::CreateBranch(_) | GitAction::RenameBranch { .. }) => {
                 Some(PanelKind::Git(GitQuery::Branches))
             }
-            Operation::Git(GitAction::SaveStash(_)) => Some(PanelKind::Git(GitQuery::Stashes)),
+            Operation::Git(GitAction::SaveStash(_) | GitAction::SaveStashUnstaged(_)) => {
+                Some(PanelKind::Git(GitQuery::Stashes))
+            }
             Operation::Git(GitAction::AddWorktree(_)) => Some(PanelKind::Git(GitQuery::Worktrees)),
             _ => None,
         };
         if matches!(
             operation,
-            Operation::Git(GitAction::Amend(_) | GitAction::SaveStash(_))
+            Operation::Git(
+                GitAction::Amend(_) | GitAction::SaveStash(_) | GitAction::SaveStashUnstaged(_)
+            )
         ) {
             let detail = if matches!(operation, Operation::Git(GitAction::Amend(_))) {
                 format!("Rewrite the latest commit with ALL staged changes?\nNew message: {value}\nThis changes the commit ID.")
+            } else if matches!(operation, Operation::Git(GitAction::SaveStashUnstaged(_))) {
+                format!("Stash unstaged and untracked changes?\nMessage: {value}\nStaged/index changes remain in place.")
             } else {
                 format!("Save all tracked and untracked changes in a stash?\nMessage: {value}\nSaved edits will be removed from the worktree until the stash is applied.")
             };

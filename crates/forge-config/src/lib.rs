@@ -41,10 +41,17 @@ impl Default for Config {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GitConfig {
     pub blame: BlameConfig,
+    pub show_unstaged_gutter: bool,
+    pub show_staged_gutter: bool,
+}
+impl Default for GitConfig {
+    fn default() -> Self {
+        Self { blame: BlameConfig::default(), show_unstaged_gutter: true, show_staged_gutter: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +122,17 @@ impl Config {
             "show_hidden_files".into(),
             toml::Value::Boolean(self.show_hidden_files),
         );
+        // Update only the explicitly managed keys. Preserve [git.blame] and
+        // all unknown plugin/custom preferences in the same configuration.
+        let git = table.entry("git").or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let git = git.as_table_mut().ok_or("Cannot save config: [git] must be a table")?;
+        git.insert("show_staged_gutter".into(), toml::Value::Boolean(self.git.show_staged_gutter));
+        git.insert("show_unstaged_gutter".into(), toml::Value::Boolean(self.git.show_unstaged_gutter));
+        if let Some(theme) = &self.theme {
+            table.insert("theme".into(), toml::Value::String(theme.clone()));
+        } else {
+            table.remove("theme");
+        }
         let text = toml::to_string_pretty(&table).map_err(|e| e.to_string())?;
         let parent = path.parent().ok_or("Invalid configuration path")?;
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -148,6 +166,19 @@ mod tests {
         assert!(!verbose.compact_folders);
         let shown: Config = toml::from_str("show_hidden_files = true").unwrap();
         assert!(shown.show_hidden_files);
+    }
+
+    #[test]
+    fn dual_git_gutter_layers_default_on_and_can_be_disabled_independently() {
+        let default: Config = toml::from_str("").unwrap();
+        assert!(default.git.show_staged_gutter && default.git.show_unstaged_gutter);
+        let staged_off: Config = toml::from_str("[git]\nshow_staged_gutter = false").unwrap();
+        assert!(!staged_off.git.show_staged_gutter && staged_off.git.show_unstaged_gutter);
+        let unstaged_off: Config = toml::from_str("[git]\nshow_unstaged_gutter = false").unwrap();
+        assert!(unstaged_off.git.show_staged_gutter && !unstaged_off.git.show_unstaged_gutter);
+        let encoded = toml::to_string(&unstaged_off).unwrap();
+        let restored: Config = toml::from_str(&encoded).unwrap();
+        assert!(restored.git.show_staged_gutter && !restored.git.show_unstaged_gutter);
     }
 
     #[test]

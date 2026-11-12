@@ -15,6 +15,7 @@ pub use forge_git_gix::{GitReadError, GixReadBackend};
 pub use forge_model::{
     ChangeEntry, CommitChange, CommitChangeKind, DiffHunk, DiffLine, DiffLineKind, DiffSide,
     FileDiff, GitStatus, GraphCommit, GraphRef, GraphRefKind, GraphSnapshot, StatusSnapshot,
+    UpstreamStatus,
 };
 
 /// Facade combining read + write backends.

@@ -1,14 +1,23 @@
 # File source change gutter and inline peek
 
-The Files viewer compares the selected text file's worktree contents with the
-Git index. Green line numbers indicate additions, yellow indicates replacements
-(removed and added lines in the same change block), and red marks a deletion
-anchor. A deletion anchors to the next surviving line, or the last source line
-at EOF. An empty file uses its empty row as line 1. Staged-only changes do not
-appear, because the baseline is the index.
+The Files viewer independently computes two read-only Git differences:
 
-Click a colored line number or its adjacent separator to toggle that hunk's
-read-only peek. Only the first display row of a wrapped source line is marked
+- **Unstaged:** Index → Working Tree. Green means added, yellow modified, red
+  anchors deletion. These marks retain the vivid source-line-number colors.
+- **Staged:** HEAD → Index. Marks use a separate subdued blue gutter lane.
+  Staged positions are projected from Index coordinates onto the current
+  Working Tree coordinates, accounting for intervening unstaged insertions and
+  deletions. On overlapping rows, both layers remain visible.
+
+Both layers are **on by default**, and can be toggled separately under
+Settings → **Git Gutter: staged** and **Git Gutter: unstaged**. The preferences
+persist as `git.show_staged_gutter` and `git.show_unstaged_gutter` in the user's
+`forge/config.toml`. The original Code Preview/Markdown exclusion rules remain.
+
+Click a colored line number to peek an unstaged hunk; click the first blue
+gutter cell to prefer the staged hunk on overlapping rows. The overlay title
+identifies the selected side as Staged or Unstaged. F7 opens the next visible
+hunk from either enabled layer. Only the first display row of a wrapped source line is marked
 and clickable. With Preview focused, **F7** toggles the first hunk at or after
 the top visible row, falling back to the first hunk. The preview heading shows
 “F7 Peek” when changes are available. This action is listed and can be rebound
@@ -36,8 +45,8 @@ refreshes cancel and clear the state. Results are guarded by path, preview
 content, and before/after source and index snapshots. A background source save
 refreshes the matching preview and clears old selection and blame attribution.
 
-Only regular, complete text previews up to 64 KiB and the existing 400-line
-preview limit participate. Untracked files, binary files, truncated previews,
+Only regular, complete text snapshots within the bounded preview read limit
+participate. Staged and unstaged diffs are each bounded at 2 MiB. Untracked files, binary files, truncated previews,
 errors, and diffs exceeding 2 MiB have no markers. Queries time out after three
 seconds, kill abandoned children, disable optional Git locks, external diff
 drivers and textconv, and use literal pathspecs. This feature runs only

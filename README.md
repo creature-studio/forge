@@ -4,6 +4,25 @@
 
 ![Forge 终端工作区预览](docs/tui-preview.svg)
 
+## 安装
+
+Linux（x86_64 / aarch64）与 macOS（Intel / Apple Silicon）使用 GitHub Release 的预编译包，不需要 Rust 工具链：
+
+```bash
+curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+```
+
+安装脚本会下载 `forge-<target>.tar.gz`，用同一版本的 `SHA256SUMS` 校验后安装到 `~/.local/bin`。可用 `FORGE_INSTALL_DIR` 指定目录，用 `FORGE_VERSION=v0.1.0` 固定版本。也可以直接下载 <https://github.com/creature-studio/forge/releases/latest> 里的压缩包自行放置。
+
+## 更新
+
+```bash
+forge update --check   # 只查询是否有新版本
+forge update           # 下载、校验并替换当前二进制
+```
+
+`forge update` 读取 `releases/latest` 的 tag，与编译进二进制的版本号比较，只在新版本可用时替换当前可执行文件。安装在系统目录且没有写权限时会提示重新运行安装脚本。
+
 ## 开发与运行
 
 需要 Rust 1.89+、Git。界面依赖固定为 ratatui-kit 0.10.3、Ratatui 0.30.1、Crossterm 0.29.0。
@@ -83,6 +102,15 @@ Git Worktree 自动刷新支持 .git 指针文件，分别监控私有 HEAD/inde
 在 Files 或 Git 页面按 `Z` 进入 Stashes，使用 `↑/↓` 或 `j/k` 选择条目：`Enter` 查看选中 Stash 的补丁（`PgUp/PgDn` 滚动，`Esc` 返回列表）；`A` 输入消息并保存当前已跟踪及未跟踪的修改（排除被 Git 忽略的文件）；`a` 应用并保留 Stash；`I` 应用并恢复原暂存状态（stash apply --index）；`p` Pop（成功后移除 Stash，冲突时保留）；`X` 删除 Stash。保存、应用、Pop、删除都需在确认框按 `Enter` 才执行，按 `Esc` 返回上一层而不操作。Stash 列表为空时仍可按 `A` 新建。
 
 Stash 删除是永久丢弃备份记录，不会删除已经应用到工作区的文件。应用若发生冲突将保留 Git 错误，不会把失败伪装成成功。使用原始 Stash 对象 ID 固定选中项，避免其他 Stash 导致序号变化时误操作。可以在命令面板（`:`）搜索 Stashes 打开，Stash 面板标题也显示常用按键。
+
+## 轻量脚本语法高亮
+
+Code Preview 按扩展名支持 Python、Shell、JavaScript、TypeScript、JSON、YAML、SQL，
+保留原有 Rust/Markdown 高亮和行号复制。Syntect 只启用必要的纯 Rust 解析
+功能，不加载整套默认语法或主题。将 Sublime 的 .sublime-syntax 文件放入
+~/.config/forge/syntaxes/（支持 XDG_CONFIG_HOME）即可扩展或覆盖语法，
+重启 Forge 生效。遵守现有 64 KiB / 400 行的预览上限。详细说明参见
+docs/syntax-highlighting.md。
 
 ## 工具面板导航与鼠标操作
 

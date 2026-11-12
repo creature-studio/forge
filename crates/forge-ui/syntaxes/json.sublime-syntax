@@ -1,0 +1,29 @@
+%YAML 1.2
+---
+name: JSON
+file_extensions: [json, jsonl]
+scope: source.json
+contexts:
+  main:
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+    - match: '"(?=(?:[^"\\]|\\.)*"\\s*:)'
+      scope: entity.name.tag.json
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)\b'
+      scope: constant.numeric.json
+    - match: '\b(?:true|false|null)\b'
+      scope: keyword.control.json
+  double-string:
+    - meta_scope: string.quoted.double.json
+    - match: '\\.'
+      scope: constant.character.escape.json
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.json
+    - match: '\\.'
+      scope: constant.character.escape.json
+    - match: "'"
+      pop: true

@@ -4,12 +4,12 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use forge_model::{
     CommitChange, CommitChangeKind, DiffSide, GitStatus, GraphCommit, GraphRef, GraphRefKind,
-    GraphSnapshot, StatusSnapshot,
+    GraphSnapshot, StatusSnapshot, UpstreamStatus,
 };
 use gix::bstr::ByteSlice;
 use gix::status::index_worktree::iter::Summary as IwSummary;
@@ -224,12 +224,15 @@ impl GixReadBackend {
         }
 
         let commits = topological_order(commits, head_id.as_deref());
+        let (upstream, unpushed) = current_branch_push_state(&repo, head, limit);
 
         Ok(GraphSnapshot {
             repo_root,
             head: head_short,
             branch,
             commits,
+            upstream,
+            unpushed,
         })
     }
 
@@ -319,6 +322,58 @@ impl GixReadBackend {
         out.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(out)
     }
+}
+
+/// Compare current HEAD against its configured fetch upstream. A local ref
+/// (including a tag, another branch, or another remote) is not evidence that
+/// this branch was pushed. The walk handles merges and diverged histories.
+fn current_branch_push_state(
+    repo: &gix::Repository,
+    head: Option<gix::ObjectId>,
+    limit: usize,
+) -> (UpstreamStatus, HashSet<String>) {
+    let Some(branch) = repo.head_name().ok().flatten() else {
+        return (UpstreamStatus::Detached, HashSet::new());
+    };
+    if branch.category() != Some(gix::refs::Category::LocalBranch) {
+        return (UpstreamStatus::Detached, HashSet::new());
+    }
+    let Some(tracking) =
+        repo.branch_remote_tracking_ref_name(branch.as_ref(), gix::remote::Direction::Fetch)
+    else {
+        return (UpstreamStatus::NotConfigured, HashSet::new());
+    };
+    let Ok(tracking) = tracking else {
+        return (UpstreamStatus::Unavailable, HashSet::new());
+    };
+    let name = tracking.shorten().to_string();
+    let Ok(mut reference) = repo.find_reference(tracking.as_ref()) else {
+        return (UpstreamStatus::Unavailable, HashSet::new());
+    };
+    let Ok(upstream_id) = reference.peel_to_id() else {
+        return (UpstreamStatus::Unavailable, HashSet::new());
+    };
+    let Some(head_id) = head else {
+        return (UpstreamStatus::Unavailable, HashSet::new());
+    };
+    if upstream_id.detach() == head_id {
+        return (UpstreamStatus::Tracking(name), HashSet::new());
+    }
+    let Ok(walk) = repo
+        .rev_walk([head_id])
+        .with_hidden([upstream_id.detach()])
+        .all()
+    else {
+        return (UpstreamStatus::Unavailable, HashSet::new());
+    };
+    let mut unpushed = HashSet::new();
+    for info in walk.take(limit.max(1)) {
+        let Ok(info) = info else {
+            return (UpstreamStatus::Unavailable, HashSet::new());
+        };
+        unpushed.insert(info.id.to_string());
+    }
+    (UpstreamStatus::Tracking(name), unpushed)
 }
 
 fn history_err(err: impl std::fmt::Display) -> GitReadError {
@@ -675,6 +730,105 @@ mod tests {
                 assert!(parent_index > index, "parent must follow its child");
             }
         }
+    }
+
+    fn revision(root: &Path, spec: &str) -> String {
+        let output = Command::new("git")
+            .args(["rev-parse", spec])
+            .current_dir(root)
+            .output()
+            .expect("git rev-parse");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
+    #[test]
+    fn graph_push_state_uses_current_branch_upstream_and_handles_divergence() {
+        let dir = init_repo();
+        let root = dir.path();
+        commit_file(root, "source.txt", "base\n", "base");
+        let base = revision(root, "HEAD");
+
+        // A local tracking ref is sufficient; nothing accesses the network.
+        git(root, &["config", "remote.origin.url", "/not-a-real-remote"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        );
+        git(root, &["config", "branch.main.remote", "origin"]);
+        git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+
+        let read = GixReadBackend::new();
+        let synced = read.graph(root, 100).unwrap();
+        assert_eq!(
+            synced.upstream,
+            UpstreamStatus::Tracking("origin/main".into())
+        );
+        assert!(synced.unpushed.is_empty());
+
+        commit_file(root, "source.txt", "first\n", "local one");
+        let first = revision(root, "HEAD");
+        commit_file(root, "source.txt", "second\n", "local two");
+        let second = revision(root, "HEAD");
+        let ahead = read.graph(root, 100).unwrap();
+        assert_eq!(
+            ahead.upstream,
+            UpstreamStatus::Tracking("origin/main".into())
+        );
+        assert_eq!(ahead.unpushed.len(), 2);
+        assert!(ahead.unpushed.contains(&first));
+        assert!(ahead.unpushed.contains(&second));
+        assert!(!ahead.unpushed.contains(&base));
+
+        // A separate remote tip must not be confused with a pushed local commit.
+        git(root, &["checkout", "-b", "remote-only", &base]);
+        commit_file(root, "remote.txt", "remote\n", "remote diverged");
+        let remote_tip = revision(root, "HEAD");
+        git(
+            root,
+            &["update-ref", "refs/remotes/origin/main", &remote_tip],
+        );
+        git(root, &["checkout", "main"]);
+        let diverged = read.graph(root, 100).unwrap();
+        assert_eq!(diverged.unpushed.len(), 2);
+        assert!(diverged.unpushed.contains(&first));
+        assert!(diverged.unpushed.contains(&second));
+        assert!(!diverged.unpushed.contains(&remote_tip));
+        assert!(diverged.commits.iter().any(|c| c.id == remote_tip));
+        assert!(diverged.commits.iter().any(|c| c.id == second));
+
+        // Once the upstream reference advances, the marker disappears.
+        git(root, &["update-ref", "refs/remotes/origin/main", &second]);
+        let pushed = read.graph(root, 100).unwrap();
+        assert!(pushed.unpushed.is_empty());
+
+        // A configured-but-missing ref must not be falsely treated as pushed.
+        git(
+            root,
+            &["config", "branch.main.merge", "refs/heads/does-not-exist"],
+        );
+        let unavailable = read.graph(root, 100).unwrap();
+        assert_eq!(unavailable.upstream, UpstreamStatus::Unavailable);
+        assert!(unavailable.unpushed.is_empty());
+
+        git(root, &["config", "--unset", "branch.main.merge"]);
+        let no_upstream = read.graph(root, 100).unwrap();
+        assert_eq!(no_upstream.upstream, UpstreamStatus::NotConfigured);
+        assert!(no_upstream.unpushed.is_empty());
+
+        git(root, &["checkout", "--detach", "HEAD"]);
+        let detached = read.graph(root, 100).unwrap();
+        assert_eq!(detached.upstream, UpstreamStatus::Detached);
+        assert!(detached.unpushed.is_empty());
     }
 
     #[test]

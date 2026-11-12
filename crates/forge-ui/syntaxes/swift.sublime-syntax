@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: Swift
+file_extensions: [swift]
+scope: source.swift
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.swift
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.swift
+    - match: '\b(?:actor|as|associatedtype|async|await|break|case|catch|class|continue|default|defer|deinit|do|else|enum|extension|fallthrough|false|fileprivate|for|func|guard|if|import|in|init|inout|internal|is|let|nil|open|operator|override|private|protocol|public|repeat|rethrows|return|self|static|struct|subscript|super|switch|throw|throws|true|try|typealias|var|where|while)\b'
+      scope: keyword.control.swift
+    - match: '\b(?:true|false|nil)\b'
+      scope: constant.language.swift
+  double-string:
+    - meta_scope: string.quoted.swift
+    - match: '\\.'
+      scope: constant.character.escape.swift
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.swift
+    - match: '\\.'
+      scope: constant.character.escape.swift
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.swift
+    - match: '\*/'
+      pop: true

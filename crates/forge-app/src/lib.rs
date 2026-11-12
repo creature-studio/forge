@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use forge_config::Config;
-use forge_fs::{Entry, EntryKind, FsError, FsService, Preview, PreviewContent};
+use forge_fs::{Entry, EntryKind, FsError, FsService, Preview, PreviewContent, TextPage};
 use forge_git::{
     DiffHunk, DiffSide, FileDiff, GitReadError, GitService, GitWriteError, StatusSnapshot,
 };
@@ -47,6 +47,12 @@ struct PendingList {
     id: JobId,
     path: PathBuf,
     handle: JobHandle<Result<Vec<Entry>, FsError>>,
+}
+
+struct PendingPreviewPage {
+    path: PathBuf,
+    from_offset: u64,
+    handle: JobHandle<Result<TextPage, FsError>>,
 }
 
 struct PendingStatus {
@@ -164,6 +170,7 @@ struct PreviewState {
     split_cache: SplitRowsCache,
     diff_row_count: usize,
     pending_preview: Option<PendingPreview>,
+    pending_page: Option<PendingPreviewPage>,
     pending_diff: Option<PendingDiff>,
     preview: Option<Preview>,
     preview_loading: bool,
@@ -482,6 +489,7 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             split_cache: SplitRowsCache::default(),
             diff_row_count: 0,
             pending_preview: None,
+            pending_page: None,
             pending_diff: None,
             preview: None,
             preview_loading: false,
@@ -819,6 +827,7 @@ impl App {
         self.preview_state.preview_mode = PreviewMode::File;
         self.clear_diff_view();
         self.preview_state.pending_preview = None;
+        self.cancel_preview_page();
         self.preview_state.pending_diff = None;
         self.services.jobs.cancel_key("fs:preview");
         self.services.jobs.cancel_key("git:diff");
@@ -1025,6 +1034,7 @@ impl App {
         {
             return;
         }
+        self.cancel_preview_page();
         self.reset_blame();
         self.reset_inline_diff();
         self.preview_state.preview_mode = PreviewMode::File;
@@ -1059,12 +1069,55 @@ impl App {
         });
     }
 
+    /// Reload the selected file only when the watcher actually reports a
+    /// change to that file. Keep the old preview visible and preserve scroll
+    /// while its replacement is read asynchronously.
+    fn refresh_preview_if_affected(&mut self, changed_paths: &[PathBuf]) {
+        if !matches!(self.preview_state.preview_mode, PreviewMode::File) {
+            return;
+        }
+        let Some(entry) = self.selected_entry().cloned() else {
+            return;
+        };
+        if matches!(entry.kind, EntryKind::Directory)
+            || !changed_paths.iter().any(|path| path == &entry.path)
+        {
+            return;
+        }
+        let same_preview = self
+            .preview_state
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.path == entry.path);
+        let same_pending = self
+            .preview_state
+            .pending_preview
+            .as_ref()
+            .is_some_and(|pending| pending.path == entry.path);
+        if !same_preview && !same_pending {
+            return; // The next directory load will request the new selection.
+        }
+        self.cancel_preview_page();
+        self.reset_blame();
+        let path = entry.path.clone();
+        let handle = self.services.fs.preview(&self.services.jobs, path.clone(), entry.kind);
+        self.preview_state.pending_preview = Some(PendingPreview {
+            id: handle.id,
+            path,
+            handle,
+        });
+        // Showing the generic Loading view would clamp its one-row content
+        // and silently reset the scroll before the new file bytes arrive.
+        self.preview_state.preview_loading = !same_preview;
+    }
+
     /// Reset the preview for a new diff and return the repository root.
     fn begin_diff(&mut self, source: DiffSource) -> Option<PathBuf> {
         let Some(repo) = self.repo_root() else {
             self.session.status = "not a git repository".into();
             return None;
         };
+        self.cancel_preview_page();
         self.preview_state.preview_mode = PreviewMode::Diff;
         self.preview_state.preview_loading = true;
         self.preview_state.preview_scroll = 0;
@@ -1276,8 +1329,8 @@ impl App {
 
     fn set_file_diff(&mut self, diff: FileDiff) {
         self.preview_state.selection.clear();
-        self.preview_state.split_cache.clear();
-        let count = if diff.lines.is_empty() {
+        self.preview_state.split_cache.set_full_new_lines(diff.full_new_lines.as_deref());
+        let count = if diff.lines.is_empty() && diff.full_new_lines.is_none() {
             1
         } else {
             self.preview_state.split_cache.ensure(&diff.lines).max(1)
@@ -1411,6 +1464,94 @@ impl App {
         } else {
             false
         }
+    }
+
+    fn poll_pending_page(&mut self) -> bool {
+        let done = match self.preview_state.pending_page.as_mut() {
+            Some(pending) => pending.handle.try_join()
+                .map(|result| (pending.path.clone(), pending.from_offset, result)),
+            None => None,
+        };
+        let Some((path, from_offset, result)) = done else {
+            return false;
+        };
+        self.preview_state.pending_page = None;
+        if !matches!(self.preview_state.preview_mode, PreviewMode::File)
+            || self.preview_state.pending_preview.is_some()
+            || !self.selected_entry().is_some_and(|entry| {
+                entry.path == path || matches!(entry.kind, EntryKind::Directory)
+            })
+        {
+            return true;
+        }
+        let Some(preview) = self.preview_state.preview.as_mut() else {
+            return true;
+        };
+        if preview.path != path {
+            return true;
+        }
+        let PreviewContent::Text { lines, truncated, bytes_read } = &mut preview.content else {
+            return true;
+        };
+        if !*truncated || *bytes_read as u64 != from_offset {
+            return true; // Stale page from an older file/selection generation.
+        }
+        match result {
+            Ok(Ok(page)) if page.next_offset > from_offset => {
+                lines.extend(page.lines);
+                *bytes_read = page.next_offset as usize;
+                *truncated = !page.eof;
+                // Keep scroll/focus intact. TextRowsCache will rebuild with
+                // updated byte and line counts at the next draw.
+            }
+            Ok(Ok(_)) => {
+                *truncated = false; // Do not loop forever on a stalled EOF.
+            }
+            Ok(Err(err)) => self.session.status = format!("preview page error: {err}"),
+            Err(JobError::Cancelled | JobError::Shutdown) => {}
+        }
+        true
+    }
+
+    fn cancel_preview_page(&mut self) {
+        self.preview_state.pending_page = None;
+        self.services.jobs.cancel_key("fs:preview:page");
+    }
+
+    /// Fetch the next source-line page when the viewport approaches the
+    /// current end, without eagerly scanning an entire large source file.
+    fn maybe_request_preview_page(&mut self) {
+        if !matches!(self.preview_state.preview_mode, PreviewMode::File)
+            || self.preview_state.preview_loading
+            || self.preview_state.pending_preview.is_some()
+            || self.preview_state.pending_page.is_some()
+        {
+            return;
+        }
+        let Some(preview) = self.preview_state.preview.as_ref() else {
+            return;
+        };
+        let PreviewContent::Text { truncated: true, bytes_read, .. } = &preview.content else {
+            return;
+        };
+        let Some(entry) = self.selected_entry() else {
+            return;
+        };
+        // Selecting a folder deliberately leaves the previous file visible.
+        // It must remain scrollable and pageable in that situation too.
+        if entry.path != preview.path && !matches!(entry.kind, EntryKind::Directory) {
+            return;
+        }
+        let viewport = self.session.layout.preview_inner.height as usize;
+        let remaining = self.preview_total_lines()
+            .saturating_sub(self.preview_state.preview_scroll.saturating_add(viewport));
+        if remaining > viewport.max(32) {
+            return;
+        }
+        let path = preview.path.clone();
+        let from_offset = *bytes_read as u64;
+        let handle = self.services.fs.preview_page(&self.services.jobs, path.clone(), from_offset);
+        self.preview_state.pending_page = Some(PendingPreviewPage { path, from_offset, handle });
     }
 
     fn poll_pending_diff(&mut self) -> bool {
@@ -1637,8 +1778,34 @@ impl App {
                 // previous selection while the requested target is loading.
                 if self.tools.reveal.is_some() {
                     self.try_reveal();
-                } else if matches!(self.preview_state.preview_mode, PreviewMode::File) {
-                    self.request_preview_for_selection();
+                } else if matches!(self.preview_state.preview_mode, PreviewMode::File)
+                    && self.files.external_anchor.is_none()
+                {
+                    // Rebuilding a directory is not a file selection change.
+                    // In particular, other files and Git metadata can refresh
+                    // the tree while the user is reading far down a preview.
+                    // Only request a preview if its selected path truly changed
+                    // (or no preview has been loaded/requested yet).
+                    if let Some(entry) = self.selected_entry() {
+                        let path = &entry.path;
+                        let same_preview = self
+                            .preview_state
+                            .preview
+                            .as_ref()
+                            .is_some_and(|preview| &preview.path == path);
+                        let same_pending = self
+                            .preview_state
+                            .pending_preview
+                            .as_ref()
+                            .is_some_and(|pending| &pending.path == path);
+                        if !same_preview && !same_pending {
+                            self.request_preview_for_selection();
+                        }
+                    } else if self.preview_state.preview.is_none()
+                        && self.preview_state.pending_preview.is_none()
+                    {
+                        self.request_preview_for_selection();
+                    }
                 }
             }
             Ok(Err(err)) => {
@@ -1755,8 +1922,14 @@ impl App {
         result: Result<Result<Preview, FsError>, JobError>,
     ) {
         let current = self.selected_entry();
-        if !current
-            .is_some_and(|entry| entry.path == path || matches!(entry.kind, EntryKind::Directory))
+        let refresh_anchor_matches = self
+            .files
+            .external_anchor
+            .as_ref()
+            .is_some_and(|(selected, _)| selected == &path);
+        if !refresh_anchor_matches
+            && !current
+                .is_some_and(|entry| entry.path == path || matches!(entry.kind, EntryKind::Directory))
         {
             return;
         }
@@ -1766,13 +1939,20 @@ impl App {
 
         match result {
             Ok(Ok(preview)) => {
+                let same_file = self
+                    .preview_state
+                    .preview
+                    .as_ref()
+                    .is_some_and(|old| old.path == path);
                 self.preview_state.selection.clear();
                 self.preview_state.markdown = MarkdownPreview::default();
                 self.preview_state.text_rows.clear();
                 self.preview_state.pending_source_line = None;
                 self.preview_state.preview = Some(preview);
                 self.preview_state.preview_loading = false;
-                self.preview_state.preview_scroll = 0;
+                if !same_file {
+                    self.preview_state.preview_scroll = 0;
+                }
                 if self.tools.reveal.as_ref().is_some_and(|(p, _)| p == &path) {
                     if let Some((_, line)) = self.tools.reveal.take() {
                         if self.markdown_available() {
@@ -1984,6 +2164,110 @@ impl App {
         );
     }
 
+    fn open_staging_section_menu(&mut self, flat: usize, col: u16, row: u16) {
+        let Some(ScmRow::Section { column, .. }) = self.scm_rows().get(flat).cloned() else {
+            return;
+        };
+        let Some(status) = self.scm.git_status.as_ref() else {
+            return;
+        };
+        let has_unstaged = !status.unstaged.is_empty();
+        let has_staged = !status.staged.is_empty();
+        let conflicted = status
+            .unstaged
+            .iter()
+            .any(|e| e.status == forge_git::GitStatus::Conflicted);
+        let discardable = status.unstaged.iter().any(|e| {
+            !matches!(
+                e.status,
+                forge_git::GitStatus::Untracked | forge_git::GitStatus::Conflicted
+            )
+        });
+        use forge_ui::ContextMenuItem;
+        let items = match column {
+            StagingColumn::Unstaged => vec![
+                ContextMenuItem {
+                    action: ContextAction::DiscardAllChanges,
+                    enabled: discardable,
+                },
+                ContextMenuItem {
+                    action: ContextAction::StageAllChanges,
+                    enabled: has_unstaged,
+                },
+                ContextMenuItem {
+                    action: ContextAction::StashUnstagedChanges,
+                    enabled: has_unstaged && !conflicted,
+                },
+                ContextMenuItem {
+                    action: ContextAction::StashAllChanges,
+                    enabled: (has_unstaged || has_staged) && !conflicted,
+                },
+            ],
+            StagingColumn::Staged => vec![ContextMenuItem {
+                action: ContextAction::UnstageAllChanges,
+                enabled: has_staged,
+            }],
+        };
+        self.scm.scm_selected = flat;
+        self.session.focus = PaneFocus::List;
+        self.session.context_menu =
+            ContextMenu::new(items, col, row, ContextTarget::StagingSection { column });
+    }
+
+    fn request_stage_all_changes(&mut self, stage: bool) {
+        if self.write_busy() {
+            return;
+        }
+        let Some(status) = self.scm.git_status.as_ref() else {
+            self.session.status = "Refresh Git status first".into();
+            return;
+        };
+        if (if stage {
+            &status.unstaged
+        } else {
+            &status.staged
+        })
+        .is_empty()
+        {
+            self.session.status = "No changes in this Git section".into();
+            return;
+        }
+        let repo = status.repo_root.clone();
+        let git = self.services.git;
+        // The Git backend sets cwd to the repository root. A single literal
+        // "." pathspec covers the whole worktree including deletions/renames.
+        let paths = vec![std::path::PathBuf::from(".")];
+        let handle =
+            self.services
+                .jobs
+                .spawn(JobPriority::High, Some("git:write".into()), async move {
+                    let result = if stage {
+                        git.stage_paths(&repo, &paths).await
+                    } else {
+                        git.unstage_paths(&repo, &paths).await
+                    };
+                    result.map(|_| None)
+                });
+        self.scm.pending_transfer = None;
+        self.session.status = if stage {
+            "staging all changes..."
+        } else {
+            "unstaging all changes..."
+        }
+        .into();
+        self.session.write_status = Some(self.session.status.clone());
+        self.scm.pending_write = Some(PendingWrite {
+            id: handle.id,
+            op: if stage {
+                WriteOp::Stage
+            } else {
+                WriteOp::Unstage
+            },
+            target: "all repository changes".into(),
+            handle,
+        });
+    }
+
     fn file_stage_flags(&self, abs: &Path) -> (bool, bool) {
         let Some(snap) = &self.scm.git_status else {
             return (false, false);
@@ -2111,6 +2395,36 @@ impl App {
                     ContextAction::Commit => self.open_commit(),
                     ContextAction::Push => self.request_push(),
                     ContextAction::Pull => self.request_pull(),
+                    _ => {}
+                }
+            }
+            ContextTarget::StagingSection { column } => {
+                if self.scm.git_status.is_none() {
+                    self.session.status = "Refresh Git status first".into();
+                    return;
+                }
+                match (column, action) {
+                    (StagingColumn::Unstaged, ContextAction::DiscardAllChanges) => {
+                        if let Some(root) = self.repo_root() {
+                            // Protect untracked/conflicted files and the index, like
+                            // the existing scoped Discard action.
+                            self.discard_scope(vec![root]);
+                        }
+                    }
+                    (StagingColumn::Unstaged, ContextAction::StageAllChanges) => {
+                        self.request_stage_all_changes(true)
+                    }
+                    (StagingColumn::Staged, ContextAction::UnstageAllChanges) => {
+                        self.request_stage_all_changes(false)
+                    }
+                    (StagingColumn::Unstaged, ContextAction::StashUnstagedChanges) => {
+                        self.prompt(tools::PromptAction::StashUnstaged, "Stash Unstaged Changes", String::new(),
+                            "Message · staged/index changes will be preserved · confirmation follows");
+                    }
+                    (StagingColumn::Unstaged, ContextAction::StashAllChanges) => {
+                        self.prompt(tools::PromptAction::Stash, "Stash All Changes", String::new(),
+                            "Message · includes staged, unstaged and untracked files · confirmation follows");
+                    }
                     _ => {}
                 }
             }
@@ -2427,6 +2741,9 @@ impl App {
                     Some(ScmRow::Folder { .. }) => {
                         self.open_staging_folder_menu(self.scm.scm_selected, x, y);
                     }
+                    Some(ScmRow::Section { .. }) => {
+                        self.open_staging_section_menu(self.scm.scm_selected, x, y);
+                    }
                     _ => {}
                 }
             } else if self.files.visible.get(self.files.selected).is_some() {
@@ -2729,6 +3046,7 @@ impl App {
                     self.preview_state.preview_scroll = self
                         .preview_total_lines()
                         .saturating_sub(self.session.layout.preview_inner.height as usize);
+                    self.maybe_request_preview_page();
                 } else {
                     self.session.focus = PaneFocus::List;
                     if self.in_git_sidebar() {
@@ -2946,6 +3264,8 @@ impl App {
                             self.open_staging_context_menu(*column, *index, col, row);
                         } else if let Some(ScmRow::Folder { .. }) = rows.get(flat) {
                             self.open_staging_folder_menu(flat, col, row);
+                        } else if let Some(ScmRow::Section { .. }) = rows.get(flat) {
+                            self.open_staging_section_menu(flat, col, row);
                         }
                     }
                 } else if over_list {
@@ -3238,9 +3558,12 @@ impl App {
         let total = self.preview_total_lines();
         let viewport = self.session.layout.preview_inner.height as usize;
         let max_scroll = total.saturating_sub(viewport);
-        let next = (self.preview_state.preview_scroll as isize + delta)
+        let next = (self.preview_state.preview_scroll as isize).saturating_add(delta)
             .clamp(0, max_scroll as isize) as usize;
         self.preview_state.preview_scroll = next;
+        if delta > 0 {
+            self.maybe_request_preview_page();
+        }
     }
 
     fn move_sel(&mut self, delta: isize) {

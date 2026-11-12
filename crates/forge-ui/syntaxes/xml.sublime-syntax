@@ -1,0 +1,35 @@
+%YAML 1.2
+---
+name: XML
+file_extensions: [xml, xsd, xsl, xslt, svg, plist]
+scope: text.xml
+contexts:
+  main:
+    - match: '<!--'
+      push: comment
+    - match: '<[/!?]?[A-Za-z_:][A-Za-z0-9:_.-]*'
+      scope: entity.name.tag.xml
+      push: attributes
+    - match: '&(?:[A-Za-z]+|#[0-9]+);'
+      scope: constant.character.entity.xml
+  attributes:
+    - match: '/?>'
+      pop: true
+    - match: '[A-Za-z_:][-A-Za-z0-9_:.]*(?=\s*=)'
+      scope: keyword.other.attribute-name.xml
+    - match: '"'
+      push: double-string
+    - match: "'"
+      push: single-string
+  double-string:
+    - meta_scope: string.quoted.double.xml
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.single.xml
+    - match: "'"
+      pop: true
+  comment:
+    - meta_scope: comment.block.xml
+    - match: '-->'
+      pop: true

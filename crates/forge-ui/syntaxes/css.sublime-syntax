@@ -1,0 +1,35 @@
+%YAML 1.2
+---
+name: CSS
+file_extensions: [css, scss]
+scope: source.css
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.css
+    - match: '@[a-zA-Z-]+'
+      scope: keyword.control.css
+    - match: '\b(?:inherit|initial|unset|none|auto|solid|flex|grid|block|inline|important)\b'
+      scope: constant.language.css
+  double-string:
+    - meta_scope: string.quoted.css
+    - match: '\\.'
+      scope: constant.character.escape.css
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.css
+    - match: '\\.'
+      scope: constant.character.escape.css
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.css
+    - match: '\*/'
+      pop: true

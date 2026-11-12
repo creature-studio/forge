@@ -13,6 +13,7 @@ mod preview_pane;
 mod staging;
 mod sticky;
 mod style;
+mod syntax;
 mod tree;
 
 use ratatui::layout::{Position, Rect};
@@ -30,7 +31,7 @@ pub use graph::{
 pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, IconMode, Icons};
 pub use markdown::{wrap_line as wrap_text_line, MarkdownPreview};
 pub use preview_pane::{
-    diff_render_hunk_start, draw_preview, preview_line_count, scroll_to_hunk, PreviewView,
+    diff_render_hunk_start, draw_preview, highlight_code_lines, preview_line_count, scroll_to_hunk, PreviewView,
     SplitRowsCache, TextLang, TextRowsCache,
 };
 pub use staging::{

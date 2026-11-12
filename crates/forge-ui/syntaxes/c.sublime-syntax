@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: C
+file_extensions: [c, h]
+scope: source.c
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.c
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.c
+    - match: '\b(?:auto|break|case|char|const|continue|default|do|double|else|enum|extern|float|for|goto|if|inline|int|long|register|restrict|return|short|signed|sizeof|static|struct|switch|typedef|union|unsigned|void|volatile|while|_Bool|_Atomic)\b'
+      scope: keyword.control.c
+    - match: '\b(?:NULL|true|false)\b'
+      scope: constant.language.c
+  double-string:
+    - meta_scope: string.quoted.c
+    - match: '\\.'
+      scope: constant.character.escape.c
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.c
+    - match: '\\.'
+      scope: constant.character.escape.c
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.c
+    - match: '\*/'
+      pop: true

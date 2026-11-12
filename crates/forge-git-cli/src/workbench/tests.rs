@@ -705,3 +705,41 @@ async fn stash_pop_conflict_keeps_stash_and_worktree_error_visible() {
         "Pop must not remove stash if apply fails"
     );
 }
+
+#[tokio::test]
+async fn stash_unstaged_keeps_index_and_untracked_is_stashed() {
+    let dir = fixture();
+    let root = dir.path();
+    let cli = CliWriteBackend;
+    fs::write(root.join("a.txt"), "staged\n").unwrap();
+    git(root, &["add", "a.txt"]);
+    fs::write(root.join("a.txt"), "unstaged\n").unwrap();
+    fs::write(root.join("untracked.txt"), "new\n").unwrap();
+
+    cli.action(root, GitAction::SaveStashUnstaged("test worktree".into()))
+        .await
+        .unwrap();
+    assert_eq!(git(root, &["show", ":a.txt"]), "staged\n");
+    assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(), "staged\n");
+    assert!(!root.join("untracked.txt").exists());
+    assert!(git(root, &["status", "--porcelain"]).starts_with("M  a.txt\n"));
+    assert!(git(root, &["stash", "list"]).contains("test worktree"));
+}
+
+#[tokio::test]
+async fn stash_all_removes_staged_and_unstaged_changes() {
+    let dir = fixture();
+    let root = dir.path();
+    let cli = CliWriteBackend;
+    fs::write(root.join("a.txt"), "staged\n").unwrap();
+    git(root, &["add", "a.txt"]);
+    fs::write(root.join("a.txt"), "unstaged\n").unwrap();
+    fs::write(root.join("untracked.txt"), "new\n").unwrap();
+
+    cli.action(root, GitAction::SaveStash("test all".into()))
+        .await
+        .unwrap();
+    assert!(git(root, &["status", "--porcelain"]).is_empty());
+    assert!(!root.join("untracked.txt").exists());
+    assert!(git(root, &["stash", "list"]).contains("test all"));
+}

@@ -1,0 +1,37 @@
+%YAML 1.2
+---
+name: C++
+file_extensions: [cc, cpp, cxx, hpp, hh, hxx, ipp]
+scope: source.cpp
+contexts:
+  main:
+    - match: '/\*'
+      push: block-comment
+    - match: '//.*$'
+      scope: comment.line.cpp
+    - match: '"'
+      push: double-string
+    - match: ''''
+      push: single-string
+    - match: '\b(?:0[xX][0-9a-fA-F]+|[0-9]+(?:\.[0-9]+)?)\b'
+      scope: constant.numeric.cpp
+    - match: '\b(?:alignas|auto|break|case|catch|class|const|constexpr|continue|decltype|default|delete|do|else|enum|explicit|extern|false|for|friend|if|inline|mutable|namespace|new|noexcept|nullptr|operator|override|private|protected|public|return|static|struct|switch|template|this|throw|true|try|typedef|typename|using|virtual|void|volatile|while)\b'
+      scope: keyword.control.cpp
+    - match: '\b(?:true|false|nullptr)\b'
+      scope: constant.language.cpp
+  double-string:
+    - meta_scope: string.quoted.cpp
+    - match: '\\.'
+      scope: constant.character.escape.cpp
+    - match: '"'
+      pop: true
+  single-string:
+    - meta_scope: string.quoted.cpp
+    - match: '\\.'
+      scope: constant.character.escape.cpp
+    - match: ''''
+      pop: true
+  block-comment:
+    - meta_scope: comment.block.cpp
+    - match: '\*/'
+      pop: true

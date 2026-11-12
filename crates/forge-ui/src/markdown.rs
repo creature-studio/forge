@@ -56,7 +56,7 @@ impl MarkdownPreview {
         if truncated {
             lines.push(Line::default());
             lines.push(Line::styled(
-                format!("  ... truncated - {bytes_read} bytes shown"),
+                format!("  ↓ Scroll for more · {bytes_read} B"),
                 Style::default().fg(rgb(theme.muted)),
             ));
         }
@@ -459,6 +459,6 @@ mod tests {
         assert!(plain(&empty).contains("(empty file)"));
         let mut truncated = MarkdownPreview::default();
         truncated.ensure(&["# Heading".into()], true, 65536, 40, &Theme::default());
-        assert!(plain(&truncated).contains("truncated - 65536 bytes shown"));
+        assert!(plain(&truncated).contains("Scroll for more · 65536 B"));
     }
 }

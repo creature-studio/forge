@@ -3,6 +3,7 @@ use super::*;
 use std::time::Duration;
 
 pub const MAX_BLAME_BYTES: u64 = 1024 * 1024;
+const MAX_BLAME_LINES: usize = 10_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlameLine {
@@ -21,8 +22,8 @@ impl BlameLine {
 }
 
 impl CliWriteBackend {
-    /// Only attribute the lines the preview actually loaded, at most 400.
-    /// A deadline and file cap bound cost even for pathological histories.
+    /// Attribute up to 10,000 source lines independently of loaded preview pages.
+    /// The 1 MiB file cap and deadline bound pathological histories.
     pub async fn blame(
         &self,
         repo: &Path,
@@ -41,7 +42,7 @@ impl CliWriteBackend {
             if !metadata.is_file() || metadata.len() > MAX_BLAME_BYTES || line_count == 0 {
                 return Ok(Vec::new());
             }
-            let count = line_count.min(400);
+            let count = line_count.min(MAX_BLAME_LINES);
             let path_arg = relative.to_string_lossy().into_owned();
             let tracked = run_git(
                 repo,

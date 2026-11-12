@@ -39,6 +39,9 @@ pub(super) struct HistoryState {
     pub expanded_commits: HashSet<String>,
     pub expanded_dirs: HashSet<String>,
     pub files: HashMap<String, Vec<CommitChange>>,
+    /// Status relative to the current branch's configured fetch upstream.
+    pub upstream: forge_git::UpstreamStatus,
+    pub unpushed: HashSet<String>,
     pending_detail: Option<(String, JobHandle<Result<String>>)>,
     pending_graph: Option<PendingHistory>,
     pending_files: Vec<PendingCommitFiles>,
@@ -63,6 +66,8 @@ impl Default for HistoryState {
             expanded_commits: HashSet::new(),
             expanded_dirs: HashSet::new(),
             files: HashMap::new(),
+            upstream: forge_git::UpstreamStatus::default(),
+            unpushed: HashSet::new(),
             pending_detail: None,
             pending_graph: None,
             pending_files: Vec::new(),
@@ -97,6 +102,8 @@ impl App {
             expanded_commits: &self.history.expanded_commits,
             expanded_dirs: &self.history.expanded_dirs,
             files: &self.history.files,
+            upstream: &self.history.upstream,
+            unpushed: &self.history.unpushed,
         }
     }
 
@@ -320,6 +327,8 @@ impl App {
         match result {
             Ok(Ok(snapshot)) => {
                 self.history.branch = snapshot.branch;
+                self.history.upstream = snapshot.upstream;
+                self.history.unpushed = snapshot.unpushed;
                 self.history.commits = snapshot.commits;
                 self.history.layout = layout_graph(&self.history.commits);
                 self.history.exhausted = self.history.commits.len() < self.history.limit;
