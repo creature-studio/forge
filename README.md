@@ -12,7 +12,7 @@ Linux（x86_64 / aarch64）与 macOS（Intel / Apple Silicon）使用 GitHub Rel
 curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 ```
 
-安装脚本会下载 `forge-<target>.tar.gz`，用同一版本的 `SHA256SUMS` 校验后安装到 `~/.local/bin`。可用 `FORGE_INSTALL_DIR` 指定目录，用 `FORGE_VERSION=v0.1.0` 固定版本。也可以直接下载 <https://github.com/creature-studio/forge/releases/latest> 里的压缩包自行放置。
+安装脚本会下载 `forge-<target>.tar.gz`，用同一版本的 `SHA256SUMS` 校验后安装到 `~/.local/bin`。可用 `FORGE_INSTALL_DIR` 指定目录，用 `FORGE_VERSION=v0.2.0` 固定版本。也可以直接下载 <https://github.com/creature-studio/forge/releases/latest> 里的压缩包自行放置。
 
 ## 更新
 
