@@ -15,6 +15,7 @@ python3 -m http.server 4173 --directory site
 
 - 工作流：`.github/workflows/pages.yml`
 - 触发条件：推送 `master` 且改动 `site/` 或工作流文件；也可以在 Actions 页面手动运行。
+- 构建产物：`site/` 目录，由 GitHub 官方 Pages actions 上传并部署。
 - 线上地址：`https://creature-studio.github.io/forge/`
 - 本地修改 `site/` 后提交并推送 `master` 即可，不需要维护额外的发布分支。
 - 如果绑定自定义域名，请全局替换以下文件中的站点地址：
