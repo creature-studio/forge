@@ -773,6 +773,58 @@ a.terminal-frame:hover {
 }
 
 /* --------------------------------------------------------------------------
+   Themes & composer
+   -------------------------------------------------------------------------- */
+
+.theme-section {
+  border-bottom: 1px solid var(--line-soft);
+  background: radial-gradient(
+    ellipse at 14% 18%,
+    rgba(240, 180, 76, 0.045),
+    transparent 55%
+  );
+}
+
+.composer-section {
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--bg-soft);
+}
+
+.composer-inner {
+  display: grid;
+  grid-template-columns: minmax(0, 0.78fr) minmax(340px, 1.22fr);
+  gap: clamp(36px, 5vw, 76px);
+  align-items: center;
+}
+
+.theme-facts {
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.theme-facts li {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.75;
+}
+
+.theme-facts b {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* --------------------------------------------------------------------------
    Keyboard
    -------------------------------------------------------------------------- */
 
@@ -1274,12 +1326,14 @@ html.js.reveal-ready [data-reveal].is-visible {
 
 @media (max-width: 1080px) {
   .diff-inner,
+  .composer-inner,
   .keyboard-inner,
   .install-inner {
     grid-template-columns: 1fr;
   }
 
-  .diff-section .shot-block {
+  .diff-section .shot-block,
+  .theme-section .shot-block {
     order: 2;
   }
 
@@ -1385,7 +1439,8 @@ html.js.reveal-ready [data-reveal].is-visible {
     margin-top: 28px;
   }
 
-  .diff-inner {
+  .diff-inner,
+  .composer-inner {
     gap: 44px;
   }
 

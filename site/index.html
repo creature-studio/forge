@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <title>Forge — 终端里的 Git 工作台与文件管理器</title>
-  <meta name="description" content="Forge 是运行在终端里的 Git 工作台：文件树、Markdown 与代码预览、并排 Diff、逐行暂存、历史、分支、Stash、Worktree 和全局搜索，一个键盘完成整套工作流。Rust 构建，MIT 开源。">
-  <meta name="keywords" content="终端 Git 工具, TUI Git 客户端, Git 工作台, 终端文件管理器, 代码预览, 并排 Diff, 逐行暂存, Rust, Ratatui, 开源">
+  <meta name="description" content="Forge 是运行在终端里的 Git 工作台：文件树、23 种语言语法高亮、5 套主题、并排 Diff、逐行暂存、多行提交编辑器、历史、分支、Stash、Worktree 和全局搜索，一个键盘完成整套工作流。Rust 构建，MIT 开源。">
+  <meta name="keywords" content="终端 Git 工具, TUI Git 客户端, Git 工作台, 终端文件管理器, 代码语法高亮, 终端主题, 并排 Diff, 逐行暂存, 提交编辑器, Rust, Ratatui, 开源">
   <meta name="author" content="Forge contributors">
   <meta name="application-name" content="Forge">
   <meta name="robots" content="index, follow, max-image-preview:large">
@@ -24,7 +24,7 @@
   <meta property="og:locale" content="zh_CN">
   <meta property="og:url" content="https://creature-studio.github.io/forge/">
   <meta property="og:title" content="Forge — 终端里的 Git 工作台">
-  <meta property="og:description" content="文件树、Diff、历史、搜索和预览，一个终端完成整套 Git 工作流。Rust 构建，MIT 开源。">
+  <meta property="og:description" content="文件树、Diff、历史、搜索、主题与语法高亮，一个终端完成整套 Git 工作流。Rust 构建，MIT 开源。">
   <meta property="og:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
   <meta property="og:image:type" content="image/png">
   <meta property="og:image:width" content="1200">
@@ -33,7 +33,7 @@
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Forge — 终端里的 Git 工作台">
-  <meta name="twitter:description" content="文件树、Diff、历史、搜索和预览，一个终端完成整套 Git 工作流。">
+  <meta name="twitter:description" content="文件树、Diff、历史、搜索、主题与语法高亮，一个终端完成整套 Git 工作流。">
   <meta name="twitter:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
   <meta name="twitter:image:alt" content="Forge 终端 Git 工作台界面">
 
@@ -84,11 +84,14 @@
         },
         "featureList": [
           "文件树与 Git 状态",
-          "Markdown 与代码语法高亮预览",
-          "并排 Diff 与文件、目录、Hunk、行级暂存",
+          "23 种语言语法高亮与 5 套终端主题",
+          "Markdown 与 Rust 原生渲染预览",
+          "并排 Diff，可展开为完整文件对比",
+          "文件、目录、Hunk 与行级暂存",
+          "多行提交编辑器与二次确认",
           "提交历史、分支、Stash 与 Worktree 管理",
           "文件名模糊搜索与全局内容搜索",
-          "命令面板、自定义快捷键与内置主题"
+          "命令面板与自定义快捷键"
         ]
       },
       {
@@ -140,7 +143,15 @@
             "name": "支持哪些语言的语法高亮？",
             "acceptedAnswer": {
               "@type": "Answer",
-              "text": "Forge 的预览支持 Rust、Markdown、Python、Shell、JavaScript、TypeScript、JSON、YAML 和 SQL，并保留行号复制。你还可以把 Sublime 的 .sublime-syntax 文件放入 ~/.config/forge/syntaxes/ 来扩展或覆盖语法。"
+              "text": "内置 23 种语言：Python、TypeScript、JavaScript、Go、C/C++、Java、C#、Ruby、PHP、Lua、Kotlin、Swift、Shell、SQL、JSON、YAML、TOML、HTML、CSS、XML、Dockerfile、PowerShell，以及原生渲染的 Rust 与 Markdown。把 Sublime 的 .sublime-syntax 放进 ~/.config/forge/syntaxes/ 还能扩展或覆盖。"
+            }
+          },
+          {
+            "@type": "Question",
+            "name": "可以换配色主题吗？",
+            "acceptedAnswer": {
+              "@type": "Answer",
+              "text": "可以。设置里提供 current、VS Code Dark、VS Code Black、GitHub Dark 和 Nord 五套主题，选中即时生效，并写入 ~/.config/forge/config.toml 的 theme 键。"
             }
           },
           {
@@ -177,6 +188,7 @@
 
       <nav class="site-nav" id="site-nav" aria-label="主导航">
         <a href="#features">功能</a>
+        <a href="#themes">主题</a>
         <a href="#workflow">工作流</a>
         <a href="#keyboard">快捷键</a>
         <a href="#install">安装</a>
@@ -236,6 +248,7 @@
         <span>Rust + Ratatui</span>
         <span>gix 读取 Git</span>
         <span>无 Electron</span>
+        <span>23 种语言高亮</span>
         <span>ANSI16 / 256 / Truecolor</span>
         <span>MIT License</span>
       </div>
@@ -265,9 +278,9 @@
           <h3>Git</h3>
           <p>CHANGES 与 STAGED 清楚分开。文件、目录、Hunk 或单行，都可以精确暂存，不需要离开当前视图。</p>
           <ul>
-            <li>并排 Diff 与逐行审阅</li>
+            <li>并排 Diff，可展开成完整文件对比</li>
             <li>分支、提交历史、Stash、Worktree</li>
-            <li>Fetch / Pull / Push 与 upstream 状态</li>
+            <li>Fetch / Pull / Push，未推送提交一眼可见</li>
           </ul>
         </article>
 
@@ -276,9 +289,9 @@
           <h3>Preview</h3>
           <p>Markdown 排版、代码语法高亮、行号与 blame 在同一个阅读区。按 F3 在渲染结果和源码之间切换。</p>
           <ul>
-            <li>Rust / Markdown / Python / Shell / TS / SQL</li>
+            <li>23 种语言高亮，含 Python / TS / Go / SQL</li>
+            <li>Rust 与 Markdown 原生渲染，5 套主题</li>
             <li>拖拽选中，Ctrl+C 复制</li>
-            <li>可选 Nerd Font 与 ASCII 图标</li>
           </ul>
         </article>
       </div>
@@ -308,22 +321,90 @@
       <div class="split-copy" data-reveal>
         <p class="eyebrow">02 / Review with precision</p>
         <h2 id="diff-title">审阅不只是看。<br><em>精确到一行。</em></h2>
-        <p>先看整体，再落到细节。Forge 的 Diff 支持文件、目录、Hunk 和单行操作，暂存与取消暂存都保留工作区里的编辑。</p>
+        <p>先看整体，再落到细节。Diff 可以展开成完整文件对比：两侧各自编号，未改动的行也在。暂存仍以 patch 为准，按文件、目录、Hunk 或单行操作，取消暂存不会丢掉工作区里的编辑。</p>
         <ul class="check-list">
           <li><span class="keys"><kbd>s</kbd><kbd>u</kbd></span> 暂存 / 取消暂存选中的文件、目录或 Hunk</li>
           <li><span class="keys"><kbd>I</kbd></span> 打开改动行列表，只操作当前一行</li>
           <li><span class="keys"><kbd>n</kbd><kbd>N</kbd></span> 在 Hunk 之间跳转</li>
-          <li><span class="keys"><kbd>c</kbd></span> 打开提交弹窗，Enter 提交暂存内容</li>
+          <li><span class="keys"><kbd>c</kbd></span> 打开提交编辑器，主题与正文分开写，确认后提交</li>
         </ul>
         <a class="text-link" href="https://github.com/creature-studio/forge/blob/master/README.md#键位" target="_blank" rel="noopener noreferrer">查看完整 Git 操作 <span aria-hidden="true">↗</span></a>
       </div>
       </div>
     </section>
 
+    <section class="section theme-section" id="themes" aria-labelledby="themes-title">
+      <div class="diff-inner">
+        <figure class="shot-block" data-reveal>
+          <a class="terminal-frame" href="assets/forge-theme.png" target="_blank" rel="noopener">
+            <div class="terminal-bar">
+              <span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="terminal-title">forge — github-dark — web/src/render.ts</span>
+              <span class="terminal-size">180 × 42</span>
+            </div>
+            <picture>
+              <source type="image/webp"
+                      srcset="assets/forge-theme-900.webp 900w, assets/forge-theme-1800.webp 1800w"
+                      sizes="(min-width: 1101px) 62vw, 100vw">
+              <img src="assets/forge-theme.png"
+                   width="1800" height="882" loading="lazy" decoding="async"
+                   alt="Forge 使用 GitHub Dark 主题的截图：左侧是展开的文件树，右侧 TypeScript 源码带语法高亮、行号与行内 blame。">
+            </picture>
+          </a>
+          <figcaption>真实界面：GitHub Dark 主题下的 TypeScript 高亮与行内 blame（示例仓库 aurora）。</figcaption>
+        </figure>
+
+        <div class="split-copy" data-reveal>
+          <p class="eyebrow">03 / Make it yours</p>
+          <h2 id="themes-title">五套主题，<br><em>二十三种语言。</em></h2>
+          <p>语法高亮只在你打开脚本时加载：纯 Rust 正则引擎，不链接 Oniguruma，也不加载整包 Sublime 主题。Markdown 与 Rust 继续走原生渲染。</p>
+          <ul class="theme-facts">
+            <li><b>主题</b><span>current、VS Code Dark、VS Code Black、GitHub Dark、Nord，在设置里即时切换并写入配置。</span></li>
+            <li><b>语言</b><span>Python、TypeScript、Go、C/C++、Java、C#、Ruby、PHP、SQL、YAML 等 23 种，按扩展名自动识别。</span></li>
+            <li><b>扩展</b><span>把 <code>.sublime-syntax</code> 放进 <code>~/.config/forge/syntaxes/</code>，就能新增或覆盖语法。</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="section composer-section" id="composer" aria-labelledby="composer-title">
+      <div class="composer-inner">
+        <div class="split-copy" data-reveal>
+          <p class="eyebrow">04 / Commit with intent</p>
+          <h2 id="composer-title">提交之前，<br><em>再确认一次。</em></h2>
+          <p>按 <kbd>c</kbd> 打开提交编辑器：主题单独一行，正文可以写多行。<kbd>Ctrl</kbd> <kbd>S</kbd> 进入确认态，<kbd>Enter</kbd> 才真正提交，<kbd>Esc</kbd> 随时退回草稿。</p>
+          <ul class="theme-facts">
+            <li><b>草稿</b><span>主题建议不超过 72 字符，正文最多 32 行，<kbd>Tab</kbd> 切换字段，<kbd>↑</kbd><kbd>↓</kbd> 移动正文行。</span></li>
+            <li><b>确认</b><span><kbd>Ctrl</kbd> <kbd>S</kbd> 或 <kbd>Ctrl</kbd> <kbd>Enter</kbd> 预览完整消息，<kbd>Enter</kbd> 提交，<kbd>Esc</kbd> 回到编辑。</span></li>
+            <li><b>边界</b><span>只提交已暂存内容；没有 staged 变更时直接拒绝，不会顺手带上未暂存改动。</span></li>
+          </ul>
+        </div>
+
+        <figure class="shot-block" data-reveal>
+          <a class="terminal-frame" href="assets/forge-commit.png" target="_blank" rel="noopener">
+            <div class="terminal-bar">
+              <span class="terminal-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+              <span class="terminal-title">forge — commit composer</span>
+              <span class="terminal-size">Ctrl+S 确认</span>
+            </div>
+            <picture>
+              <source type="image/webp"
+                      srcset="assets/forge-commit-900.webp 900w, assets/forge-commit-1800.webp 1800w"
+                      sizes="(min-width: 1101px) 62vw, 100vw">
+              <img src="assets/forge-commit.png"
+                   width="1800" height="882" loading="lazy" decoding="async"
+                   alt="Forge 提交编辑器截图：主题与多行正文输入，底部提示 Ctrl+S 确认、Esc 取消，背景是已暂存文件的并排 Diff。">
+            </picture>
+          </a>
+          <figcaption>真实界面：提交编辑器叠加在已暂存文件的 Diff 上，主题与正文都在弹窗里完成。</figcaption>
+        </figure>
+      </div>
+    </section>
+
     <section class="section keyboard-section" id="keyboard" aria-labelledby="keyboard-title">
       <div class="keyboard-inner">
       <div class="keyboard-copy" data-reveal>
-        <p class="eyebrow">03 / Keyboard first</p>
+        <p class="eyebrow">05 / Keyboard first</p>
         <h2 id="keyboard-title">键盘优先，<br>但不必背下所有键。</h2>
         <p>常用操作只需要一个字母。忘记时按 <kbd>?</kbd> 打开帮助，按 <kbd>:</kbd> 或 <kbd>Ctrl K</kbd> 搜索全部命令，也可以在设置里重新绑定。</p>
         <p class="muted">鼠标同样可用：单击选择、双击打开、右键菜单、滚轮滚动。</p>
@@ -344,7 +425,7 @@
 
     <section class="section workflow-section" id="workflow" aria-labelledby="workflow-title">
       <div class="section-head" data-reveal>
-        <p class="eyebrow">04 / One continuous flow</p>
+        <p class="eyebrow">06 / One continuous flow</p>
         <h2 id="workflow-title">从打开仓库，<br>到推送完成。</h2>
         <p class="section-lede">六个步骤，不必离开终端。上下文、选中位置和预览都会跟着你。</p>
       </div>
@@ -372,7 +453,7 @@
         </li>
         <li data-reveal>
           <span class="step-num">05</span>
-          <div><h3>提交</h3><p>写说明、提交暂存内容，历史立即更新。</p></div>
+          <div><h3>提交</h3><p>主题单独一行，正文写多行，确认后提交暂存内容。</p></div>
           <span class="keys"><kbd>c</kbd></span>
         </li>
         <li data-reveal>
@@ -385,7 +466,7 @@
 
     <section class="section details-section" id="details" aria-labelledby="details-title">
       <div class="details-head" data-reveal>
-        <p class="eyebrow">05 / Built for real repositories</p>
+        <p class="eyebrow">07 / Built for real repositories</p>
         <h2 id="details-title">为真实仓库而做。</h2>
         <p>不只是把 Git 命令搬进 TUI。Forge 在大仓库、中文路径和不稳定的终端环境里同样认真。</p>
       </div>
@@ -405,11 +486,11 @@
         </div>
         <div data-reveal>
           <dt>Git 原生语义</dt>
-          <dd>使用 gix 读取状态与历史，使用 git CLI 执行写入。分支、Stash、Worktree 和远程操作都遵循 Git 自己的规则。</dd>
+          <dd>使用 gix 读取状态与历史，使用 git CLI 执行写入。未推送的提交会对齐 upstream 标出，暂存与未暂存 gutter 可以分别关闭；分支、Stash、Worktree 都遵循 Git 自己的规则。</dd>
         </div>
         <div data-reveal>
           <dt>终端适配</dt>
-          <dd>支持 ANSI16、ANSI256 与 Truecolor，内置 5 套主题；默认 Unicode 图标，无需 Nerd Font；处理 CJK 宽字符换行。</dd>
+          <dd>支持 ANSI16、ANSI256 与 Truecolor；current、VS Code Dark / Black、GitHub Dark、Nord 五套主题即时切换；默认 Unicode 图标，无需 Nerd Font；处理 CJK 宽字符换行。</dd>
         </div>
         <div data-reveal>
           <dt>明确的失败</dt>
@@ -421,7 +502,7 @@
     <section class="section faq-section" id="faq" aria-labelledby="faq-title">
       <div class="faq-inner">
       <div class="faq-head" data-reveal>
-        <p class="eyebrow">06 / Questions</p>
+        <p class="eyebrow">08 / Questions</p>
         <h2 id="faq-title">开始之前。</h2>
       </div>
 
@@ -448,7 +529,11 @@
         </details>
         <details>
           <summary>支持哪些语言的语法高亮？</summary>
-          <p>Forge 的预览支持 Rust、Markdown、Python、Shell、JavaScript、TypeScript、JSON、YAML 和 SQL，并保留行号复制。你还可以把 Sublime 的 <code>.sublime-syntax</code> 文件放入 <code>~/.config/forge/syntaxes/</code> 来扩展或覆盖语法。</p>
+          <p>内置 23 种语言：Python、TypeScript、JavaScript、Go、C/C++、Java、C#、Ruby、PHP、Lua、Kotlin、Swift、Shell、SQL、JSON、YAML、TOML、HTML、CSS、XML、Dockerfile、PowerShell，以及原生渲染的 Rust 与 Markdown。把 Sublime 的 <code>.sublime-syntax</code> 放进 <code>~/.config/forge/syntaxes/</code> 还能扩展或覆盖。</p>
+        </details>
+        <details>
+          <summary>可以换配色主题吗？</summary>
+          <p>可以。设置里提供 current、VS Code Dark、VS Code Black、GitHub Dark 和 Nord 五套主题，选中即时生效，并写入 <code>~/.config/forge/config.toml</code> 的 <code>theme</code> 键。</p>
         </details>
         <details>
           <summary>Forge 会自动修改或覆盖我的仓库吗？</summary>
@@ -461,7 +546,7 @@
     <section class="section install-section" id="install" aria-labelledby="install-title">
       <div class="install-inner">
       <div class="install-copy" data-reveal>
-        <p class="eyebrow">07 / Get started</p>
+        <p class="eyebrow">09 / Get started</p>
         <h2 id="install-title">把仓库交给<br><em>Forge。</em></h2>
         <p>Linux 与 macOS 均有预编译包。脚本会校验 SHA-256，把二进制放进 <code>~/.local/bin</code>，之后用 <code>forge update</code> 保持更新。</p>
         <div class="install-actions">

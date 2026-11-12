@@ -29,7 +29,7 @@ python3 -m http.server 4173 --directory site
 - `index.html`：语义化单页，含 SoftwareApplication、WebSite、FAQPage 结构化数据
 - `styles.css`：暗色终端视觉、响应式布局、入场与滚动动效
 - `app.js`：移动端导航、滚动显现、安装命令复制（渐进增强）
-- `assets/`：真实 TUI 截图、响应式 WebP、1200×630 社交分享图
+- `assets/`：真实 TUI 截图（工作区、Diff、主题、提交编辑器）、响应式 WebP、1200×630 社交分享图
 - `robots.txt`、`sitemap.xml`、`site.webmanifest`、`favicon.svg`
 
 ## SEO 要点
@@ -43,4 +43,4 @@ python3 -m http.server 4173 --directory site
 
 ## 截图
 
-页面中的两张截图来自实际运行的 Forge（180×42 终端），演示仓库为 `aurora`，不是设计稿。
+页面中的四张截图来自实际运行的 Forge（180×42 终端），演示仓库为 `aurora`，不是设计稿：工作区、并排 Diff、GitHub Dark 主题下的 TypeScript 高亮，以及提交编辑器。
