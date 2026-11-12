@@ -14,9 +14,10 @@ python3 -m http.server 4173 --directory site
 站点由 GitHub Actions 自动发布，Pages 来源设置为 **GitHub Actions**：
 
 - 工作流：`.github/workflows/pages.yml`
-- 触发条件：推送 `master` 且改动 `site/` 或工作流文件；也可以在 Actions 页面手动运行。
-- 构建产物：`site/` 目录，由 GitHub 官方 Pages actions 上传并部署。
+- 触发条件：推送 `master` 且改动 `site/`、`install.sh` 或工作流文件；也可以在 Actions 页面手动运行。
+- 构建产物：`site/` 目录，并在部署前把仓库根目录的 `install.sh` 复制成 `site/install.sh`，由 GitHub 官方 Pages actions 上传并部署。
 - 线上地址：`https://creature-studio.github.io/forge/`
+- 安装脚本地址：`https://creature-studio.github.io/forge/install.sh`，即页面里 `curl -fsSL ... | sh` 使用的那一条
 - 本地修改 `site/` 后提交并推送 `master` 即可，不需要维护额外的发布分支。
 - 如果绑定自定义域名，请全局替换以下文件中的站点地址：
   - `index.html`：`<link rel="canonical">`、`og:url`、`og:image`、`twitter:image`、JSON-LD 中的 URL
