@@ -3,7 +3,7 @@
         xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
   <url>
     <loc>https://creature-studio.github.io/forge/</loc>
-    <lastmod>2026-11-12</lastmod>
+    <lastmod>2026-11-14</lastmod>
     <changefreq>monthly</changefreq>
     <priority>1.0</priority>
     <image:image>
@@ -15,6 +15,17 @@
       <image:loc>https://creature-studio.github.io/forge/assets/forge-diff.png</image:loc>
       <image:title>Forge 并排 Diff</image:title>
       <image:caption>Forge 的文件、Hunk 与行级暂存界面</image:caption>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://creature-studio.github.io/forge/en/</loc>
+    <lastmod>2026-11-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://creature-studio.github.io/forge/assets/forge-workspace.png</image:loc>
+      <image:title>Forge TUI file manager and Git workspace</image:title>
+      <image:caption>Git-aware file tree and Markdown preview in a real terminal</image:caption>
     </image:image>
   </url>
 </urlset>
