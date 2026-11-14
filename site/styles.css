@@ -1501,6 +1501,29 @@ html.js.reveal-ready [data-reveal].is-visible {
     flex: 1 1 auto;
   }
 
+  /* Keep terminal text legible on narrow screens: pan, don't shrink. */
+  a.terminal-frame {
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .terminal-frame .terminal-bar {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+  }
+
+  .terminal-frame picture,
+  .terminal-frame picture img {
+    display: block;
+    width: 1440px;
+    max-width: none;
+    height: auto;
+  }
+
   .terminal-bar {
     height: 32px;
   }
@@ -1645,4 +1668,17 @@ html.js.reveal-ready [data-reveal].is-visible {
     opacity: 1;
     transform: none;
   }
+}
+
+/* Responsive real-terminal screenshots on the English landing page. */
+.en-shots > figure { min-width: 0; margin: 0; padding: 18px; }
+.en-shots .mobile-image-scroll { display: block; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
+.en-shots .mobile-image-scroll img { display: block; width: 100%; height: auto; object-fit: contain; }
+.en-shots > figure figcaption { margin-top: 10px; color: var(--muted); font-size: 13px; }
+.image-pan-hint { display: none; margin: 0 0 10px; font: 11px/1.5 var(--font-mono); color: var(--accent); }
+@media (max-width: 720px) {
+  .en-shots > figure { padding: 18px 0; }
+  .en-shots .mobile-image-scroll { overflow-x: auto; overflow-y: hidden; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
+  .en-shots .mobile-image-scroll img { width: 1440px; max-width: none; height: auto; }
+  .image-pan-hint { display: block; }
 }
