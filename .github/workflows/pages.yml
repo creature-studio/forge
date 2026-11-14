@@ -5,6 +5,7 @@ on:
     branches: [master]
     paths:
       - "site/**"
+      - "scripts/check-site-seo.py"
       - "install.sh"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
@@ -24,6 +25,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Validate SEO and local links
+        run: python3 scripts/check-site-seo.py
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

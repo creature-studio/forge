@@ -68,8 +68,8 @@
       {
         "@type": "SoftwareApplication",
         "@id": "https://creature-studio.github.io/forge/#software",
-        "name": "Forge",
-        "alternateName": "Forge TUI",
+        "name": "Forge TUI",
+        "alternateName": "Forge",
         "applicationCategory": "DeveloperApplication",
         "applicationSubCategory": "Version Control",
         "operatingSystem": "Linux, macOS",
@@ -77,6 +77,13 @@
         "description": "Forge 是运行在终端里的 Git 工作台：文件树、语法高亮预览、并排 Diff、逐行暂存、历史、分支、Stash、Worktree 与全局搜索。",
         "url": "https://creature-studio.github.io/forge/",
         "codeRepository": "https://github.com/creature-studio/forge",
+        "downloadUrl": "https://github.com/creature-studio/forge/releases/latest",
+        "sameAs": ["https://github.com/creature-studio/forge"],
+        "publisher": {
+          "@type": "Organization",
+          "name": "Creature Studio",
+          "url": "https://github.com/creature-studio"
+        },
         "license": "https://opensource.org/license/mit",
         "screenshot": "https://creature-studio.github.io/forge/assets/forge-workspace.png",
         "image": "https://creature-studio.github.io/forge/assets/og-cover.png",
@@ -515,6 +522,11 @@
       </div>
 
       <div class="faq-list" data-reveal>
+        <details>
+          <summary>Forge 与 lazygit、ranger 这类终端工具有什么区别？</summary>
+          <p>lazygit 更专注 Git 操作，ranger 更专注文件浏览；Forge 把文件树、代码预览、Git Diff 和暂存提交放进同一个 TUI 工作区。它不是要替代完整编辑器或 Git 命令，而是减少文件与 Git 工具之间的切换。可阅读 <a href="en/guide/" lang="en" hreflang="en">英文使用指南</a> 查看详细操作流程。</p>
+        </details>
+
         <details open>
           <summary>Forge 是什么？</summary>
           <p>Forge 是一个运行在终端里的 Git 工作台和文件管理器。它把文件树、文件预览、并排 Diff、暂存、提交、历史、分支、Stash、Worktree 和搜索放进同一个 TUI 界面，使用 Rust 构建。</p>
@@ -596,6 +608,7 @@ forge</code></pre>
         <a href="#install">安装</a>
         <a href="https://github.com/creature-studio/forge" target="_blank" rel="noopener noreferrer">GitHub</a>
         <a href="https://github.com/creature-studio/forge/blob/master/README.md" target="_blank" rel="noopener noreferrer">文档</a>
+        <a href="en/guide/" lang="en" hreflang="en">English guide</a>
       </nav>
       <p class="footer-meta">© 2026 Forge · MIT License · Made for the terminal.</p>
     </div>

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forge TUI Guide — Files, Git Diffs, Staging &amp; Terminal Workflow</title>
+<meta name="description" content="What is Forge TUI and how does it compare with Git-only and file-only tools? A practical guide to installation, file browsing, Git diffs, staging, commits, and terminal workflows.">
+<meta name="robots" content="index, follow, max-image-preview:large">
+<meta name="theme-color" content="#0b0d10">
+<link rel="canonical" href="https://creature-studio.github.io/forge/en/guide/">
+<link rel="icon" href="../../favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="../../styles.css">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="Forge">
+<meta property="og:locale" content="en_US">
+<meta property="og:url" content="https://creature-studio.github.io/forge/en/guide/">
+<meta property="og:title" content="Forge TUI Guide — Terminal File Manager + Git Workflow">
+<meta property="og:description" content="A practical guide to Forge: browse source files, review Git diffs, stage and commit, and work over SSH or tmux.">
+<meta property="og:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Forge TUI: Terminal file manager and Git workflow guide",
+  "description": "A practical first-party guide to Forge TUI, its workflow, installation, and constraints.",
+  "mainEntityOfPage": "https://creature-studio.github.io/forge/en/guide/",
+  "datePublished": "2026-11-14",
+  "dateModified": "2026-11-14",
+  "author": {"@type": "Organization", "name": "Creature Studio", "url": "https://github.com/creature-studio"},
+  "publisher": {"@type": "Organization", "name": "Creature Studio", "url": "https://github.com/creature-studio"},
+  "about": {"@type": "SoftwareApplication", "name": "Forge TUI", "url": "https://creature-studio.github.io/forge/en/"},
+  "isAccessibleForFree": true
+}
+</script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="site-header" id="site-header"><div class="header-inner">
+<a class="brand" href="../" aria-label="Forge TUI homepage"><span class="brand-word">FORGE</span><span class="brand-tag">TUI</span></a>
+<button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Open navigation"><span></span><span></span></button>
+<nav class="site-nav" id="site-nav" aria-label="Navigation"><a href="../">Home</a><a href="#workflow">Workflow</a><a href="#questions">Questions</a><a href="../../" lang="zh-CN" hreflang="zh-CN">中文</a><a class="nav-github" href="https://github.com/creature-studio/forge">GitHub</a></nav>
+</div></header>
+<main id="main">
+<article class="guide-body">
+<header class="guide-intro">
+<p class="eyebrow">Forge TUI / Practical guide</p>
+<h1>A terminal file manager and Git workflow, together.</h1>
+<p class="guide-lead">Forge is a keyboard-first terminal user interface built in Rust. It combines a file manager, source preview, and Git operations in one workspace. This guide explains what it does, when it is useful, and how to try it.</p>
+<p class="guide-meta">Forge v0.2.0 · Linux &amp; macOS · MIT open source · <a href="https://github.com/creature-studio/forge">Source repository</a></p>
+</header>
+<nav class="guide-toc" aria-label="On this page"><strong>On this page</strong><a href="#what-is-forge">What Forge is</a><a href="#workflow">Workflow</a><a href="#comparison">Compared with other TUIs</a><a href="#questions">Common questions</a><a href="#sources">Documentation and downloads</a></nav>
+<section id="what-is-forge">
+<h2>What is Forge TUI?</h2>
+<p>Forge is a <strong>terminal file manager and Git TUI</strong>. Its Files view shows a directory tree with status cues and previews for text, code and Markdown. Its Git view shows changes, staged files and history alongside diffs. It also supports branch operations, stash and remote synchronization.</p>
+<p>Forge is for developers who work in a local terminal, SSH session or tmux and want to move from locating a file to reviewing its changes without switching to a separate application. It is <strong>not</strong> a replacement for the Git command-line interface or a full IDE.</p>
+</section>
+<section id="workflow">
+<h2>How to browse files, review diffs and commit</h2>
+<h3>1. Install and open a repository</h3>
+<p>For Linux x86_64/aarch64 (glibc) and macOS Intel/Apple Silicon, download a <a href="https://github.com/creature-studio/forge/releases/latest">prebuilt release</a> or inspect and run the <a href="https://github.com/creature-studio/forge/blob/master/install.sh">installer</a>. The installer verifies the downloaded archive using SHA-256 checksums.</p>
+<pre><code>curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+cd /path/to/your/project
+forge</code></pre>
+<h3>2. Explore the files</h3>
+<p>Use <kbd>F1</kbd> for Files and <kbd>F2</kbd> for Git, or click the workspace tabs. Use <kbd>Ctrl-P</kbd> to find a filename, <kbd>Ctrl-F</kbd> to search contents, and <kbd>F3</kbd> to switch Markdown between rendered preview and source. The built-in editor is available, but you can still use your usual editor.</p>
+<h3>3. Review and stage Git changes</h3>
+<p>The Git view separates working changes from staged changes. Inspect side-by-side or full-file diffs; stage or unstage a file with <kbd>s</kbd> or <kbd>u</kbd> while focused on the Git list. You can also stage individual hunks or lines from the diff view. Unstage does not discard the working file.</p>
+<h3>4. Commit or sync</h3>
+<p>Open the commit editor with <kbd>c</kbd> in the Git view. Review what is staged before committing. When the Git sidebar is focused, <kbd>p</kbd> and <kbd>P</kbd> handle pull and push. Destructive discard and delete operations require confirmation.</p>
+</section>
+<section id="comparison">
+<h2>How is Forge different from lazygit or terminal file managers?</h2>
+<p>These tools emphasize different parts of terminal work. <strong>Lazygit</strong> concentrates on Git interaction. File managers such as <strong>ranger</strong>, <strong>lf</strong> and <strong>nnn</strong> concentrate on navigating files. Forge's design combines a file tree, file/code preview and Git changes in one window. These categories overlap, and the right choice depends on how you work; Forge does not claim to replace every feature of those tools.</p>
+<p>The main difference is <strong>context continuity</strong>: find a file, read its current contents, inspect its Git diff, stage an intended change and commit — all without rebuilding context in a different interface.</p>
+</section>
+<section id="questions">
+<h2>Common questions</h2>
+<h3>Does Forge require a graphical desktop?</h3>
+<p>No. Forge is a terminal application. It is suitable for ordinary terminals and can be used in environments such as SSH or tmux, subject to terminal capabilities. It supports keyboard and mouse navigation.</p>
+<h3>Is Forge available on Windows?</h3>
+<p>The official v0.2.0 prebuilt release matrix contains Linux glibc and macOS binaries, not a native Windows build. Windows users can use WSL with a compatible Linux environment or build from source.</p>
+<h3>Does Forge replace my editor or Git?</h3>
+<p>No. Forge includes a lightweight text editor and can launch an external editor, while its Git write operations use the Git CLI. It is intended to complement rather than replace a full editor or familiar Git commands.</p>
+<h3>Will Forge change files automatically?</h3>
+<p>Browsing and previewing are read-oriented. Stage and unstage are explicit actions; unstage retains your working-directory edits. Destructive delete and discard operations ask for confirmation. Review the diff before applying Git changes.</p>
+<h3>How does Forge handle updates and fonts?</h3>
+<p>Run <code>forge update --check</code> to inspect the latest release or <code>forge update</code> to upgrade. Forge includes Unicode icons by default, so a Nerd Font is optional; ASCII icons are also supported.</p>
+<h3>Is it free and open source?</h3>
+<p>Yes. The repository includes the <a href="https://github.com/creature-studio/forge/blob/master/LICENSE">MIT license</a>, and the source code and release history are available on GitHub.</p>
+</section>
+<section id="sources">
+<h2>Where to find the source, documentation and downloads</h2>
+<p>For feature details and code-level verification, consult the project's own resources rather than relying on a third-party summary:</p>
+<ul>
+<li><a href="https://github.com/creature-studio/forge">GitHub repository and current README</a></li>
+<li><a href="https://github.com/creature-studio/forge/releases/latest">Latest released binaries and checksums</a></li>
+<li><a href="https://github.com/creature-studio/forge/blob/master/docs/usage-reference.md">Full usage reference</a></li>
+<li><a href="https://github.com/creature-studio/forge/blob/master/docs/releasing.md">Release and update details</a></li>
+<li><a href="../">English product homepage with real terminal screenshots</a></li>
+</ul>
+<p>Not all features in the development branch are necessarily part of the latest release. Use the release tag and its source tree to verify what your installed version includes.</p>
+</section>
+</article>
+</main>
+<footer class="site-footer"><div class="footer-inner"><div class="footer-brand"><span class="brand-word">FORGE</span><p>Open-source terminal workspace for files and Git.</p></div><nav class="footer-links" aria-label="Footer"><a href="../">Home</a><a href="https://github.com/creature-studio/forge">Source</a><a href="https://github.com/creature-studio/forge/releases/latest">Download</a></nav><p class="footer-meta">© 2026 Forge · MIT License</p></div></footer>
+<script src="../../app.js" defer></script>
+</body>
+</html>

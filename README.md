@@ -4,7 +4,7 @@
 
 Forge is a keyboard-first TUI file manager and Git workspace built in Rust. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
 
-[Website](https://creature-studio.github.io/forge/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://creature-studio.github.io/forge/) · [Issues](https://github.com/creature-studio/forge/issues)
+[Website](https://creature-studio.github.io/forge/) · [Practical guide](https://creature-studio.github.io/forge/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://creature-studio.github.io/forge/) · [Issues](https://github.com/creature-studio/forge/issues)
 
 ![Forge product tour showing real terminal screenshots of Files, Diff, themes, and Commit](docs/assets/forge-tour.gif)
 
@@ -88,6 +88,7 @@ The executable is produced at `target/release/forge`.
 
 ## Docs & community
 
+- [Practical guide: file browsing, Git staging, comparison and limits](https://creature-studio.github.io/forge/en/guide/)
 - [Detailed usage and developer reference](docs/usage-reference.md)
 - [Releases and self-update](docs/releasing.md)
 - [Themes](docs/themes.md)

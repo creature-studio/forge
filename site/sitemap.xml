@@ -28,4 +28,10 @@
       <image:caption>Git-aware file tree and Markdown preview in a real terminal</image:caption>
     </image:image>
   </url>
+  <url>
+    <loc>https://creature-studio.github.io/forge/en/guide/</loc>
+    <lastmod>2026-11-14</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
 </urlset>

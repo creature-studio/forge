@@ -2,8 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Forge TUI — Terminal File Manager and Git Workspace | Linux &amp; macOS</title>
-<meta name="description" content="Forge is a keyboard-first Rust TUI that combines a terminal file manager and Git workspace: browse files, preview code, review diffs, stage changes, commit, and manage history.">
+<title>Forge TUI — Terminal File Manager &amp; Git Client</title>
+<meta name="description" content="Forge TUI is a Rust terminal file manager and Git client. Browse files, review side-by-side diffs, stage hunks and commit in one keyboard-first Linux/macOS workspace.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="theme-color" content="#0b0d10">
 <link rel="canonical" href="https://creature-studio.github.io/forge/en/">
@@ -21,7 +21,35 @@
 <meta name="twitter:title" content="Forge TUI — Terminal File Manager and Git Workspace">
 <meta name="twitter:image" content="https://creature-studio.github.io/forge/assets/og-cover.png">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Forge TUI","applicationCategory":"DeveloperApplication","operatingSystem":"Linux, macOS","softwareVersion":"0.2.0","url":"https://creature-studio.github.io/forge/en/","codeRepository":"https://github.com/creature-studio/forge","license":"https://github.com/creature-studio/forge/blob/master/LICENSE","image":"https://creature-studio.github.io/forge/assets/forge-workspace.png","description":"A Rust terminal file manager and Git TUI in one keyboard-driven workspace.","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Forge TUI",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS",
+  "softwareVersion": "0.2.0",
+  "url": "https://creature-studio.github.io/forge/en/",
+  "codeRepository": "https://github.com/creature-studio/forge",
+  "license": "https://github.com/creature-studio/forge/blob/master/LICENSE",
+  "image": "https://creature-studio.github.io/forge/assets/forge-workspace.png",
+  "description": "A Rust terminal file manager and Git TUI in one keyboard-driven workspace.",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "@id": "https://creature-studio.github.io/forge/#software",
+  "alternateName": "Forge",
+  "downloadUrl": "https://github.com/creature-studio/forge/releases/latest",
+  "publisher": {
+    "@type": "Organization",
+    "name": "Creature Studio",
+    "url": "https://github.com/creature-studio"
+  },
+  "sameAs": [
+    "https://github.com/creature-studio/forge"
+  ]
+}
 </script>
 </head>
 <body>
@@ -30,7 +58,7 @@
 <a class="brand" href="#top" aria-label="Forge home">
 <svg class="brand-mark" width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 19V7h10M8 13h8" fill="none" stroke="currentColor" stroke-width="2"/></svg><span class="brand-word">FORGE</span><span class="brand-tag">TUI</span></a>
 <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="Open navigation"><span></span><span></span></button>
-<nav class="site-nav" id="site-nav" aria-label="Main navigation"><a href="#features">Features</a><a href="#screenshots">Screenshots</a><a href="#install">Install</a><a href="../" hreflang="zh-CN" lang="zh-CN">中文</a><a class="nav-github" href="https://github.com/creature-studio/forge">GitHub</a></nav>
+<nav class="site-nav" id="site-nav" aria-label="Main navigation"><a href="#features">Features</a><a href="#screenshots">Screenshots</a><a href="guide/">Guide</a><a href="#install">Install</a><a href="../" hreflang="zh-CN" lang="zh-CN">中文</a><a class="nav-github" href="https://github.com/creature-studio/forge">GitHub</a></nav>
 </div></header>
 <main id="main">
 <section class="hero" id="top"><div class="hero-glow" aria-hidden="true"></div><div class="hero-grid-lines" aria-hidden="true"></div>
@@ -62,7 +90,19 @@
 <figure><p class="image-pan-hint">↔ Swipe to inspect · Tap for full image</p><a class="mobile-image-scroll" href="../assets/forge-theme.png" target="_blank" rel="noopener noreferrer"><picture><source type="image/webp" srcset="../assets/forge-theme-900.webp 900w, ../assets/forge-theme-1800.webp 1800w" sizes="(max-width: 720px) 1440px, (min-width: 981px) 33vw, 100vw"><img src="../assets/forge-theme.png" width="1800" height="882" loading="lazy" alt="Forge syntax highlighting in a dark terminal theme"></picture></a><figcaption>Code preview</figcaption></figure>
 <figure><p class="image-pan-hint">↔ Swipe to inspect · Tap for full image</p><a class="mobile-image-scroll" href="../assets/forge-commit.png" target="_blank" rel="noopener noreferrer"><picture><source type="image/webp" srcset="../assets/forge-commit-900.webp 900w, ../assets/forge-commit-1800.webp 1800w" sizes="(max-width: 720px) 1440px, (min-width: 981px) 33vw, 100vw"><img src="../assets/forge-commit.png" width="1800" height="882" loading="lazy" alt="Forge commit dialog in a terminal"></picture></a><figcaption>Commit editor</figcaption></figure>
 </div></section>
-<section class="section install-section" id="install"><div class="section-head"><p class="eyebrow">03 / Get started</p><h2>Install Forge.</h2><p class="section-lede">Prebuilt releases for Linux x86_64/aarch64 (glibc) and macOS Intel/Apple Silicon. No Rust toolchain needed.</p></div>
+<section class="section answers-section" id="questions" aria-labelledby="answers-title">
+<div class="section-head"><p class="eyebrow">03 / Questions developers ask</p>
+<h2 id="answers-title">What does Forge solve?</h2>
+<p class="section-lede">Straight answers about the scope and constraints of the tool, with source documentation for details.</p></div>
+<div class="answer-grid">
+<article><h3>Is Forge a Git client or a file manager?</h3><p>Both. Forge integrates a terminal file tree, source preview and a Git interface. You can inspect files, review diffs and stage modifications in the same TUI.</p></article>
+<article><h3>How is Forge different from lazygit or ranger?</h3><p>Git-first tools such as lazygit focus on Git workflows; file-first tools such as ranger focus on navigation. Forge combines file browsing and Git review. These tools overlap rather than having a universal winner.</p></article>
+<article><h3>Can I use Forge over SSH or in tmux?</h3><p>Forge runs inside a terminal and can be used in SSH or tmux sessions with a compatible terminal. It does not require a graphical desktop or Electron.</p></article>
+<article><h3>What platforms are officially released?</h3><p>v0.2.0 offers Linux glibc binaries for x86_64/aarch64 and macOS binaries for Intel/Apple Silicon. There is no native Windows release in that version; WSL is an alternative.</p></article>
+</div>
+<p class="answers-more"><a href="guide/">Read the practical guide: installation, keyboard shortcuts, diff staging and limitations →</a></p>
+</section>
+<section class="section install-section" id="install"><div class="section-head"><p class="eyebrow">04 / Get started</p><h2>Install Forge.</h2><p class="section-lede">Prebuilt releases for Linux x86_64/aarch64 (glibc) and macOS Intel/Apple Silicon. No Rust toolchain needed.</p></div>
 <div class="install-terminal"><div class="install-terminal-bar"><span>terminal</span></div><pre><code>curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 
 cd /path/to/your/repo
@@ -72,7 +112,7 @@ forge update --check</code></pre></div>
 <p>Review the <a href="https://github.com/creature-studio/forge/blob/master/install.sh"><u>installer</u></a>, <a href="https://github.com/creature-studio/forge/releases/latest"><u>download a release</u></a>, or read the <a href="https://github.com/creature-studio/forge"><u>README and documentation</u></a>. The installer verifies SHA-256 checksums.</p>
 </section>
 </main>
-<footer class="site-footer"><div class="footer-inner"><div class="footer-brand"><span class="brand-word">FORGE</span><p>A keyboard-first terminal workspace for files and Git.</p></div><nav class="footer-links" aria-label="Footer"><a href="../" hreflang="zh-CN">中文</a><a href="https://github.com/creature-studio/forge">GitHub</a><a href="https://github.com/creature-studio/forge/issues">Issues</a><a href="https://github.com/creature-studio/forge/releases/latest">Releases</a></nav><p class="footer-meta">© 2026 Forge · MIT License</p></div></footer>
+<footer class="site-footer"><div class="footer-inner"><div class="footer-brand"><span class="brand-word">FORGE</span><p>A keyboard-first terminal workspace for files and Git.</p></div><nav class="footer-links" aria-label="Footer"><a href="../" hreflang="zh-CN">中文</a><a href="https://github.com/creature-studio/forge">GitHub</a><a href="https://github.com/creature-studio/forge/issues">Issues</a><a href="https://github.com/creature-studio/forge/releases/latest">Releases</a><a href="guide/">Guide</a></nav><p class="footer-meta">© 2026 Forge · MIT License</p></div></footer>
 <script src="../app.js" defer></script>
 </body>
 </html>
