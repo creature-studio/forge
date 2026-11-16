@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.3.1] - 2026-11-16
+
+### Added
+- Embedded Terminal powered by portable-pty and vt100: press F8 to open or hide a persistent Shell session in a bottom pane.
+- Press F11 to maximize or restore Terminal without restarting the Shell; Ctrl+Shift+Enter also works on terminals that report the combination.
+- PTY resize, command input, paste and basic ANSI/VT color/cursor rendering.
+
+### Improved
+- Reserve an independent scrollbar column for previews without a Focus Overview ruler, avoiding overlap with code text.
+- Improve scrollbar track visibility using the theme muted foreground color.
+
+### Notes
+- Terminal starts lazily, uses a capped 2,000-line scrollback and coalesces visible UI refreshes to at most 30 Hz.
+- This release provides one local Shell session; tmux integration and multiple Terminal tabs are not included.
+- F8 hides the panel but keeps the Shell running; exiting Forge terminates the session.
+
 ## [0.3.0] - 2026-11-16
 
 ### Added

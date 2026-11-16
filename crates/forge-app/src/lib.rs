@@ -39,6 +39,7 @@ mod interaction;
 mod keybindings;
 mod tools;
 mod view;
+mod embedded_terminal;
 use ratatui_kit::prelude::*;
 
 /// Double-click window for directory enter.
@@ -225,6 +226,7 @@ struct App {
     history: history::HistoryState,
     blame: blame::BlameState,
     inline_diff: inline_diff::InlineDiff,
+    terminal: Option<embedded_terminal::EmbeddedTerminal>,
 }
 
 /// Read the current branch name from `.git/HEAD` (best-effort, sync).
@@ -533,6 +535,7 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         history: history::HistoryState::default(),
         blame: blame::BlameState::default(),
         inline_diff: inline_diff::InlineDiff::default(),
+        terminal: None,
     };
     app.tools.filter.show_hidden = app.config.show_hidden_files;
     app.request_list();
@@ -2847,6 +2850,50 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        // F11 toggles terminal maximize while preserving the PTY and its
+        // shell session. Ctrl+Shift+Enter is supported when distinguishable.
+        if key.code == KeyCode::F(11)
+            || (key.code == KeyCode::Enter
+                && key.modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT))
+        {
+            if let Some(term) = &mut self.terminal {
+                if term.visible {
+                    term.maximized = !term.maximized;
+                    term.focused = true;
+                    return;
+                }
+            }
+        }
+        // F8 is dependable across terminal emulators; Ctrl+` is a convenience
+        // where the host reports it separately from Ctrl+Space.
+        if key.code == KeyCode::F(8)
+            || (key.code == KeyCode::Char('`') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            if let Some(term) = &mut self.terminal {
+                term.visible = !term.visible;
+                term.focused = term.visible;
+            } else {
+                match embedded_terminal::EmbeddedTerminal::start(&self.files.tree_root, 80, 12) {
+                    Ok(term) => self.terminal = Some(term),
+                    Err(err) => self.session.status = format!("Terminal: {err}"),
+                }
+            }
+            return;
+        }
+        if let Some(term) = &mut self.terminal {
+            if term.visible && term.focused {
+                // Ctrl+Shift+Tab returns focus to Forge without hiding PTY.
+                if key.code == KeyCode::BackTab
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    term.focused = false;
+                } else {
+                    term.send(key);
+                }
+                return;
+            }
+        }
+
         if self.preview_state.find.open {
             if matches!(key.code, KeyCode::F(1) | KeyCode::F(2)) {
                 self.close_file_find();

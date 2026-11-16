@@ -24,6 +24,8 @@ notify = { workspace = true }
 unicode-width = { workspace = true }
 shell-words = { workspace = true }
 regex = { workspace = true }
+portable-pty = "0.9.0"
+vt100 = "0.18.1"
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -118,6 +118,23 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             }
         }
     });
+    // Output reader is blocking on its own thread. Check only while visible,
+    // coalescing high-volume output to <=30 UI refreshes per second.
+    let terminal_app = app;
+    hooks.use_future(async move {
+        loop {
+            tokio::time::sleep(Duration::from_millis(33)).await;
+            let changed = {
+                let model = terminal_app.read();
+                model.terminal.as_ref().is_some_and(|t| t.visible
+                    && t.revision.load(std::sync::atomic::Ordering::Acquire) != t.drawn_revision)
+            };
+            if changed {
+                // Updating State schedules a redraw, but never runs PTY reads.
+                let _model = terminal_app.write();
+            }
+        }
+    });
     // Watch only the root and the directories actually opened in the tree.
     // Registering Recursive on an entire Java/Node monorepo is synchronous in
     // notify/inotify and can block the Tokio UI thread for seconds/minutes,
@@ -266,6 +283,9 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
+            Event::Paste(text) if model.terminal.as_ref().is_some_and(|t| t.visible && t.focused) => {
+                if let Some(term) = &mut model.terminal { term.paste(&text); }
+            },
             _ => return EventResult::Ignored,
         }
         if let Some(handoff) = &editor_handoff {
@@ -307,6 +327,11 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     } else {
         terminal_size.1
     };
+    let terminal_open = model.terminal.as_ref().is_some_and(|t| t.visible);
+    let terminal_maximized = model.terminal.as_ref().is_some_and(|t| t.visible && t.maximized);
+    let terminal_height = if terminal_open && !terminal_maximized && height >= 14 {
+        (height / 3).clamp(5, 16)
+    } else { 0 };
     let dual = width >= 80;
     let show_list = dual || focus != PaneFocus::Preview;
     let show_preview = dual || focus == PaneFocus::Preview;
@@ -331,6 +356,11 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     element!(PaletteProvider(palette: palette) {
         ContextProvider(value: Context::owned(app)) {
             View(flex_direction: Direction::Vertical) {
+                if terminal_maximized {
+                    View(height: Constraint::Min(0)) {
+                        NativePane(kind: PaneKind::Terminal)
+                    }
+                } else {
                 View(height: Constraint::Length(if height >= 12 { 2 } else { 1 })) {
                     NativePane(kind: PaneKind::Header)
                 }
@@ -349,8 +379,14 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                         }
                     }
                 }
+                if terminal_height > 0 {
+                    View(height: Constraint::Length(terminal_height)) {
+                        NativePane(kind: PaneKind::Terminal)
+                    }
+                }
                 View(height: Constraint::Length(if height >= 12 { 3 } else if height >= 5 { 2 } else { 1 })) {
                     NativePane(kind: PaneKind::Footer)
+                }
                 }
             }
             if menu_open {
@@ -490,6 +526,7 @@ enum PaneKind {
     #[default]
     Sidebar,
     Preview,
+    Terminal,
     Divider,
     Footer,
     Menu,
@@ -525,7 +562,7 @@ fn draw_horizontal_position(frame: &mut Frame<'_>, area: Rect, offset: usize, fu
 
 /// One-column read-only scrollbar derived from the existing scroll state.
 fn draw_position_scrollbar(frame: &mut Frame<'_>, area: Rect, first: usize, total: usize, p: Palette) {
-    if area.width < 3 || area.height < 3 || total <= area.height as usize { return; }
+    if area.width < 1 || area.height < 3 || total <= area.height as usize { return; }
     let height = area.height as usize;
     let max_scroll = total.saturating_sub(height);
     let first = first.min(max_scroll);
@@ -538,7 +575,7 @@ fn draw_position_scrollbar(frame: &mut Frame<'_>, area: Rect, first: usize, tota
         frame.buffer_mut()[(x, area.y + y as u16)]
             .set_symbol(if active { "┃" } else { "│" })
             .set_style(Style::default().bg(p.bg)
-                .fg(if active { p.accent } else { p.border }));
+                .fg(if active { p.accent } else { p.fg_dim }));
     }
 }
 
@@ -716,6 +753,16 @@ impl Component for NativePane {
                     area.width -= 3;
                     Some(sidebar)
                 } else { None };
+                // Without the overview ruler, reserve a separate one-cell lane.
+                // Drawing a scrollbar over the preview truncates CJK/diff text
+                // and can leave half of a wide glyph behind the scrollbar.
+                let scrollbar_lane = if ruler_area.is_none() && area.width > 3 {
+                    let lane = Rect::new(area.right() - 1, area.y, 1, area.height);
+                    area.width -= 1;
+                    Some(lane)
+                } else {
+                    None
+                };
                 // The navigation ruler owns three terminal columns. Source
                 // wrapping, Blame cursor validation and code rendering MUST
                 // all use the same effective width. Comparing against the
@@ -920,8 +967,12 @@ impl Component for NativePane {
                     model.session.layout.overview_ruler = ruler;
                 } else {
                     model.session.layout.overview_ruler = Rect::default();
-                    draw_position_scrollbar(drawer.frame, inner, scroll,
-                        model.preview_total_lines(), self.palette);
+                    if let Some(lane) = scrollbar_lane {
+                        // Match the actual viewport after optional bottom bars.
+                        let lane = Rect::new(lane.x, inner.y, lane.width, inner.height);
+                        draw_position_scrollbar(drawer.frame, lane, scroll,
+                            model.preview_total_lines(), self.palette);
+                    }
                 }
                 if let Some((bar, total)) = horizontal_bar {
                     draw_horizontal_position(drawer.frame, bar, model.preview_state.preview_scroll_x, total, self.palette);
@@ -934,6 +985,24 @@ impl Component for NativePane {
                         .border_style(Style::default().fg(self.palette.border)),
                     area,
                 );
+            }
+            PaneKind::Terminal => {
+                let focused = model.terminal.as_ref().is_some_and(|t| t.focused);
+                let maximized = model.terminal.as_ref().is_some_and(|t| t.maximized);
+                let title = if maximized {
+                    " TERMINAL · F11 restore · F8 hide "
+                } else if focused {
+                    " TERMINAL · F11 maximize · F8 hide · Ctrl+Shift+Tab Forge "
+                } else {
+                    " TERMINAL · F11 maximize · F8 focus/hide "
+                };
+                let block = Block::default().title(title).borders(Borders::TOP)
+                    .border_style(Style::default().fg(self.palette.fg_dim));
+                let inner = block.inner(area);
+                drawer.frame.render_widget(block, area);
+                if let Some(term) = &mut model.terminal {
+                    term.render(drawer.frame, inner, self.palette.bg, self.palette.fg);
+                }
             }
             PaneKind::Footer => {
                 model.session.layout.git_sync_status =

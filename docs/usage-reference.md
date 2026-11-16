@@ -14,6 +14,14 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 
 安装脚本会下载 `forge-<target>.tar.gz`，用同一版本的 `SHA256SUMS` 校验后安装到 `~/.local/bin`。可用 `FORGE_INSTALL_DIR` 指定目录，用 `FORGE_VERSION=v0.2.0` 固定版本。也可以直接下载 <https://github.com/creature-studio/forge/releases/latest> 里的压缩包自行放置。
 
+## 内嵌终端（v0.3.1）
+
+按 `F8` 打开/隐藏底部 Terminal。第一次打开时在当前 Forge 项目目录启动本地 Shell；隐藏面板后会话继续运行，再次打开可恢复。按 `F11` 最大化或还原，部分终端也可使用 `Ctrl+Shift+Enter`。
+
+Terminal 有焦点时，普通按键发送给 Shell（包括 `Ctrl+C`）；按 `Ctrl+Shift+Tab` 可将焦点交还 Forge（取决于外层终端能否区分此快捷键）。关闭 Forge 会结束内嵌 Shell。
+
+当前只支持一个内嵌会话；不包含 tmux 持久化，也不能保证所有全屏 CLI 或终端鼠标协议已经兼容。
+
 ## 更新
 
 ```bash
