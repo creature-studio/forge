@@ -2,3 +2,9 @@
 **/*.rs.bk
 .DS_Store
 /forge
+/web/node_modules/
+/web/dist/
+/web/.astro/
+
+# Generated from the root installer during Astro build
+/web/public/install.sh

@@ -1,13 +1,13 @@
-name: Deploy site to GitHub Pages
+name: Deploy Astro site to GitHub Pages
 
 on:
   push:
     branches: [master]
     paths:
-      - "site/**"
-      - "scripts/check-site-seo.py"
-      - "install.sh"
-      - ".github/workflows/pages.yml"
+      - 'web/**'
+      - 'scripts/check-site-seo.py'
+      - 'install.sh'
+      - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
@@ -23,26 +23,23 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.22.1'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install and build Astro
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
       - name: Validate SEO and local links
         run: python3 scripts/check-site-seo.py
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
-
-      - name: Stage site
-        run: |
-          set -eu
-          mkdir -p _site
-          cp -R site/. _site/
-          cp install.sh _site/install.sh
-
-      - name: Upload site artifact
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
-          path: _site
+          path: web/dist
 
   deploy:
     needs: build
@@ -51,6 +48,6 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - name: Deploy to GitHub Pages
+      - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4

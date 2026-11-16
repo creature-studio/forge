@@ -1,0 +1,55 @@
+---
+import Preview from './Preview.astro';
+import faqZh from '../legacy/faq-zh.html?raw';
+const { english = false } = Astro.props;
+const base = english ? '/forge/en/' : '/forge/';
+const docAnchors = english ? ['what-is-forge','workflow','workflow','comparison','questions'] : ['install','files','git','focus','settings'];
+const data = english ? {
+  kicker:'TERMINAL DEV WORKSPACE', title:'Forge', headline:'A focused terminal workspace',
+  desc:'Browse files, inspect changes, search source and manage Git without leaving the terminal. A fast, keyboard-first workflow built with Rust.',
+  download:'Download v0.3.0',guide:'Read documentation',meta:['Open source · MIT','Linux & macOS binaries','Built with Rust'],
+  features:[['▣','File management','Fast browsing, editing and search'],['⑂','Git workflow','Diff · Commit · Stash · History'],['⌕','Focus navigation','Search hits and Git changes at a glance'],['⚡','Lightweight','Native terminal, responsive UI']],
+  docs:'Documentation',docsDesc:'Learn the essentials, explore file and Git workflows, and find useful shortcuts.',
+  docsRows:[['Quick start','Installation and launch'],['Files & editing','Browse, edit and navigate'],['Git review','Diff, stage, commit'],['Focus & Blame','Inspect history and changes'],['Settings','Key bindings and preferences']],
+  notes:'Release notes',notesDesc:'Follow new features, improvements and fixes across versions.',all:'All releases',latest:'Latest',
+  changes:'Focus Overview · Git Change Peek · Blame fixes · performance', prev:'Themes · highlighting · commit composer', old:'First public release',
+} : {
+  kicker:'TERMINAL DEV WORKSPACE',title:'Forge',headline:'高效、现代的终端开发工具',
+  desc:'基于 TUI 的文件与 Git 工作台，集文件浏览、代码预览、差异对比、提交与版本管理于一体，提供流畅、专注的终端开发体验。',
+  download:'立即下载 v0.3.0',guide:'查看文档',meta:['开源免费 · MIT','Linux / macOS 预编译包','Rust 构建'],
+  features:[['▣','文件管理','快速浏览与定位项目文件'],['⑂','Git 全流程','Diff · Commit · Stash · History'],['⌕','关注点导航','快速定位搜索结果与代码改动'],['⚡','轻量高效','原生终端体验，响应迅速']],
+  docs:'操作文档',docsDesc:'从安装、基本操作到高级功能，完整的使用指南。',
+  docsRows:[['快速开始','安装与启动'],['文件与编辑','浏览、搜索与编辑'],['Git 使用','对比、暂存、提交'],['搜索与导航','Focus Overview · Blame'],['设置与快捷键','完整操作参考']],
+  notes:'发布说明',notesDesc:'查看最新版本的功能更新与改进。',all:'全部版本',latest:'最新',
+  changes:'Focus Overview · Git Change Peek · Blame 修复 · 性能优化',prev:'主题、语法高亮与提交体验改进',old:'首次公开版本',
+};
+---
+<main id="main">
+  <section class="hero shell" aria-labelledby="hero-title">
+    <div class="hero-grid">
+      <div class="hero-copy">
+        <p class="eyebrow">{data.kicker}</p>
+        <h1 id="hero-title">{data.title}</h1>
+        <h2>{data.headline}</h2>
+        <p class="summary">{data.desc}</p>
+        <div class="actions"><a class="btn btn-primary" href="https://github.com/creature-studio/forge/releases/latest"><span aria-hidden="true">↓</span> {data.download}</a><a class="btn btn-secondary" href={`${base}guide/`}>{data.guide} <span aria-hidden="true">↗</span></a></div>
+        <div class="hero-meta">{data.meta.map((item)=><span>{item}</span>)}</div>
+      </div>
+      <Preview />
+    </div>
+  </section>
+  <section class="highlights" aria-label={english?'Core features':'核心功能'}><div class="shell highlight-grid">
+    {data.features.map(([symbol,title,description])=><div class="highlight"><div class="symbol" aria-hidden="true">{symbol}</div><h3>{title}</h3><p>{description}</p></div>)}
+  </div></section>
+  <section class="resources shell" aria-label={english?'Documentation and release notes':'文档与发布说明'}><div class="resources-grid">
+    <div class="resource"><div class="resource-heading"><h2><span class="resource-icon" aria-hidden="true">▤</span>{data.docs}</h2><a href={`${base}guide/`}>{data.guide} →</a></div><p>{data.docsDesc}</p>
+      {data.docsRows.map(([title,description],i)=><a class="link-row" href={`${base}guide/#${docAnchors[i]}`}><span>{title}</span><span>{description}　›</span></a>)}
+    </div>
+    <div class="resource"><div class="resource-heading"><h2><span class="resource-icon" aria-hidden="true">◇</span>{data.notes}</h2><a href={`${base}releases/`}>{data.all} →</a></div><p>{data.notesDesc}</p>
+      <a class="link-row release-row" href={`${base}releases/#v030`}><span><strong class="version">v0.3.0 <span>{data.latest}</span></strong><small>{data.changes}</small></span><span>2026-11-16　›</span></a>
+      <a class="link-row release-row" href={`${base}releases/#v020`}><span><strong>v0.2.0</strong><small> · {data.prev}</small></span><span>›</span></a>
+      <a class="link-row release-row" href="https://github.com/creature-studio/forge/releases/tag/v0.1.0"><span><strong>v0.1.0</strong><small> · {data.old}</small></span><span>›</span></a>
+    </div>
+  </div></section>
+  {!english && <section class="faq shell" aria-labelledby="faq-title"><div class="faq-heading"><h2 id="faq-title">常见问题</h2><p>关于安装、Git 操作、字体与配置。</p></div><div class="faq-list"><Fragment set:html={faqZh} /></div></section>}
+</main>

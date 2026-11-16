@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the published Forge Pages HTML, local links, schema and sitemap.
+"""Validate Astro build output, local links, schema and generated sitemap.
 
 Stdlib-only; run before staging or deploying the static site.
 """
@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, unquote
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-SITE = ROOT / "site"
+SITE = ROOT / "web" / "dist"
 ORIGIN = "https://creature-studio.github.io"
 BASE = ORIGIN + "/forge/"
 PAGES = {
@@ -93,7 +93,10 @@ def resolve_local(href: str, source: Path) -> Path | None:
     else:
         if not parts.path:
             return None
-        candidate = source.parent / unquote(parts.path)
+        if parts.path.startswith("/forge/"):
+            candidate = SITE / unquote(parts.path.removeprefix("/forge/"))
+        else:
+            candidate = source.parent / unquote(parts.path)
     if candidate.is_dir():
         candidate = candidate / "index.html"
     return candidate.resolve()
@@ -148,13 +151,13 @@ def main():
         version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
         if len(apps) != 1 or apps[0].get("softwareVersion") != version:
             errors.append(f"{name}: wrong software schema version")
-    sitemap = ET.parse(SITE / "sitemap.xml")
+    sitemap = ET.parse(SITE / "sitemap-0.xml")
     namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     urls = [x.text for x in sitemap.findall(".//s:url/s:loc", namespace)]
     wanted = {v["canonical"] for v in PAGES.values()}
     if set(urls) != wanted or len(urls) != len(wanted):
         errors.append(f"sitemap entries differ: {urls}")
-    if "Sitemap: " + BASE + "sitemap.xml" not in (SITE / "robots.txt").read_text():
+    if "Sitemap: " + BASE + "sitemap-index.xml" not in (SITE / "robots.txt").read_text():
         errors.append("robots.txt missing sitemap link")
     if errors:
         for error in errors:

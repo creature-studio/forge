@@ -1,0 +1,17 @@
+{
+  "name": "forge-site",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev --host 0.0.0.0",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check:site": "npm run build && python3 ../scripts/check-site-seo.py",
+    "prebuild": "node scripts/copy-installer.mjs"
+  },
+  "dependencies": {
+    "astro": "^5.16.0",
+    "@astrojs/sitemap": "^3.7.0"
+  }
+}

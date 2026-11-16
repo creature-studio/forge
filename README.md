@@ -50,9 +50,9 @@ Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and 
 
 | Files & preview | Git review |
 | --- | --- |
-| ![Forge file tree with Git status and Markdown preview](site/assets/forge-workspace-900.webp) | ![Forge side-by-side diff](site/assets/forge-diff-900.webp) |
+| ![Forge file tree with Git status and Markdown preview](web/public/assets/forge-workspace-900.webp) | ![Forge side-by-side diff](web/public/assets/forge-diff-900.webp) |
 | **Themes & code highlighting** | **Commit editor** |
-| ![Forge dark theme and highlighted source](site/assets/forge-theme-900.webp) | ![Forge commit editor](site/assets/forge-commit-900.webp) |
+| ![Forge dark theme and highlighted source](web/public/assets/forge-theme-900.webp) | ![Forge commit editor](web/public/assets/forge-commit-900.webp) |
 
 Screenshots were captured from Forge running in a real terminal. For a larger view, visit the [website](https://creature-studio.github.io/forge/).
 

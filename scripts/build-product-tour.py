@@ -35,7 +35,7 @@ def render():
     frames = []
     duration = []
     for i, (filename, title, caption, ms) in enumerate(SOURCES):
-        path = ROOT / "site/assets" / filename
+        path = ROOT / "web/public/assets" / filename
         with Image.open(path) as raw:
             capture = raw.convert("RGB")
         if capture.width != WIDTH:
