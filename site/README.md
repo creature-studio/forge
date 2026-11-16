@@ -53,3 +53,10 @@ python3 -m http.server 4173 --directory site
 - The Pages workflow runs `python3 scripts/check-site-seo.py` to detect broken local links, malformed JSON-LD, missing sitemap entries and basic metadata issues.
 - GEO here means useful, crawlable explanations that can be cited by search and AI systems, not guaranteed AI recommendations. Google Search does not require `llms.txt` or special AI markup.
 - To evaluate impact, verify ownership in Google Search Console / Bing Webmaster Tools, submit the sitemap and monitor indexed pages and queries. Those services require owner access; code deployment does not imply indexing.
+
+## Public documentation and release notes
+
+- Chinese operation guide: `site/guide/index.html` (`/forge/guide/`), with installation, files, search, staging, Focus Overview, Peek, Blame and shortcuts.
+- Existing English usage guide: `site/en/guide/index.html` (`/forge/en/guide/`).
+- Versioned release notes: `site/releases/index.html` and `site/en/releases/index.html`. The source-controlled changelog remains `CHANGELOG.md`; releases and binary artifacts are hosted on GitHub.
+- Both landing pages link directly to the guides and release notes. Keep `site/sitemap.xml` and `scripts/check-site-seo.py` synchronized whenever adding routes.

@@ -96,6 +96,8 @@ The executable is produced at `target/release/forge`.
 
 ## Docs & community
 
+- [中文操作文档](https://creature-studio.github.io/forge/guide/)
+- [发布说明 / Release notes](https://creature-studio.github.io/forge/releases/)
 - [Practical guide: file browsing, Git staging, comparison and limits](https://creature-studio.github.io/forge/en/guide/)
 - [Detailed usage and developer reference](docs/usage-reference.md)
 - [Releases and self-update](docs/releasing.md)

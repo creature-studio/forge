@@ -19,6 +19,9 @@ PAGES = {
     "index.html": {"lang": "zh-CN", "canonical": BASE},
     "en/index.html": {"lang": "en", "canonical": BASE + "en/"},
     "en/guide/index.html": {"lang": "en", "canonical": BASE + "en/guide/"},
+    "guide/index.html": {"lang": "zh-CN", "canonical": BASE + "guide/"},
+    "releases/index.html": {"lang": "zh-CN", "canonical": BASE + "releases/"},
+    "en/releases/index.html": {"lang": "en", "canonical": BASE + "en/releases/"},
 }
 
 
