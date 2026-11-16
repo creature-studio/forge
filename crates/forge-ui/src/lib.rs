@@ -78,6 +78,8 @@ pub struct PaneLayout {
     pub list_inner: Rect,
     pub preview: Rect,
     pub preview_inner: Rect,
+    /// Clickable focus overview ruler beside a code preview.
+    pub overview_ruler: Rect,
     /// Floating in-file find widget, empty when closed.
     pub file_find_rect: Rect,
     pub markdown_preview_tab: Rect,

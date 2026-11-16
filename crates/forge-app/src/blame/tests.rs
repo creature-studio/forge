@@ -365,3 +365,25 @@ async fn background_edit_refresh_installs_matching_preview_and_attribution() {
     };
     assert_eq!(lines[1], "changed");
 }
+
+#[tokio::test]
+async fn clicked_blame_line_survives_focus_ruler_redraw() {
+    use ratatui_kit::test_util::render_frames;
+    let (dir, path) = fixture();
+    let mut app = app_with_blame(dir.path(), &path).await;
+    app.config.show_overview_ruler = true;
+    let source_row = app.preview_state.text_rows.source_to_row(2);
+    app.blame.cursor = Some((path, source_row, 0));
+    // A narrow source-row cache combined with a wider Preview pane and
+    // the three-column ruler used to reset the click every frame.
+    let buffer = render_frames(
+        element!(super::super::view::Workspace(initial: Some(app))),
+        125,
+        32,
+        3,
+    );
+    let rendered = buffer.content().iter().map(|cell| cell.symbol()).collect::<String>();
+    assert!(rendered.contains("L2  Blame Test"), "clicked Blame row lost after redraw: {rendered}");
+    assert!(rendered.matches("Blame Test").count() >= 2,
+        "Blame must appear alongside the clicked source line as well as below: {rendered}");
+}

@@ -44,7 +44,7 @@ forge update --check
 forge update
 ```
 
-Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and `FORGE_VERSION=v0.2.0` pins a release. See the [release and update guide](docs/releasing.md) for details. Windows is not currently included in the prebuilt release matrix; Windows users can use WSL or build from source.
+Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and `FORGE_VERSION=v0.3.0` pins a release. See the [release and update guide](docs/releasing.md) for details. Windows is not currently included in the prebuilt release matrix; Windows users can use WSL or build from source.
 
 ## See it in action
 
@@ -56,6 +56,13 @@ Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and 
 
 Screenshots were captured from Forge running in a real terminal. For a larger view, visit the [website](https://creature-studio.github.io/forge/).
 
+## What's new in v0.3.0
+
+- **Focus Overview**: optional three-column navigation ruler for search matches, staged/unstaged Git changes and viewport position; click markers to jump, including in paged files.
+- **Git Change Peek**: click a changed-line gutter marker or press `F7` to inspect additions/deletions in a compact overlay, including bounded long text files. It does not push source code down.
+- **Git Blame**: click code for adaptive inline attribution, with full metadata below and `F6` for details.
+- **Responsiveness**: reduced redundant background Git reads and whole-file scans.
+
 ## Keyboard-first quick start
 
 | Key | Action |
@@ -63,6 +70,7 @@ Screenshots were captured from Forge running in a real terminal. For a larger vi
 | `F1` / `F2` | Files / Git |
 | `Ctrl-P` / `Ctrl-F` | Find files / search contents |
 | `F3` | Toggle Markdown preview and source |
+| `F6` / `F7` | Blame details / Git Change Peek (source mode) |
 | `:` / `Ctrl-K` | Command palette |
 | `F4` | Shortcut manager |
 | `,` | Settings |

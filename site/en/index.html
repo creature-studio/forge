@@ -27,7 +27,7 @@
   "name": "Forge TUI",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Linux, macOS",
-  "softwareVersion": "0.2.0",
+  "softwareVersion": "0.3.0",
   "url": "https://creature-studio.github.io/forge/en/",
   "codeRepository": "https://github.com/creature-studio/forge",
   "license": "https://github.com/creature-studio/forge/blob/master/LICENSE",
@@ -76,6 +76,13 @@
 <figcaption>Real Forge terminal screenshot — not a mockup. </figcaption></figure>
 </div></section>
 <div class="proof-strip"><div class="proof-inner"><span>Rust + Ratatui</span><span>Files + Git</span><span>Code previews</span><span>Full-file diff</span><span>Keyboard &amp; mouse</span><span>MIT License</span></div></div>
+<section class="section" id="release-highlights" aria-labelledby="release-title">
+<div class="section-head"><p class="eyebrow">Forge v0.3.0 / Release highlights</p><h2 id="release-title">Find the changes that matter in large files.</h2><p class="section-lede">A compact navigation ruler reveals search results and Git changes without a tiny code minimap.</p></div>
+<div class="feature-columns">
+<article class="feature"><h3>Focus Overview</h3><p>Navigate search hits, staged and unstaged changes, and current viewport position. Click markers to jump or toggle it in Settings.</p></article>
+<article class="feature"><h3>Git Change Peek</h3><p>Click a changed-line gutter marker or press F7 for a red/green diff overlay; paged files are supported. Esc closes it.</p></article>
+<article class="feature"><h3>Blame &amp; responsiveness</h3><p>Click a code line for space-aware Blame attribution, with full details below and on F6. Fewer redundant background Git checks.</p></article>
+</div></section>
 <section class="section features" id="features"><div class="section-head"><p class="eyebrow">01 / One workspace</p>
 <h2>From file browsing to Git review, without context switching.</h2>
 <p class="section-lede">Forge combines a file manager and Git client in one SSH, tmux, or local terminal workspace.</p></div>
@@ -98,7 +105,7 @@
 <article><h3>Is Forge a Git client or a file manager?</h3><p>Both. Forge integrates a terminal file tree, source preview and a Git interface. You can inspect files, review diffs and stage modifications in the same TUI.</p></article>
 <article><h3>How is Forge different from lazygit or ranger?</h3><p>Git-first tools such as lazygit focus on Git workflows; file-first tools such as ranger focus on navigation. Forge combines file browsing and Git review. These tools overlap rather than having a universal winner.</p></article>
 <article><h3>Can I use Forge over SSH or in tmux?</h3><p>Forge runs inside a terminal and can be used in SSH or tmux sessions with a compatible terminal. It does not require a graphical desktop or Electron.</p></article>
-<article><h3>What platforms are officially released?</h3><p>v0.2.0 offers Linux glibc binaries for x86_64/aarch64 and macOS binaries for Intel/Apple Silicon. There is no native Windows release in that version; WSL is an alternative.</p></article>
+<article><h3>What platforms are officially released?</h3><p>v0.3.0 offers Linux glibc binaries for x86_64/aarch64 and macOS binaries for Intel/Apple Silicon. There is no native Windows release in that version; WSL is an alternative.</p></article>
 </div>
 <p class="answers-more"><a href="guide/">Read the practical guide: installation, keyboard shortcuts, diff staging and limitations →</a></p>
 </section>

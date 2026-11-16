@@ -139,7 +139,11 @@ def main():
             for item in schema.get("@graph", [schema])
             if item.get("@type") == "SoftwareApplication"
         ]
-        if len(apps) != 1 or apps[0].get("softwareVersion") != "0.2.0":
+        # The release metadata must follow the workspace version, not a stale
+        # version literal maintained in this validator.
+        import tomllib
+        version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
+        if len(apps) != 1 or apps[0].get("softwareVersion") != version:
             errors.append(f"{name}: wrong software schema version")
     sitemap = ET.parse(SITE / "sitemap.xml")
     namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}

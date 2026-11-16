@@ -5,7 +5,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 use std::hash::{Hash, Hasher};
@@ -138,9 +138,8 @@ fn preview_hash(preview: &Preview) -> Option<u64> {
     match &preview.content {
         PreviewContent::Text {
             lines,
-            truncated: false,
             ..
-        } => Some(fingerprint(lines)),
+        } => Some(fingerprint(&lines[..lines.len().min(forge_fs::PREVIEW_MAX_LINES)])),
         _ => None,
     }
 }
@@ -219,20 +218,24 @@ fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
     }
 }
 
+// Peek requires only a bounded source snapshot, independent of how many
+// pages of a long file have been displayed.
+const PEEK_MAX_BYTES: usize = 2 * 1024 * 1024;
+
 async fn snapshot(git: GitService, repo: &Path, path: &Path) -> Result<(Key, Preview)> {
     use tokio::io::AsyncReadExt;
     let meta = tokio::fs::symlink_metadata(path).await?;
     anyhow::ensure!(
-        meta.is_file() && meta.len() <= forge_fs::PREVIEW_MAX_BYTES as u64,
+        meta.is_file() && meta.len() <= PEEK_MAX_BYTES as u64,
         "ineligible source"
     );
     let mut bytes = Vec::new();
     tokio::fs::File::open(path)
         .await?
-        .take((forge_fs::PREVIEW_MAX_BYTES + 1) as u64)
+        .take((PEEK_MAX_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
         .await?;
-    anyhow::ensure!(bytes.len() <= forge_fs::PREVIEW_MAX_BYTES, "source grew");
+    anyhow::ensure!(bytes.len() <= PEEK_MAX_BYTES, "source grew");
     let root = repo.to_owned();
     let index = tokio::task::spawn_blocking(move || {
         git.read
@@ -268,10 +271,9 @@ async fn read(
     let staged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Staged).await?;
     let (after, _) = snapshot(git, &repo, &path).await?;
     anyhow::ensure!(key == after, "source or index changed during diff");
-    let count = match &fresh.content {
-        PreviewContent::Text { lines, .. } => lines.len(),
-        _ => 0,
-    };
+    // The preview is intentionally paginated to 400 lines. Git hunks must
+    // nevertheless retain their real file-wide line positions.
+    let count = overview_source_lines(&path).await?;
     let mut staged_hunks = hunks(&staged, usize::MAX);
     map_staged_marks(&diff, &mut staged_hunks, count);
     Ok(Read {
@@ -282,8 +284,24 @@ async fn read(
     })
 }
 
+/// Independent file-wide Git marks, including files whose preview is paged.
+/// The focus ruler remains available even for files beyond the Peek byte cap.
+struct OverviewRead {
+    path: PathBuf,
+    source_lines: usize,
+    marks: Vec<(usize, Color)>,
+}
+
+#[derive(Default)]
+struct OverviewState {
+    active: Option<OverviewRead>,
+    pending: Option<(PathBuf, JobHandle<Result<OverviewRead>>)>,
+    checked: Option<Instant>,
+}
+
 #[derive(Default)]
 pub(super) struct InlineDiff {
+    overview: OverviewState,
     active: Option<Read>,
     pending: Option<(PathBuf, u64, JobHandle<Result<Read>>)>,
     checked: Option<Instant>,
@@ -292,7 +310,105 @@ pub(super) struct InlineDiff {
     offset: usize,
 }
 
+/// Count lines in bounded chunks, not by allocating the whole file or preview.
+/// Large files beyond this limit retain the scrollbar without misleading marks.
+async fn overview_source_lines(path: &Path) -> Result<usize> {
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let size = file.metadata().await?.len();
+    anyhow::ensure!(size <= 128 * 1024 * 1024, "overview source too large");
+    let mut buf = [0u8; 64 * 1024];
+    let mut lines = 0usize;
+    let mut last = None;
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 { break; }
+        lines += buf[..n].iter().filter(|&&b| b == b'\n').count();
+        last = Some(buf[n - 1]);
+    }
+    Ok(lines + usize::from(last.is_some_and(|b| b != b'\n')))
+}
+
+async fn read_overview(git: GitService, repo: PathBuf, path: PathBuf) -> Result<OverviewRead> {
+    let source_lines = overview_source_lines(&path).await?;
+    let rel = forge_model::path_to_rela(path.strip_prefix(&repo)?);
+    let unstaged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Unstaged).await?;
+    let staged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Staged).await?;
+    let mut staged_hunks = hunks(&staged, usize::MAX);
+    map_staged_marks(&unstaged, &mut staged_hunks, source_lines);
+    let mut marks = Vec::new();
+    for hunk in staged_hunks {
+        for (line, _) in hunk.marks {
+            marks.push((line, Color::Blue));
+        }
+    }
+    for hunk in hunks(&unstaged, source_lines) {
+        for (line, change) in hunk.marks {
+            marks.push((line, change.color()));
+        }
+    }
+    Ok(OverviewRead { path, source_lines, marks })
+}
+
 impl App {
+    /// File-wide overview is independent of the size-limited inline gutter.
+    fn overview_path(&self) -> Option<PathBuf> {
+        if self.preview_state.preview_loading
+            || !matches!(self.preview_state.preview_mode, PreviewMode::File)
+            || self.editing.active()
+            || (self.markdown_available() && !self.preview_state.markdown_code)
+        { return None; }
+        match &self.preview_state.preview.as_ref()?.content {
+            PreviewContent::Text { .. } => Some(self.preview_state.preview.as_ref()?.path.clone()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn overview_git_data(&self) -> Option<(usize, &[(usize, Color)])> {
+        let path = self.overview_path()?;
+        let data = self.inline_diff.overview.active.as_ref()?;
+        (data.path == path).then_some((data.source_lines, data.marks.as_slice()))
+    }
+
+    fn tick_overview_git(&mut self) {
+        // The watcher invalidates cached Git marks when source/HEAD/index
+        // changes. Disabled overview must not run an expensive file-wide diff.
+        if !self.config.show_overview_ruler {
+            return;
+        }
+        let Some(path) = self.overview_path() else {
+            self.inline_diff.overview.active = None;
+            return;
+        };
+        if self.inline_diff.overview.pending.is_some()
+            || self.inline_diff.overview.checked.is_some_and(|t| {
+                self.inline_diff.overview.active.as_ref().is_some_and(|a| a.path == path)
+                    && t.elapsed() < Duration::from_secs(30)
+                || self.inline_diff.overview.active.is_none()
+                    && t.elapsed() < Duration::from_secs(10)
+            })
+        { return; }
+        let Some(repo) = self.repo_root().filter(|root| path.starts_with(root)) else { return; };
+        let git = self.services.git;
+        let query_path = path.clone();
+        let handle = self.services.jobs.spawn(JobPriority::Low,
+            Some("git:overview".into()), async move {
+                read_overview(git, repo, query_path).await
+            });
+        self.inline_diff.overview.pending = Some((path, handle));
+        self.inline_diff.overview.checked = Some(Instant::now());
+    }
+
+    fn poll_overview_git(&mut self) {
+        let done = self.inline_diff.overview.pending.as_mut().and_then(|(path, job)| {
+            job.try_join().map(|result| (path.clone(), result))
+        });
+        let Some((path, result)) = done else { return; };
+        self.inline_diff.overview.pending = None;
+        if self.overview_path().as_ref() != Some(&path) { return; }
+        self.inline_diff.overview.active = result.ok().and_then(Result::ok);
+    }
+
     fn inline_path(&self) -> Option<PathBuf> {
         if self.preview_state.preview_loading
             || !matches!(self.preview_state.preview_mode, PreviewMode::File)
@@ -308,18 +424,20 @@ impl App {
 
     pub(super) fn reset_inline_diff(&mut self) {
         self.services.jobs.cancel_key("git:gutter");
+        self.services.jobs.cancel_key("git:overview");
         self.inline_diff = InlineDiff::default();
     }
 
     pub(super) fn tick_inline_diff(&mut self) {
+        self.tick_overview_git();
         let Some(path) = self.inline_path() else {
             return;
         };
         if self.inline_diff.pending.is_some()
-            || self
-                .inline_diff
-                .checked
-                .is_some_and(|t| t.elapsed() < Duration::from_secs(1))
+            || self.inline_diff.checked.is_some_and(|t| {
+                t.elapsed() < Duration::from_secs(
+                    if self.inline_active().is_some() { 30 } else { 10 })
+            })
         {
             return;
         }
@@ -345,6 +463,7 @@ impl App {
     }
 
     pub(super) fn poll_inline_diff(&mut self) {
+        self.poll_overview_git();
         let done = self
             .inline_diff
             .pending
@@ -580,36 +699,73 @@ impl App {
                 .len()
                 .saturating_sub(height.saturating_sub(2) as usize),
         );
-        let lines = hunk
-            .lines
-            .iter()
-            .skip(offset)
-            .take(height.saturating_sub(2) as usize)
-            .map(|(kind, text)| {
-                Line::from(Span::styled(
-                    text.clone(),
-                    Style::default().fg(match kind {
-                        DiffLineKind::Delete => Color::Red,
-                        DiffLineKind::Add => Color::Green,
-                        _ => Color::Gray,
-                    }),
-                ))
-            })
-            .collect::<Vec<_>>();
-        let title = format!(
-            " [×] Esc · {} · {}/{} · {} ",
-            if matches!(side, DiffSide::Staged) { "Staged" } else { "Unstaged" },
-            offset + 1,
-            hunk.lines.len(),
-            hunk.header
-        );
+        // VS Code-inspired change peek: narrow accent, restrained heading and
+        // full-width added/deleted row backgrounds. Do not cover source outside
+        // the existing peek rectangle or alter its mouse hit-testing.
+        let surface = Color::Rgb(24, 27, 34);
+        let rule = Color::Rgb(65, 75, 91);
+        let accent = if matches!(side, DiffSide::Staged) {
+            Color::Rgb(94, 157, 226)
+        } else {
+            Color::Rgb(77, 181, 147)
+        };
         frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(lines)
-                .style(Style::default().bg(Color::Black).fg(Color::White))
-                .block(Block::default().borders(Borders::ALL).title(title)),
-            popup,
-        );
+        for row in popup.y..popup.bottom() {
+            for column in popup.x..popup.right() {
+                frame.buffer_mut()[(column, row)]
+                    .set_symbol(" ")
+                    .set_style(Style::default().bg(surface).fg(Color::Gray));
+            }
+        }
+        // One-cell side accent and quiet horizontal header divider.
+        for row in popup.y..popup.bottom() {
+            frame.buffer_mut()[(popup.x, row)]
+                .set_symbol("▏")
+                .set_style(Style::default().fg(accent).bg(surface));
+        }
+        for column in popup.x + 1..popup.right() {
+            frame.buffer_mut()[(column, popup.y + 1)]
+                .set_symbol("─")
+                .set_style(Style::default().fg(rule).bg(surface));
+        }
+        let side_label = if matches!(side, DiffSide::Staged) { "STAGED" } else { "WORKTREE" };
+        let heading = Line::from(vec![
+            Span::styled("  ◇ ", Style::default().fg(accent)),
+            Span::styled("Changes", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  {side_label}  ·  {}/{}  ·  {}", offset + 1,
+                hunk.lines.len(), hunk.header), Style::default().fg(Color::Gray)),
+        ]);
+        frame.render_widget(Paragraph::new(heading).style(Style::default().bg(surface)),
+            Rect::new(popup.x + 1, popup.y, popup.width.saturating_sub(3), 1));
+        frame.render_widget(Paragraph::new("×").style(Style::default().fg(Color::Gray).bg(surface)),
+            Rect::new(popup.right() - 2, popup.y, 1, 1));
+        // Keep rows clipped to this pane and use a full-width tinted line,
+        // rather than highlighting only the changed characters.
+        for (index, (kind, content)) in hunk.lines.iter().skip(offset)
+            .take(height.saturating_sub(2) as usize).enumerate()
+        {
+            let y = popup.y + 2 + index as u16;
+            let (color, background, glyph) = match kind {
+                DiffLineKind::Delete => (Color::Rgb(232, 130, 138), Color::Rgb(52, 31, 39), "−"),
+                DiffLineKind::Add => (Color::Rgb(131, 215, 161), Color::Rgb(28, 52, 42), "+"),
+                _ => (Color::Rgb(173, 184, 198), surface, " "),
+            };
+            for x in popup.x + 1..popup.right() {
+                frame.buffer_mut()[(x, y)].set_symbol(" ")
+                    .set_style(Style::default().fg(color).bg(background));
+            }
+            frame.render_widget(Paragraph::new(glyph)
+                .style(Style::default().fg(color).bg(background)),
+                Rect::new(popup.x + 2, y, 1, 1));
+            // Source strings retain their original diff prefix, so strip it
+            // only where a dedicated gutter symbol now represents it.
+            let shown = if matches!(kind, DiffLineKind::Add | DiffLineKind::Delete) {
+                content.get(1..).unwrap_or(content)
+            } else { content.as_str() };
+            frame.render_widget(Paragraph::new(shown)
+                .style(Style::default().fg(color).bg(background)),
+                Rect::new(popup.x + 4, y, popup.width.saturating_sub(5), 1));
+        }
         self.inline_diff.offset = offset;
         self.inline_diff.popup = popup;
     }

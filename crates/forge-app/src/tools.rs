@@ -414,6 +414,7 @@ pub(super) enum Command {
     ToggleStagedGutter,
     ToggleUnstagedGutter,
     ToggleCodeWrap,
+    ToggleOverviewRuler,
     ShortcutSettings,
     Discard,
     Branches,
@@ -1082,6 +1083,10 @@ impl App {
                     value: RowValue::Command(Command::ToggleCodeWrap),
                 },
                 ToolRow {
+                    label: format!("Focus Overview [{}]", if self.config.show_overview_ruler { "On" } else { "Off" }),
+                    value: RowValue::Command(Command::ToggleOverviewRuler),
+                },
+                ToolRow {
                     label: format!("Git Gutter: staged [{}]", if self.config.git.show_staged_gutter { "On" } else { "Off" }),
                     value: RowValue::Command(Command::ToggleStagedGutter),
                 },
@@ -1094,7 +1099,7 @@ impl App {
                     value: RowValue::Command(Command::ShortcutSettings),
                 },
             ];
-            panel.detail = "DISPLAY & NAVIGATION\nTree Sticky Scroll pins parent folders while scrolling.\nCompact Folders joins loaded unbranched directory chains.\nShow hidden files displays dotfiles in Files.\n\nKEYBOARD\nF4 opens searchable keyboard shortcuts.\n\nSettings save to forge/config.toml. Enter or Space to toggle; Esc closes.".into();
+            panel.detail = "DISPLAY & NAVIGATION\nFocus Overview shows Git changes, search matches and viewport position; click to jump.\nTree Sticky Scroll pins parent folders while scrolling.\nCompact Folders joins loaded unbranched directory chains.\nShow hidden files displays dotfiles in Files.\n\nKEYBOARD\nF4 opens searchable keyboard shortcuts.\n\nSettings save to forge/config.toml. Enter or Space to toggle; Esc closes.".into();
             return;
         }
         if matches!(kind, PanelKind::Commands | PanelKind::Filters) {
@@ -1454,6 +1459,29 @@ impl App {
                     }
                     Err(err) => {
                         self.session.status = format!("Code auto wrap not saved: {err}");
+                        if let Some(p) = &mut self.tools.panel { p.message = self.session.status.clone(); }
+                    }
+                }
+            }
+            ToggleOverviewRuler => {
+                let mut next = self.config.clone();
+                next.show_overview_ruler = !next.show_overview_ruler;
+                match next.save() {
+                    Ok(()) => {
+                        self.config = next;
+                        // A changed preview width is measured on the next draw.
+                        self.preview_state.text_rows.clear();
+                        self.blame.cursor = None;
+                        self.session.status = format!("Focus Overview: {} · saved",
+                            if self.config.show_overview_ruler { "On" } else { "Off" });
+                        let selected = self.tools.panel.as_ref().map_or(0, |p| p.selected);
+                        self.reload_tools();
+                        if let Some(p) = &mut self.tools.panel {
+                            p.selected = selected.min(p.rows.len().saturating_sub(1));
+                        }
+                    }
+                    Err(err) => {
+                        self.session.status = format!("Focus Overview not saved: {err}");
                         if let Some(p) = &mut self.tools.panel { p.message = self.session.status.clone(); }
                     }
                 }

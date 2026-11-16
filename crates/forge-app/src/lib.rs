@@ -172,6 +172,8 @@ struct PreviewState {
     text_rows: TextRowsCache,
     /// Source file line to seek once Code rows have been measured for width.
     pending_source_line: Option<usize>,
+    /// Source-line jump requested from the overview ruler; survives preview paging.
+    pending_overview_line: Option<usize>,
     /// UTF-8 byte column of a pending in-file Find result.
     pending_find_byte: Option<usize>,
     split_cache: SplitRowsCache,
@@ -495,6 +497,7 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             selection: PreviewSelection::default(),
             text_rows: TextRowsCache::default(),
             pending_source_line: None,
+            pending_overview_line: None,
             pending_find_byte: None,
             split_cache: SplitRowsCache::default(),
             diff_row_count: 0,
@@ -1087,6 +1090,7 @@ impl App {
         self.preview_state.markdown = MarkdownPreview::default();
         self.preview_state.text_rows.clear();
         self.preview_state.pending_source_line = None;
+        self.preview_state.pending_overview_line = None;
         self.preview_state.pending_find_byte = None;
         self.clear_diff_view();
         self.services.jobs.cancel_key("git:diff");
@@ -1580,7 +1584,58 @@ impl App {
             Err(JobError::Cancelled | JobError::Shutdown) => {}
         }
         self.advance_file_find_jump();
+        self.advance_overview_jump();
         true
+    }
+
+    /// Advance a focus-ruler jump, loading additional pages only as needed.
+    fn advance_overview_jump(&mut self) {
+        let Some(target) = self.preview_state.pending_overview_line else { return; };
+        let Some(preview) = self.preview_state.preview.as_ref() else { return; };
+        let PreviewContent::Text { lines, truncated, .. } = &preview.content else {
+            self.preview_state.pending_overview_line = None;
+            return;
+        };
+        if target <= lines.len() || !*truncated {
+            let target = target.min(lines.len().max(1));
+            self.preview_state.pending_overview_line = None;
+            self.preview_state.pending_source_line = Some(target);
+            self.preview_state.pending_find_byte = None;
+            self.preview_state.preview_scroll = self.preview_state.text_rows.source_to_row(target);
+        } else {
+            self.maybe_request_preview_page();
+        }
+    }
+
+    /// Marker priority is search over Git; clicking empty track seeks proportionally.
+    fn overview_click_target(&self, row: usize, height: usize) -> Option<usize> {
+        let source_total = self.overview_git_data().map(|(n, _)| n)
+            .or_else(|| match &self.preview_state.preview.as_ref()?.content {
+                PreviewContent::Text { lines, .. } => Some(lines.len()),
+                _ => None,
+            })?.max(1);
+        let scale = |line: usize| line.saturating_sub(1)
+            .saturating_mul(height.saturating_sub(1)) / source_total.saturating_sub(1).max(1);
+        let y = row.min(height.saturating_sub(1));
+        let find = &self.preview_state.find;
+        if find.open && !find.query.is_empty()
+            && self.preview_state.preview.as_ref().is_some_and(|p| p.path == find.path) {
+            if let Some(hit) = find.matches.iter()
+                .filter(|hit| scale(hit.line) == y)
+                .min_by_key(|hit| hit.line.abs_diff(y * source_total / height.max(1)))
+            { return Some(hit.line); }
+        }
+        if let Some((_, git)) = self.overview_git_data() {
+            if let Some(&(line, _)) = git.iter()
+                .filter(|(line, _)| scale(*line) == y)
+                .min_by_key(|(line, color)| {
+                    (usize::from(*color == ratatui::style::Color::Blue),
+                     line.abs_diff(y * source_total / height.max(1)))
+                })
+            { return Some(line); }
+        }
+        Some(1 + y.saturating_mul(source_total.saturating_sub(1))
+            / height.saturating_sub(1).max(1))
     }
 
     fn cancel_preview_page(&mut self) {
@@ -1621,7 +1676,10 @@ impl App {
         let remaining = self
             .preview_total_lines()
             .saturating_sub(self.preview_state.preview_scroll.saturating_add(viewport));
-        if remaining > viewport.max(32) && self.preview_state.find.jump_target.is_none() {
+        if remaining > viewport.max(32)
+            && self.preview_state.find.jump_target.is_none()
+            && self.preview_state.pending_overview_line.is_none()
+        {
             return;
         }
         let path = preview.path.clone();
@@ -3411,6 +3469,21 @@ impl App {
         // The terminal is in mouse-capture mode, so native OS text selection
         // cannot work. Preview selection owns left drag events instead.
         let region = self.session.layout.preview_inner;
+        let ruler = self.session.layout.overview_ruler;
+        if self.config.show_overview_ruler
+            && ruler.contains(ratatui::layout::Position::new(col, row))
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left))
+        {
+            if let Some(target) = self.overview_click_target(
+                row.saturating_sub(ruler.y) as usize, ruler.height as usize)
+            {
+                self.session.focus = PaneFocus::Preview;
+                self.preview_state.pending_overview_line = Some(target);
+                self.advance_overview_jump();
+            }
+            return;
+        }
         if !self.preview_state.selection.is_dragging() && self.inline_mouse(mouse) {
             return;
         }

@@ -125,3 +125,12 @@ and a small terminal screen reader, requiring no tmux or additional packages.
 Clipboard dispatch and visible success/failure feedback are tested; actual
 desktop clipboard contents cannot be independently verified in this headless
 session. The formatted Markdown and bounded-display limitations above remain.
+
+## v0.3.0 selected-line attribution
+
+Click source to select a Blame line. The line shows as much attribution as
+fits (author and relative time when possible); the bottom strip retains the
+full commit summary, and `F6` shows details. Wrapped source and Focus Overview
+use one effective content width so repeated redraws cannot erase the clicked
+line. A render regression test verifies the line and bottom attribution.
+Idle cache checks run less often until the file or Git state changes.

@@ -59,3 +59,21 @@ files and EOF), replacements, no-final-newline and patch-like source text,
 unchanged-index/worktree checks, cache invalidation, untracked/binary/large
 files, CJK wrapping, gutter toggles, close handling, stale results, external
 edits, and rendered Markdown exclusion.
+
+## v0.3.0 focus navigation and long-file Peek
+
+Focus Overview is an optional **three-column navigation ruler**, not a code
+minimap. It plots search hits, staged and unstaged Git change locations and
+the current viewport. Click a mark to jump; long files load further preview
+pages on demand. Settings → **Focus Overview** toggles it (default on,
+`show_overview_ruler = true`; older `show_minimap` config is supported).
+
+The updated Git Change Peek opens from the source gutter or with `F7` and
+uses a restrained header and full-width green/red rows. It remains a floating
+**overlay**, not an inline insertion that pushes source rows down. The Peek
+reader handles bounded text files up to 2 MiB, including changes beyond the
+initial preview page. Larger or binary files may still show Overview marks.
+
+With valid cached data, background Git checks are reduced to a 30-second
+safety refresh, with faster retry for unavailable results and watcher-based
+invalidation on source or Git changes. Disabling Overview skips its scan.

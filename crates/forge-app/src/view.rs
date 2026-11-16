@@ -253,6 +253,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             "editor:load",
             "git:blame",
             "git:gutter",
+            "git:overview",
             "git:blame-popup",
         ] {
             scheduler.cancel_key(key);
@@ -541,6 +542,59 @@ fn draw_position_scrollbar(frame: &mut Frame<'_>, area: Rect, first: usize, tota
     }
 }
 
+/// A compact 2-column file overview: markers next to the existing position thumb.
+/// Only project known rows; no I/O or scanning occurs during drawing.
+fn overview_marker_y(row: usize, total: usize, height: usize) -> usize {
+    if height <= 1 || total <= 1 { return 0; }
+    row.min(total - 1).saturating_mul(height - 1) / (total - 1)
+}
+
+fn draw_file_overview(frame: &mut Frame<'_>, area: Rect, model: &App, p: Palette) {
+    if area.width < 3 || area.height < 3
+        || !matches!(model.preview_state.preview_mode, PreviewMode::File)
+        || (model.markdown_available() && !model.preview_state.markdown_code)
+    { return; }
+    let total = model.overview_git_data().map_or_else(|| model.preview_total_lines(), |(n, _)| n);
+    let height = area.height as usize;
+    if total <= height { return; }
+    let x = area.right() - 2;
+    let mut marks = vec![None; height];
+    // Git and search use *source-line* coordinates across the entire file.
+    // The preview's rendered rows can cover only the first 400 lines.
+    let known_lines = model.overview_git_data().map(|(total, _)| total);
+    if let Some((source_lines, git_marks)) = model.overview_git_data() {
+        for &(line, color) in git_marks {
+            if line > 0 {
+                let y = overview_marker_y(line - 1, source_lines.max(1), height);
+                marks[y] = Some(("▪", color));
+            }
+        }
+    }
+    if model.preview_state.find.open
+        && !model.preview_state.find.query.is_empty()
+        && model.preview_state.preview.as_ref().is_some_and(|preview| {
+            preview.path == model.preview_state.find.path
+        })
+    {
+        for hit in &model.preview_state.find.matches {
+            let row = if let Some(source_lines) = known_lines {
+                Some(overview_marker_y(hit.line.saturating_sub(1), source_lines.max(1), height))
+            } else {
+                model.preview_state.text_rows.source_row_range(hit.line)
+                    .map(|range| overview_marker_y(range.start, total, height))
+            };
+            if let Some(y) = row { marks[y] = Some(("•", Color::Yellow)); }
+        }
+    }
+    for (y, marker) in marks.into_iter().enumerate() {
+        if let Some((symbol, color)) = marker {
+            frame.buffer_mut()[(x, area.y + y as u16)]
+                .set_symbol(symbol)
+                .set_style(Style::default().fg(color).bg(p.bg));
+        }
+    }
+}
+
 struct NativePane {
     app: Option<State<App>>,
     kind: PaneKind,
@@ -650,9 +704,32 @@ impl Component for NativePane {
             PaneKind::Preview => {
                 model.session.layout.preview = area;
                 area = draw_preview_heading(drawer.frame, area, &mut model, self.palette);
-                if model.preview_state.text_rows.width() != area.width {
-                    model.blame.cursor = None;
-                }
+                // A 3-column focus ruler, not a code minimap: preserve source width.
+                let ruler_area = if model.config.show_overview_ruler
+                    && area.width >= 36 && area.height >= 5
+                    && matches!(model.preview_state.preview_mode, PreviewMode::File)
+                    && (!model.markdown_available() || model.preview_state.markdown_code)
+                    && matches!(model.preview_state.preview.as_ref().map(|p| &p.content),
+                        Some(PreviewContent::Text { .. }))
+                {
+                    let sidebar = Rect::new(area.right() - 3, area.y, 3, area.height);
+                    area.width -= 3;
+                    Some(sidebar)
+                } else { None };
+                // The navigation ruler owns three terminal columns. Source
+                // wrapping, Blame cursor validation and code rendering MUST
+                // all use the same effective width. Comparing against the
+                // original full pane erased clicked Blame on every redraw.
+                let previous_width = model.preview_state.text_rows.width();
+                let clicked_source = if previous_width != area.width {
+                    model.blame.cursor.as_ref().and_then(|(path, row, scroll)| {
+                        (Some(path) == model.preview_state.preview.as_ref().map(|p| &p.path)
+                            && *scroll == model.preview_state.preview_scroll)
+                            .then(|| model.preview_state.text_rows.source_line_at(*row))
+                            .flatten()
+                            .map(|line| (path.clone(), line, *scroll))
+                    })
+                } else { None };
                 // Rebuild source-row mapping before asking whether inline
                 // Blame has a line to show. A same-file external refresh
                 // clears this cache; querying attribution first would hide
@@ -672,6 +749,11 @@ impl Component for NativePane {
                             TextLang::from_name(&path.to_string_lossy()),
                             area.width, model.config.wrap_code,
                         );
+                    }
+                    if let Some((path, source, scroll)) = clicked_source {
+                        // Preserve attribution to the SOURCE line when wrapping
+                        // changes (resize / toggling Focus Overview).
+                        model.blame.cursor = Some((path, rows.source_to_row(source), scroll));
                     }
                     model.preview_state.text_rows = rows;
                 }
@@ -816,7 +898,31 @@ impl Component for NativePane {
                         self.palette,
                     );
                 }
-                draw_position_scrollbar(drawer.frame, inner, scroll, model.preview_total_lines(), self.palette);
+                if let Some(ruler) = ruler_area {
+                    // Clear the dedicated lane, then show search/Git locations and viewport.
+                    for y in ruler.y..ruler.bottom() {
+                        for x in ruler.x..ruler.right() {
+                            drawer.frame.buffer_mut()[(x, y)]
+                                .set_symbol(" ")
+                                .set_style(Style::default().bg(self.palette.bg));
+                        }
+                    }
+                    draw_file_overview(drawer.frame, ruler, &model, self.palette);
+                    if let Some((source_total, _)) = model.overview_git_data() {
+                        let first_line = model.preview_state.text_rows.source_line_at(scroll)
+                            .unwrap_or(1).saturating_sub(1);
+                        draw_position_scrollbar(drawer.frame, ruler, first_line,
+                            source_total, self.palette);
+                    } else {
+                        draw_position_scrollbar(drawer.frame, ruler, scroll,
+                            model.preview_total_lines(), self.palette);
+                    }
+                    model.session.layout.overview_ruler = ruler;
+                } else {
+                    model.session.layout.overview_ruler = Rect::default();
+                    draw_position_scrollbar(drawer.frame, inner, scroll,
+                        model.preview_total_lines(), self.palette);
+                }
                 if let Some((bar, total)) = horizontal_bar {
                     draw_horizontal_position(drawer.frame, bar, model.preview_state.preview_scroll_x, total, self.palette);
                 }
@@ -909,6 +1015,18 @@ enum MarkRow {
     None,
 }
 
+/// Pick the richest inline attribution that fits without hiding source code.
+/// Full metadata stays available in the reserved bottom row and F6 popup.
+fn compact_blame_label(full: &str, author: &str, age: &str, available: usize) -> Option<String> {
+    use unicode_width::UnicodeWidthStr;
+    let variants = [
+        full.to_owned(),
+        format!("{author} · {age}"),
+        author.to_owned(),
+    ];
+    variants.into_iter().find(|text| text.width() <= available)
+}
+
 fn draw_inline_blame(frame: &mut Frame<'_>, inner: Rect, fallback: Rect, model: &App, p: Palette) {
     use unicode_width::UnicodeWidthStr;
     let Some((blame, line)) = model.current_blame() else {
@@ -947,19 +1065,27 @@ fn draw_inline_blame(frame: &mut Frame<'_>, inner: Rect, fallback: Rect, model: 
         }
     }
     let available = inner.right().saturating_sub(end.saturating_add(3));
-    let area = if y < inner.bottom() && available >= label.width().min(40) as u16 {
-        Rect::new(end.saturating_add(3), y, available, 1)
+    let short_age = if blame.uncommitted() {
+        "modified".to_owned()
     } else {
-        fallback
+        super::blame::relative_time(blame.time)
     };
-    let text = if area == fallback {
-        format!("L{line}  {label}")
-    } else {
-        label
-    };
+    let short_author = if blame.uncommitted() { "Uncommitted" } else { blame.author.as_str() };
+    let inline = if y < inner.bottom() {
+        compact_blame_label(&label, short_author, &short_age, available as usize)
+    } else { None };
+    if let Some(text) = inline {
+        frame.render_widget(
+            Paragraph::new(text).style(Style::default().fg(p.fg_dim)),
+            Rect::new(end.saturating_add(3), y, available, 1),
+        );
+    }
+    // The bottom strip remains the discoverable complete attribution,
+    // regardless of whether a compact inline label could be shown.
+    let full = format!("L{line}  {label}");
     frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(p.fg_dim)),
-        area,
+        Paragraph::new(full).style(Style::default().fg(p.fg_dim)),
+        fallback,
     );
 }
 
@@ -1447,7 +1573,7 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     let rows_y = inner.y + 2;
-    let visible = (inner.bottom().saturating_sub(rows_y)).min(8);
+    let visible = (inner.bottom().saturating_sub(rows_y)).min(9);
     panel.list_area = Rect::new(inner.x, rows_y, inner.width, visible);
 
     for i in 0..visible as usize {
@@ -1466,8 +1592,9 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
             2 => "Show hidden files",
             3 => "Color theme",
             4 => "Code auto wrap",
-            5 => "Git Gutter: staged",
-            6 => "Git Gutter: unstaged",
+            5 => "Focus Overview",
+            6 => "Git Gutter: staged",
+            7 => "Git Gutter: unstaged",
             _ => "Keyboard shortcuts",
         };
         let value = match i {
@@ -1503,13 +1630,16 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
                 if model.config.wrap_code { "[ On ]" } else { "[ Off ]" }
             }
             5 => {
+                if model.config.show_overview_ruler { "[ On ]" } else { "[ Off ]" }
+            }
+            6 => {
                 if model.config.git.show_staged_gutter {
                     "[ On ]"
                 } else {
                     "[ Off ]"
                 }
             }
-            6 => {
+            7 => {
                 if model.config.git.show_unstaged_gutter {
                     "[ On ]"
                 } else {
@@ -2346,6 +2476,24 @@ pub(super) fn bridge_theme(p: Palette) -> forge_theme::Theme {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn blame_inline_degrades_without_overwriting_code() {
+        let full = "Test User · 4d · abcd1234 fix navigation";
+        assert_eq!(compact_blame_label(full, "Test User", "4d", 60).as_deref(), Some(full));
+        assert_eq!(compact_blame_label(full, "Test User", "4d", 16).as_deref(), Some("Test User · 4d"));
+        assert_eq!(compact_blame_label(full, "Test User", "4d", 9).as_deref(), Some("Test User"));
+        assert_eq!(compact_blame_label(full, "Test User", "4d", 5), None);
+    }
+
+    #[test]
+    fn overview_mapping_stays_in_bounds() {
+        assert_eq!(overview_marker_y(0, 100, 10), 0);
+        assert_eq!(overview_marker_y(99, 100, 10), 9);
+        assert_eq!(overview_marker_y(50, 100, 10), 4);
+        assert_eq!(overview_marker_y(200, 100, 10), 9);
+        assert_eq!(overview_marker_y(0, 0, 0), 0);
+    }
+
     #[test]
     fn scrollbar_position_top_middle_bottom_and_no_overflow() {
         let palette = workspace_palette();

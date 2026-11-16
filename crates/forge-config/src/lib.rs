@@ -29,6 +29,9 @@ pub struct Config {
     pub show_hidden_files: bool,
     /// Soft-wrap code previews; enabled for existing installations by default.
     pub wrap_code: bool,
+    /// Show compact Git/search navigation marks beside the preview.
+    #[serde(alias = "show_minimap")]
+    pub show_overview_ruler: bool,
 }
 
 impl Default for Config {
@@ -40,6 +43,7 @@ impl Default for Config {
             compact_folders: true,
             show_hidden_files: false,
             wrap_code: true,
+            show_overview_ruler: true,
         }
     }
 }
@@ -126,6 +130,8 @@ impl Config {
             toml::Value::Boolean(self.show_hidden_files),
         );
         table.insert("wrap_code".into(), toml::Value::Boolean(self.wrap_code));
+        table.remove("show_minimap");
+        table.insert("show_overview_ruler".into(), toml::Value::Boolean(self.show_overview_ruler));
         // Update only the explicitly managed keys. Preserve [git.blame] and
         // all unknown plugin/custom preferences in the same configuration.
         let git = table.entry("git").or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -153,6 +159,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn focus_ruler_defaults_on_and_can_be_persistently_disabled() {
+        let old: Config = toml::from_str("wrap_code = true").unwrap();
+        assert!(old.show_overview_ruler);
+        let off: Config = toml::from_str("show_overview_ruler = false").unwrap();
+        assert!(!off.show_overview_ruler);
+        let encoded = toml::to_string(&off).unwrap();
+        assert!(!toml::from_str::<Config>(&encoded).unwrap().show_overview_ruler);
+    }
+
     #[test]
     fn code_wrap_is_enabled_for_old_files_and_persists_disabled() {
         let old: Config = toml::from_str("theme = 'current'").unwrap();

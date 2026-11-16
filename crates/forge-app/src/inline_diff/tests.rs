@@ -132,7 +132,7 @@ async fn untracked_binary_large_and_cache_invalidation() {
             .await
             .is_err()
     );
-    std::fs::write(&path, vec![b'x'; forge_fs::PREVIEW_MAX_BYTES + 1]).unwrap();
+    std::fs::write(&path, vec![b'x'; PEEK_MAX_BYTES + 1]).unwrap();
     assert!(read(GitService::new(), dir.path().to_owned(), path, None)
         .await
         .is_err());
@@ -344,4 +344,48 @@ async fn pending_result_guards_and_external_refresh() {
     app.reset_inline_diff();
     assert!(app.inline_diff.active.is_none());
     assert!(app.inline_diff.pending.is_none());
+}
+
+#[tokio::test]
+async fn overview_git_marks_cover_paged_files() {
+    let before = (1..=650).map(|n| format!("line {n}\n")).collect::<String>();
+    let (dir, path) = fixture(&before);
+    let after = before.replacen("line 550\n", "line 550 changed\n", 1);
+    std::fs::write(&path, &after).unwrap();
+    let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+    app.files.pending_lists.clear();
+    app.preview_state.preview = Some(forge_fs::preview_from_bytes(
+        &path, after.as_bytes(), after.len() as u64,
+    ));
+    app.preview_state.preview_mode = PreviewMode::File;
+    app.preview_state.preview_loading = false;
+    app.preview_state.markdown_code = true;
+    assert!(app.inline_path().is_some(), "paged files must support Git Change Peek");
+    app.tick_inline_diff();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while app.inline_diff.overview.pending.is_some() {
+            app.poll_inline_diff();
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    let (lines, marks) = app.overview_git_data().expect("overview fetched independently");
+    assert_eq!(lines, 650);
+    assert!(marks.iter().any(|&(line, color)| line == 550 && color == Color::Yellow));
+    // The same 550th-line hunk must be accessible in the inline peek
+    // after loading further preview pages, not merely shown on the ruler.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while app.inline_diff.pending.is_some() {
+            app.poll_inline_diff();
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    assert!(app.inline_active().is_some());
+    assert!(app.inline_active().unwrap().hunks.iter().any(|h| h.marks.iter().any(|&(n, _)| n == 550)));
+
+    let y = (550 - 1) * (30 - 1) / (lines - 1);
+    assert_eq!(app.overview_click_target(y, 30), Some(550));
+    assert_eq!(app.overview_click_target(0, 30), Some(1));
+    // A focus jump can target an unloaded line without losing its identity.
+    app.preview_state.pending_overview_line = Some(550);
+    assert!(app.preview_state.pending_source_line.is_none());
 }

@@ -4,12 +4,12 @@ Forge 的二进制通过 GitHub Release 分发，安装脚本和 `forge update` 
 
 ## 发布一个版本
 
-1. 修改 `Cargo.toml` 中 `[workspace.package] version`（例如 `0.1.0` → `0.2.0`），提交并推送 `master`。
+1. 修改 `Cargo.toml` 中 `[workspace.package] version`（例如 `0.2.0` → `0.3.0`），提交并推送 `master`。
 2. 打同名 tag 并推送：
 
    ```bash
-   git tag v0.2.0
-   git push origin v0.2.0
+   git tag v0.3.0
+   git push origin v0.3.0
    ```
 
 3. `.github/workflows/release.yml` 被 tag 触发，四个平台并行构建：

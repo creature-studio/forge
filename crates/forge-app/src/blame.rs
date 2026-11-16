@@ -198,7 +198,13 @@ impl App {
             .blame
             .checked
             .as_ref()
-            .is_some_and(|(p, t)| p == &path && t.elapsed() < Duration::from_secs(1))
+            .is_some_and(|(p, t)| p == &path && t.elapsed() < Duration::from_secs(
+                if self.blame.active.as_ref().is_some_and(|c| c.key.path == path) {
+                    30
+                } else {
+                    10
+                }
+            ))
         {
             return;
         }
