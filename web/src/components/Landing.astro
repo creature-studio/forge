@@ -1,55 +1,92 @@
 ---
 import Preview from './Preview.astro';
 import faqZh from '../legacy/faq-zh.html?raw';
+import { Download, BookOpen, FolderOpen, GitBranch, Search, CodeXml, Zap, ArrowUpRight, ChevronRight, ArrowRight, Monitor, Apple, Terminal, Keyboard, FileCode, CircleCheck, Clock, GitCompareArrows } from '@lucide/astro';
 const { english = false } = Astro.props;
 const base = english ? '/forge/en/' : '/forge/';
-const docAnchors = english ? ['what-is-forge','workflow','workflow','comparison','questions'] : ['install','files','git','focus','settings'];
 const data = english ? {
-  kicker:'TERMINAL DEV WORKSPACE', title:'Forge', headline:'A focused terminal workspace',
-  desc:'Browse files, inspect changes, search source and manage Git without leaving the terminal. A fast, keyboard-first workflow built with Rust.',
-  download:'Download v0.3.0',guide:'Read documentation',meta:['Open source · MIT','Linux & macOS binaries','Built with Rust'],
-  features:[['▣','File management','Fast browsing, editing and search'],['⑂','Git workflow','Diff · Commit · Stash · History'],['⌕','Focus navigation','Search hits and Git changes at a glance'],['⚡','Lightweight','Native terminal, responsive UI']],
-  docs:'Documentation',docsDesc:'Learn the essentials, explore file and Git workflows, and find useful shortcuts.',
-  docsRows:[['Quick start','Installation and launch'],['Files & editing','Browse, edit and navigate'],['Git review','Diff, stage, commit'],['Focus & Blame','Inspect history and changes'],['Settings','Key bindings and preferences']],
-  notes:'Release notes',notesDesc:'Follow new features, improvements and fixes across versions.',all:'All releases',latest:'Latest',
-  changes:'Focus Overview · Git Change Peek · Blame fixes · performance', prev:'Themes · highlighting · commit composer', old:'First public release',
+  eyebrow:'OPEN SOURCE · RUST TUI',headline:'A refined terminal workspace',
+  description:'Browse files, edit source, review changes and manage Git in one focused terminal interface. Fast, lightweight and designed for developers.',
+  download:'Get Forge v0.3.0',guide:'Explore docs',
+  features:[['File management','Browse, preview and edit with ease'],['Git workflow','Diff · Commit · Stash · History'],['Smart search','Find files and source instantly'],['Code insights','Git Blame · Change Peek · Focus'],['Lightweight','Native Rust, fast to launch']],
+  start:'Quick start',startDesc:'From installation to your first review in three steps.',
+  steps:[['Install Forge','Download and add to your PATH'],['Open your project','Run forge /path/to/project'],['Start working','Browse, edit, search and review Git changes']],
+  docs:'Documentation',docsDesc:'A practical guide to the tools and shortcuts.',
+  docRows:[['Quick start','Install, launch and basic usage','what-is-forge'],['Core features','File tree, editing, search and Git','workflow'],['Git workflow','Review changes, stage and commit','workflow'],['Shortcuts & settings','Keyboard reference and preferences','questions']],
+  full:'Browse all docs',release:'What’s new in v0.3.0',releaseDesc:'Focus Overview, Git Change Peek, Blame fixes and smoother performance.',releaseLink:'Read release notes',
+  faq:'Frequently asked questions',faqIntro:'Answers to common questions about Forge.',
 } : {
-  kicker:'TERMINAL DEV WORKSPACE',title:'Forge',headline:'高效、现代的终端开发工具',
-  desc:'基于 TUI 的文件与 Git 工作台，集文件浏览、代码预览、差异对比、提交与版本管理于一体，提供流畅、专注的终端开发体验。',
-  download:'立即下载 v0.3.0',guide:'查看文档',meta:['开源免费 · MIT','Linux / macOS 预编译包','Rust 构建'],
-  features:[['▣','文件管理','快速浏览与定位项目文件'],['⑂','Git 全流程','Diff · Commit · Stash · History'],['⌕','关注点导航','快速定位搜索结果与代码改动'],['⚡','轻量高效','原生终端体验，响应迅速']],
-  docs:'操作文档',docsDesc:'从安装、基本操作到高级功能，完整的使用指南。',
-  docsRows:[['快速开始','安装与启动'],['文件与编辑','浏览、搜索与编辑'],['Git 使用','对比、暂存、提交'],['搜索与导航','Focus Overview · Blame'],['设置与快捷键','完整操作参考']],
-  notes:'发布说明',notesDesc:'查看最新版本的功能更新与改进。',all:'全部版本',latest:'最新',
-  changes:'Focus Overview · Git Change Peek · Blame 修复 · 性能优化',prev:'主题、语法高亮与提交体验改进',old:'首次公开版本',
+  eyebrow:'OPEN SOURCE · RUST TUI',headline:'高效、专注的终端开发工具',
+  description:'现代化的 TUI 文件与 Git 工作台。集文件浏览、代码编辑、Git 全流程、搜索与变更预览于一体，让终端开发同样高效、优雅、可控。',
+  download:'立即下载 v0.3.0',guide:'查看文档',
+  features:[['文件管理','快速浏览与定位项目文件'],['Git 全流程','Diff · Commit · Stash · History'],['智能搜索','项目搜索与文件内搜索'],['代码洞察','Git Blame · 变更预览 · 关注点'],['轻量高效','Rust 构建，启动快，资源占用低']],
+  start:'快速上手',startDesc:'从安装到上手，只需要三个步骤。',
+  steps:[['安装 Forge','下载并添加到 PATH'],['打开项目','forge /path/to/project'],['开始使用','浏览文件、编辑代码、查看 Git 变更']],
+  docs:'文档导航',docsDesc:'快速找到对应功能的使用说明。',
+  docRows:[['快速开始','安装、启动与基本使用','install'],['核心功能','文件管理、编辑、搜索、Git 工作流','files'],['Git 工作流','变更预览、暂存与提交','git'],['快捷键与设置','完整快捷键与操作说明','settings']],
+  full:'查看完整文档',release:'v0.3.0 更新说明',releaseDesc:'Focus Overview、Git Change Peek、Blame 修复与性能优化。',releaseLink:'查看发布说明',
+  faq:'常见问题',faqIntro:'关于安装、Git 工作流、字体与配置。',
 };
+const featureIcons = [FolderOpen, GitBranch, Search, CodeXml, Zap];
+const docsIcons = [BookOpen, FileCode, GitCompareArrows, Keyboard];
 ---
-<main id="main">
+<main id="main" class="landing-green">
   <section class="hero shell" aria-labelledby="hero-title">
     <div class="hero-grid">
       <div class="hero-copy">
-        <p class="eyebrow">{data.kicker}</p>
-        <h1 id="hero-title">{data.title}</h1>
+        <div class="hero-eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>{data.eyebrow}</div>
+        <h1 id="hero-title">Forge</h1>
         <h2>{data.headline}</h2>
-        <p class="summary">{data.desc}</p>
-        <div class="actions"><a class="btn btn-primary" href="https://github.com/creature-studio/forge/releases/latest"><span aria-hidden="true">↓</span> {data.download}</a><a class="btn btn-secondary" href={`${base}guide/`}>{data.guide} <span aria-hidden="true">↗</span></a></div>
-        <div class="hero-meta">{data.meta.map((item)=><span>{item}</span>)}</div>
+        <p class="summary">{data.description}</p>
+        <div class="actions">
+          <a class="btn btn-primary hero-download" href="https://github.com/creature-studio/forge/releases/latest"><Download size={19} strokeWidth={2} aria-hidden="true" />{data.download}</a>
+          <a class="btn btn-secondary hero-docs" href={`${base}guide/`}><BookOpen size={19} strokeWidth={1.9} aria-hidden="true" />{data.guide}</a>
+        </div>
+        <div class="hero-meta" aria-label={english ? 'Supported platforms' : '支持的平台'}>
+          <span><Monitor size={15} aria-hidden="true" />Windows · WSL</span>
+          <span><Apple size={15} aria-hidden="true" />macOS</span>
+          <span><Terminal size={15} aria-hidden="true" />Linux</span>
+          <i aria-hidden="true"></i><span><CircleCheck size={15} aria-hidden="true" />Rust · MIT</span>
+        </div>
       </div>
       <Preview />
     </div>
   </section>
-  <section class="highlights" aria-label={english?'Core features':'核心功能'}><div class="shell highlight-grid">
-    {data.features.map(([symbol,title,description])=><div class="highlight"><div class="symbol" aria-hidden="true">{symbol}</div><h3>{title}</h3><p>{description}</p></div>)}
-  </div></section>
-  <section class="resources shell" aria-label={english?'Documentation and release notes':'文档与发布说明'}><div class="resources-grid">
-    <div class="resource"><div class="resource-heading"><h2><span class="resource-icon" aria-hidden="true">▤</span>{data.docs}</h2><a href={`${base}guide/`}>{data.guide} →</a></div><p>{data.docsDesc}</p>
-      {data.docsRows.map(([title,description],i)=><a class="link-row" href={`${base}guide/#${docAnchors[i]}`}><span>{title}</span><span>{description}　›</span></a>)}
+  <section class="highlights" aria-label={english ? 'Core features' : '核心功能'}>
+    <div class="shell highlight-grid">
+      {data.features.map(([title, description],i) => {
+        const Icon = featureIcons[i];
+        return <div class="highlight"><Icon size={28} strokeWidth={1.9} aria-hidden="true"/><h3>{title}</h3><p>{description}</p></div>
+      })}
     </div>
-    <div class="resource"><div class="resource-heading"><h2><span class="resource-icon" aria-hidden="true">◇</span>{data.notes}</h2><a href={`${base}releases/`}>{data.all} →</a></div><p>{data.notesDesc}</p>
-      <a class="link-row release-row" href={`${base}releases/#v030`}><span><strong class="version">v0.3.0 <span>{data.latest}</span></strong><small>{data.changes}</small></span><span>2026-11-16　›</span></a>
-      <a class="link-row release-row" href={`${base}releases/#v020`}><span><strong>v0.2.0</strong><small> · {data.prev}</small></span><span>›</span></a>
-      <a class="link-row release-row" href="https://github.com/creature-studio/forge/releases/tag/v0.1.0"><span><strong>v0.1.0</strong><small> · {data.old}</small></span><span>›</span></a>
+  </section>
+  <section class="resources shell" aria-label={english ? 'Get started and documentation' : '快速开始与文档导航'}>
+    <div class="resources-grid">
+      <article class="resource resource-card quickstart-card">
+        <div class="resource-heading"><div><span class="card-overline">01 / GET STARTED</span><h2>{data.start}</h2></div><Terminal size={23} strokeWidth={1.9} class="card-heading-icon" aria-hidden="true" /></div>
+        <p>{data.startDesc}</p>
+        <ol class="quick-steps">
+          {data.steps.map(([title, description],i) => <li><span class="step-number">{i+1}</span><strong>{title}</strong><span class="step-description">{description}</span></li>)}
+        </ol>
+        <a class="card-bottom-link" href={`${base}guide/#${english?'what-is-forge':'install'}`}>{data.full}<ArrowRight size={16} aria-hidden="true" /></a>
+      </article>
+      <article class="resource resource-card doc-card">
+        <div class="resource-heading"><div><span class="card-overline">02 / DOCUMENTATION</span><h2>{data.docs}</h2></div><BookOpen size={23} strokeWidth={1.9} class="card-heading-icon" aria-hidden="true" /></div>
+        <p>{data.docsDesc}</p>
+        <div class="doc-links">
+          {data.docRows.map(([title, description, anchor],i) => {
+            const Icon=docsIcons[i];
+            return <a class="doc-link-row" href={`${base}guide/#${anchor}`}><Icon size={18} strokeWidth={1.9} class="doc-row-icon" aria-hidden="true" /><span class="doc-link-title">{title}</span><span class="doc-link-summary">{description}</span><ChevronRight size={17} strokeWidth={1.9} aria-hidden="true" /></a>
+          })}
+        </div>
+      </article>
     </div>
-  </div></section>
-  {!english && <section class="faq shell" aria-labelledby="faq-title"><div class="faq-heading"><h2 id="faq-title">常见问题</h2><p>关于安装、Git 操作、字体与配置。</p></div><div class="faq-list"><Fragment set:html={faqZh} /></div></section>}
+    <a class="release-note-strip" href={`${base}releases/#v030`}>
+      <span class="release-badge"><Clock size={16} strokeWidth={1.9} aria-hidden="true" />v0.3.0</span>
+      <span class="release-headline">{data.release}</span>
+      <span class="release-excerpt">{data.releaseDesc}</span>
+      <span class="release-more">{data.releaseLink}<ArrowUpRight size={16} aria-hidden="true" /></span>
+    </a>
+  </section>
+  {!english && <section class="faq shell" aria-labelledby="faq-title"><div class="faq-heading"><h2 id="faq-title">{data.faq}</h2><p>{data.faqIntro}</p></div><div class="faq-list"><Fragment set:html={faqZh} /></div></section>}
 </main>

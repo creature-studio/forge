@@ -11,7 +11,8 @@
     "prebuild": "node scripts/copy-installer.mjs"
   },
   "dependencies": {
-    "astro": "^5.16.0",
-    "@astrojs/sitemap": "^3.7.0"
+    "@astrojs/sitemap": "^3.7.0",
+    "@lucide/astro": "^1.73.0",
+    "astro": "^5.16.0"
   }
 }

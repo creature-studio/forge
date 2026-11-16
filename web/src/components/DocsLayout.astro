@@ -1,4 +1,5 @@
 ---
+import { ArrowUpRight, ChevronDown } from '@lucide/astro';
 interface Props {
   content: string;
   english?: boolean;
@@ -20,13 +21,13 @@ const menuTitle = english ? 'Browse sections' : '查看文档目录';
       <div class="docs-sidebar-title">{tocTitle}</div>
       <nav class="docs-section-nav" aria-label={tocTitle} set:html={navigationHtml} />
       <div class="docs-sidebar-bottom">
-        <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>{english ? 'Release notes' : '发布说明'} <span aria-hidden="true">↗</span></a>
-        <a href="https://github.com/creature-studio/forge">GitHub <span aria-hidden="true">↗</span></a>
+        <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>{english ? 'Release notes' : '发布说明'} <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" /></a>
+        <a href="https://github.com/creature-studio/forge">GitHub <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" /></a>
       </div>
     </div>
   </aside>
   <details class="docs-mobile-navigation">
-    <summary>{menuTitle} <span aria-hidden="true">⌄</span></summary>
+    <summary>{menuTitle} <ChevronDown size={18} strokeWidth={1.8} aria-hidden="true" /></summary>
     <nav class="docs-section-nav" aria-label={tocTitle} set:html={navigationHtml} />
   </details>
   <div class="docs-main" set:html={bodyHtml} />

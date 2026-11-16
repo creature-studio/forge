@@ -7,6 +7,8 @@ interface Props {
   kind?: 'home' | 'article';
 }
 import '../styles/main.css';
+import '../styles/green.css';
+import { Terminal, Download, Menu, ArrowUpRight } from '@lucide/astro';
 const { title, description, lang = 'zh-CN', path = '/', kind = 'article' } = Astro.props;
 const english = lang === 'en';
 const root = '/forge/';
@@ -50,19 +52,39 @@ const translatedUrl = 'https://creature-studio.github.io/forge' + (translationPa
   </head>
   <body>
     <a class="skip" href="#main">{english ? 'Skip to content' : '跳到正文'}</a>
-    <header class="header">
+    <header class="header modern-header">
       <div class="shell header-inner">
-        <a href={english ? enRoot : zhRoot} class="wordmark" aria-label="Forge home"><span class="logo-mark" aria-hidden="true">›_</span><span>Forge</span></a>
+        <div class="brand-cluster">
+          <a href={english ? enRoot : zhRoot} class="wordmark" aria-label="Forge home">
+            <Terminal size={30} strokeWidth={2.4} class="brand-terminal" aria-hidden="true" />
+            <span>Forge</span>
+          </a>
+          <span class="brand-divider" aria-hidden="true"></span>
+          <span class="brand-description">{english ? 'Terminal files & Git workspace' : '终端文件与 Git 工作台'}</span>
+        </div>
         <nav class="nav" aria-label={english ? 'Main navigation' : '主导航'}>
-          <a href={english ? enRoot : zhRoot}>{english ? 'Home' : '首页'}</a>
-          <a href={`${english ? enRoot : zhRoot}guide/`}>{english ? 'Docs' : '操作文档'}</a>
-          <a href={`${english ? enRoot : zhRoot}releases/`}>{english ? 'Releases' : '发布说明'}</a>
+          <a href={english ? enRoot : zhRoot} aria-current={path === '/' || path === '/en/' ? 'page' : undefined}>{english ? 'Home' : '首页'}</a>
+          <a href={`${english ? enRoot : zhRoot}guide/`} aria-current={path.endsWith('/guide/') ? 'page' : undefined}>{english ? 'Docs' : '文档'}</a>
+          <a href={`${english ? enRoot : zhRoot}releases/`} aria-current={path.endsWith('/releases/') ? 'page' : undefined}>{english ? 'Releases' : '发布说明'}</a>
           <a href="https://github.com/creature-studio/forge/issues">{english ? 'Community' : '社区'}</a>
         </nav>
         <div class="header-actions">
-          <a class="github-link" href="https://github.com/creature-studio/forge" aria-label="GitHub"><svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="currentColor"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.54v-2.13c-3.09.67-3.74-1.32-3.74-1.32-.5-1.28-1.23-1.62-1.23-1.62-1.01-.7.08-.68.08-.68 1.12.08 1.7 1.14 1.7 1.14.99 1.7 2.59 1.21 3.22.93.1-.72.39-1.21.71-1.49-2.47-.28-5.06-1.24-5.06-5.49 0-1.21.43-2.19 1.14-2.97-.12-.28-.49-1.41.1-2.94 0 0 .93-.3 3.05 1.13a10.6 10.6 0 0 1 5.55 0c2.12-1.43 3.05-1.13 3.05-1.13.59 1.53.22 2.66.1 2.94.71.78 1.14 1.76 1.14 2.97 0 4.26-2.59 5.2-5.07 5.48.4.35.76 1.02.76 2.06V22c0 .3.2.65.76.54A11.1 11.1 0 0 0 12 .9Z"/></svg><span>GitHub</span></a>
+          <a class="github-link" href="https://github.com/creature-studio/forge" aria-label="GitHub">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="currentColor"><path d="M12 .9a11.1 11.1 0 0 0-3.51 21.63c.55.1.76-.24.76-.54v-2.13c-3.09.67-3.74-1.32-3.74-1.32-.5-1.28-1.23-1.62-1.23-1.62-1.01-.7.08-.68.08-.68 1.12.08 1.7 1.14 1.7 1.14.99 1.7 2.59 1.21 3.22.93.1-.72.39-1.21.71-1.49-2.47-.28-5.06-1.24-5.06-5.49 0-1.21.43-2.19 1.14-2.97-.12-.28-.49-1.41.1-2.94 0 0 .93-.3 3.05 1.13a10.6 10.6 0 0 1 5.55 0c2.12-1.43 3.05-1.13 3.05-1.13.59 1.53.22 2.66.1 2.94.71.78 1.14 1.76 1.14 2.97 0 4.26-2.59 5.2-5.07 5.48.4.35.76 1.02.76 2.06V22c0 .3.2.65.76.54A11.1 11.1 0 0 0 12 .9Z"/></svg>
+            <span>GitHub</span><ArrowUpRight size={14} strokeWidth={1.9} aria-hidden="true" />
+          </a>
           <a class="lang-link" href={translatedUrl.replace('https://creature-studio.github.io', '')} lang={english ? 'zh-CN' : 'en'}>{english ? '中文' : 'EN'}</a>
-          <a class="btn btn-primary download-nav" href="https://github.com/creature-studio/forge/releases/latest">{english ? 'Download' : '下载'} <span>v0.3.0</span></a>
+          <a class="btn btn-primary download-nav" href="https://github.com/creature-studio/forge/releases/latest"><Download size={16} strokeWidth={2} aria-hidden="true" /><span>{english ? 'Download' : '下载'} v0.3.0</span></a>
+          <details class="mobile-nav">
+            <summary aria-label={english ? 'Open menu' : '打开菜单'}><Menu size={22} /></summary>
+            <nav aria-label={english ? 'Mobile navigation' : '移动导航'}>
+              <a href={english ? enRoot : zhRoot}>{english ? 'Home' : '首页'}</a>
+              <a href={`${english ? enRoot : zhRoot}guide/`}>{english ? 'Docs' : '文档'}</a>
+              <a href={`${english ? enRoot : zhRoot}releases/`}>{english ? 'Releases' : '发布说明'}</a>
+              <a href="https://github.com/creature-studio/forge/issues">{english ? 'Community' : '社区'}</a>
+              <a href={translatedUrl.replace('https://creature-studio.github.io', '')}>{english ? '中文版' : 'English'}</a>
+            </nav>
+          </details>
         </div>
       </div>
     </header>

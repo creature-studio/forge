@@ -35,3 +35,13 @@ Astro's sitemap integration generates `sitemap-index.xml` and
 The site is content-first and ships without a client-side framework or
 required JavaScript. Do not replace genuine Forge screenshots with a generated
 concept image. Keep GitHub release matrix and download links accurate.
+
+## Visual identity
+
+The homepage uses a restrained white-and-jade palette (`#087c48`), real Forge
+terminal screenshots, and tree-shaken **@lucide/astro** SVG components. Icons
+are imported as Astro components at build time; no client-side icon font,
+external image CDN, or JavaScript icon runtime is required. Global green
+styles in `src/styles/green.css` extend the existing base styles and apply to
+both language editions, the two-column guides and versioned release notes.
+Keep icons consistent, use actual screenshots, and maintain phone-width layouts.
