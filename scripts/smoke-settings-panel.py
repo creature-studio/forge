@@ -31,7 +31,8 @@ with tempfile.TemporaryDirectory(prefix='forge-settings-') as folder:
            '-c',str(root),str(BINARY))
         time.sleep(1.2)
         assert '.secret.txt' not in screen()
-        send(',')
+        assert 'F9 Settings' in screen(), 'Settings entry is not visible in workspace footer'
+        send('F9')
         s=screen()
         print('SETTINGS SCREEN:\n'+'\n'.join(s.splitlines()[7:24]))
         assert 'Settings' in s and 'Tree Sticky Scroll' in s and 'Show hidden files' in s
@@ -47,8 +48,14 @@ with tempfile.TemporaryDirectory(prefix='forge-settings-') as folder:
         time.sleep(.5)
         assert '.secret.txt' in screen(), 'hidden file did not appear after settings toggle'
 
-        send(',')
+        send('M-,')  # Alt+comma alternative Settings shortcut
+        assert 'Code auto wrap' in screen()
         for _ in range(4): send('Down')
+        send('Enter')  # auto wrap Off
+        assert 'wrap_code = false' in path.read_text()
+        send('Enter')  # auto wrap On
+        assert 'wrap_code = true' in path.read_text()
+        send('Down')
         send('Enter')  # staged gutter Off
         assert 'show_staged_gutter = false' in path.read_text()
         send('Down');send('Enter')  # unstaged gutter Off
@@ -57,11 +64,11 @@ with tempfile.TemporaryDirectory(prefix='forge-settings-') as folder:
         send('Up');send('Enter')  # staged gutter On
         assert 'show_staged_gutter = true' in path.read_text()
         assert 'show_unstaged_gutter = true' in path.read_text()
-        for _ in range(4): send('Up')
+        for _ in range(5): send('Up')
         send('Enter') # sticky toggle
         assert 'Tree Sticky Scroll' in screen()
         assert 'tree_sticky_scroll = false' in path.read_text()
-        send('Down');send('Down');send('Down');send('Down');send('Down');send('Down');send('Enter')
+        send('Down');send('Down');send('Down');send('Down');send('Down');send('Down');send('Down');send('Enter')
         assert 'Keyboard shortcuts' in screen() and 'CONTEXT' in screen()
         send('Escape')
         send('q')

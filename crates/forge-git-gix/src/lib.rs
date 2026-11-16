@@ -224,15 +224,19 @@ impl GixReadBackend {
         }
 
         let commits = topological_order(commits, head_id.as_deref());
-        let (upstream, unpushed) = current_branch_push_state(&repo, head, limit);
+        let relation = current_branch_push_state(&repo, head, limit);
 
         Ok(GraphSnapshot {
             repo_root,
             head: head_short,
             branch,
             commits,
-            upstream,
-            unpushed,
+            upstream: relation.upstream,
+            unpushed: relation.outgoing,
+            incoming: relation.incoming,
+            ahead: relation.ahead,
+            behind: relation.behind,
+            counts_truncated: relation.truncated,
         })
     }
 
@@ -327,53 +331,102 @@ impl GixReadBackend {
 /// Compare current HEAD against its configured fetch upstream. A local ref
 /// (including a tag, another branch, or another remote) is not evidence that
 /// this branch was pushed. The walk handles merges and diverged histories.
+/// Compare the checked-out local branch with its configured fetch upstream.
+/// This is strictly local tracking-ref state: no network access is performed.
+#[derive(Default)]
+struct BranchDifference {
+    upstream: UpstreamStatus,
+    outgoing: HashSet<String>,
+    incoming: HashSet<String>,
+    ahead: usize,
+    behind: usize,
+    truncated: bool,
+}
+
+const MAX_STATUS_COMMITS: usize = 20_000;
+
+fn difference_side(
+    repo: &gix::Repository,
+    start: gix::ObjectId,
+    exclude: gix::ObjectId,
+    page_limit: usize,
+) -> Result<(HashSet<String>, usize, bool), ()> {
+    let walk = repo
+        .rev_walk([start])
+        .with_hidden([exclude])
+        .all()
+        .map_err(|_| ())?;
+    let mut visible = HashSet::new();
+    let mut count = 0usize;
+    let mut truncated = false;
+    for commit in walk {
+        if count == MAX_STATUS_COMMITS {
+            truncated = true;
+            break;
+        }
+        let commit = commit.map_err(|_| ())?;
+        if visible.len() < page_limit.max(1) {
+            visible.insert(commit.id.to_string());
+        }
+        count += 1;
+    }
+    Ok((visible, count, truncated))
+}
+
 fn current_branch_push_state(
     repo: &gix::Repository,
     head: Option<gix::ObjectId>,
     limit: usize,
-) -> (UpstreamStatus, HashSet<String>) {
+) -> BranchDifference {
+    let fallback = |upstream| BranchDifference {
+        upstream,
+        ..BranchDifference::default()
+    };
     let Some(branch) = repo.head_name().ok().flatten() else {
-        return (UpstreamStatus::Detached, HashSet::new());
+        return fallback(UpstreamStatus::Detached);
     };
     if branch.category() != Some(gix::refs::Category::LocalBranch) {
-        return (UpstreamStatus::Detached, HashSet::new());
+        return fallback(UpstreamStatus::Detached);
     }
     let Some(tracking) =
         repo.branch_remote_tracking_ref_name(branch.as_ref(), gix::remote::Direction::Fetch)
     else {
-        return (UpstreamStatus::NotConfigured, HashSet::new());
+        return fallback(UpstreamStatus::NotConfigured);
     };
     let Ok(tracking) = tracking else {
-        return (UpstreamStatus::Unavailable, HashSet::new());
+        return fallback(UpstreamStatus::Unavailable);
     };
     let name = tracking.shorten().to_string();
     let Ok(mut reference) = repo.find_reference(tracking.as_ref()) else {
-        return (UpstreamStatus::Unavailable, HashSet::new());
+        return fallback(UpstreamStatus::Unavailable);
     };
-    let Ok(upstream_id) = reference.peel_to_id() else {
-        return (UpstreamStatus::Unavailable, HashSet::new());
+    let Ok(remote_tip) = reference.peel_to_id() else {
+        return fallback(UpstreamStatus::Unavailable);
     };
-    let Some(head_id) = head else {
-        return (UpstreamStatus::Unavailable, HashSet::new());
+    let Some(head_tip) = head else {
+        return fallback(UpstreamStatus::Unavailable);
     };
-    if upstream_id.detach() == head_id {
-        return (UpstreamStatus::Tracking(name), HashSet::new());
+    if head_tip == remote_tip.detach() {
+        return fallback(UpstreamStatus::Tracking(name));
     }
-    let Ok(walk) = repo
-        .rev_walk([head_id])
-        .with_hidden([upstream_id.detach()])
-        .all()
+    let Ok((outgoing, ahead, outbound_truncated)) =
+        difference_side(repo, head_tip, remote_tip.detach(), limit)
     else {
-        return (UpstreamStatus::Unavailable, HashSet::new());
+        return fallback(UpstreamStatus::Unavailable);
     };
-    let mut unpushed = HashSet::new();
-    for info in walk.take(limit.max(1)) {
-        let Ok(info) = info else {
-            return (UpstreamStatus::Unavailable, HashSet::new());
-        };
-        unpushed.insert(info.id.to_string());
+    let Ok((incoming, behind, inbound_truncated)) =
+        difference_side(repo, remote_tip.detach(), head_tip, limit)
+    else {
+        return fallback(UpstreamStatus::Unavailable);
+    };
+    BranchDifference {
+        upstream: UpstreamStatus::Tracking(name),
+        outgoing,
+        incoming,
+        ahead,
+        behind,
+        truncated: inbound_truncated || outbound_truncated,
     }
-    (UpstreamStatus::Tracking(name), unpushed)
 }
 
 fn history_err(err: impl std::fmt::Display) -> GitReadError {
@@ -774,6 +827,8 @@ mod tests {
             UpstreamStatus::Tracking("origin/main".into())
         );
         assert!(synced.unpushed.is_empty());
+        assert!(synced.incoming.is_empty());
+        assert_eq!((synced.ahead, synced.behind), (0, 0));
 
         commit_file(root, "source.txt", "first\n", "local one");
         let first = revision(root, "HEAD");
@@ -785,6 +840,7 @@ mod tests {
             UpstreamStatus::Tracking("origin/main".into())
         );
         assert_eq!(ahead.unpushed.len(), 2);
+        assert_eq!((ahead.ahead, ahead.behind), (2, 0));
         assert!(ahead.unpushed.contains(&first));
         assert!(ahead.unpushed.contains(&second));
         assert!(!ahead.unpushed.contains(&base));
@@ -800,6 +856,8 @@ mod tests {
         git(root, &["checkout", "main"]);
         let diverged = read.graph(root, 100).unwrap();
         assert_eq!(diverged.unpushed.len(), 2);
+        assert_eq!((diverged.ahead, diverged.behind), (2, 1));
+        assert!(diverged.incoming.contains(&remote_tip));
         assert!(diverged.unpushed.contains(&first));
         assert!(diverged.unpushed.contains(&second));
         assert!(!diverged.unpushed.contains(&remote_tip));
@@ -810,6 +868,7 @@ mod tests {
         git(root, &["update-ref", "refs/remotes/origin/main", &second]);
         let pushed = read.graph(root, 100).unwrap();
         assert!(pushed.unpushed.is_empty());
+        assert_eq!((pushed.ahead, pushed.behind), (0, 0));
 
         // A configured-but-missing ref must not be falsely treated as pushed.
         git(
@@ -819,6 +878,7 @@ mod tests {
         let unavailable = read.graph(root, 100).unwrap();
         assert_eq!(unavailable.upstream, UpstreamStatus::Unavailable);
         assert!(unavailable.unpushed.is_empty());
+        assert_eq!((unavailable.ahead, unavailable.behind), (0, 0));
 
         git(root, &["config", "--unset", "branch.main.merge"]);
         let no_upstream = read.graph(root, 100).unwrap();

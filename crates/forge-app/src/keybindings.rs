@@ -30,7 +30,8 @@ macro_rules! binding {
 static BINDINGS: &[Binding] = &[
     binding!("edit", "Edit file", false, "Ctrl+e", "e"),
     binding!("open_file", "Open file in Files", false, "o", "o"),
-    binding!("settings", "Settings", false, ",", ","),
+    binding!("settings", "Settings", false, "F9", "F9"),
+    binding!("settings_alt", "Settings (alternative)", false, "Alt+,", "Alt+,"),
     binding!("find_file", "Find file", false, "Ctrl+p", "Ctrl+p"),
     binding!("find_content", "Search contents", false, "Ctrl+f", "Ctrl+f"),
     binding!("commands", "Command palette", false, ":", ":"),
@@ -50,6 +51,14 @@ static BINDINGS: &[Binding] = &[
     binding!("back", "Back / cancel", false, "Esc", "Esc"),
     binding!("move_up", "Move up", false, "k", "k"),
     binding!("move_down", "Move down", false, "j", "j"),
+    binding!("page_up", "Scroll up one page", false, "PageUp", "PageUp"),
+    binding!("page_down", "Scroll down one page", false, "PageDown", "PageDown"),
+    binding!("scroll_start", "Scroll to beginning", false, "Home", "Home"),
+    binding!("scroll_end", "Scroll to end", false, "End", "End"),
+    binding!("pan_left", "Pan code left", false, "Alt+Left", "Alt+Left"),
+    binding!("pan_right", "Pan code right", false, "Alt+Right", "Alt+Right"),
+    binding!("pan_start", "Pan to left edge", false, "Alt+Home", "Alt+Home"),
+    binding!("pan_end", "Pan to right edge", false, "Alt+End", "Alt+End"),
     binding!("move_parent", "Go to parent", false, "h", "h"),
     binding!("move_child", "Open child", false, "l", "l"),
     binding!("preview_mode", "Markdown Preview / Code", false, "F3", "F3"),
@@ -66,15 +75,15 @@ static BINDINGS: &[Binding] = &[
         "Ctrl+c"
     ),
     binding!("selection", "Toggle selection", false, "v", "v"),
-    binding!("selection_all", "Select visible files", false, "V", "V"),
+    binding!("selection_all", "Select visible files", false, "Alt+v", "V"),
     binding!("commit", "Commit staged changes", false, "c", "c"),
     binding!("stage", "Stage selection / hunk", false, "s", "s"),
     binding!("unstage", "Unstage selection / hunk", false, "u", "u"),
     binding!("discard", "Discard changes", false, "x", "x"),
     binding!("diff", "View selected diff", false, "d", "d"),
     binding!("pull", "Pull repository", false, "p", "p"),
-    binding!("push", "Push repository", false, "P", "P"),
-    binding!("history", "Show commit history", false, "G", "G"),
+    binding!("push", "Push repository", false, "Alt+p", "P"),
+    binding!("history", "Show commit history", false, "Alt+g", "G"),
     binding!(
         "line_commit",
         "Line blame / commit details",
@@ -82,16 +91,17 @@ static BINDINGS: &[Binding] = &[
         "F6",
         "F6"
     ),
-    binding!("file_history", "File history", false, "H", "H"),
+    binding!("file_history", "File history", false, "Alt+h", "H"),
     binding!("inline_peek", "Source change peek", false, "F7", "F7"),
-    binding!("commit_history", "Commit history dialog", false, "L", "L"),
-    binding!("external_editor", "External editor", false, "E", "E"),
-    binding!("filters", "File filters", false, "F", "F"),
-    binding!("branches", "Branches", false, "B", "B"),
-    binding!("stashes", "Stashes", false, "Z", "Z"),
-    binding!("sync", "Remote synchronization", false, "S", "S"),
-    binding!("worktrees", "Worktrees", false, "W", "W"),
-    binding!("lines", "Diff line actions", false, "I", "I"),
+    binding!("commit_history", "Commit history dialog", false, "Alt+l", "L"),
+    binding!("external_editor", "External editor", false, "Alt+e", "E"),
+    binding!("filters", "File filters", false, "Alt+f", "F"),
+    binding!("branches", "Branches", false, "Alt+b", "B"),
+    binding!("stashes", "Stashes", false, "Alt+z", "Z"),
+    binding!("sync", "Remote synchronization", false, "Alt+s", "S"),
+    binding!("worktrees", "Worktrees", false, "Alt+w", "W"),
+    binding!("lines", "Diff line actions", false, "Alt+i", "I"),
+    binding!("previous_hunk", "Previous diff hunk", false, "Alt+n", "N"),
     binding!("save", "Save", true, "Ctrl+s", "Ctrl+s"),
     binding!("copy", "Copy selection / line", true, "Ctrl+c", "Ctrl+c"),
     binding!("cut", "Cut selection / line", true, "Ctrl+x", "Ctrl+x"),
@@ -112,7 +122,7 @@ fn category(b: &Binding) -> &'static str {
         | "selection_all" | "preview_mode" | "open_file" | "inline_peek" => "Files",
         "history" | "line_commit" | "file_history" | "commit_history" | "branches" | "stashes"
         | "sync" | "worktrees" | "lines" | "commit" | "stage" | "unstage" | "discard" | "diff"
-        | "pull" | "push" | "unstaged_group" | "staged_group" => "Git",
+        | "pull" | "push" | "previous_hunk" | "unstaged_group" | "staged_group" => "Git",
         "files_tab" | "git_tab" | "focus_pane" | "toggle_git" | "help" | "quit" | "shortcuts"
         | "open_item" | "back" | "move_up" | "move_down" | "move_parent" | "move_child" => {
             "Navigation"
@@ -136,6 +146,14 @@ fn fixed(b: &Binding) -> bool {
             | "back"
             | "move_up"
             | "move_down"
+            | "page_up"
+            | "page_down"
+            | "scroll_start"
+            | "scroll_end"
+            | "pan_left"
+            | "pan_right"
+            | "pan_start"
+            | "pan_end"
             | "move_parent"
             | "move_child"
             | "preview_mode"
@@ -234,6 +252,18 @@ fn parse(chord: &str) -> Option<KeyEvent> {
         KeyCode::Enter
     } else if tail == "Esc" {
         KeyCode::Esc
+    } else if tail == "Left" {
+        KeyCode::Left
+    } else if tail == "Right" {
+        KeyCode::Right
+    } else if tail == "PageUp" {
+        KeyCode::PageUp
+    } else if tail == "PageDown" {
+        KeyCode::PageDown
+    } else if tail == "Home" {
+        KeyCode::Home
+    } else if tail == "End" {
+        KeyCode::End
     } else {
         let mut chars = tail.chars();
         let c = chars.next()?;
@@ -259,6 +289,12 @@ fn chord(k: KeyEvent) -> Option<String> {
     let key = match k.code {
         KeyCode::Char(c) => c.to_string(),
         KeyCode::F(n) => format!("F{n}"),
+        KeyCode::Left => "Left".into(),
+        KeyCode::Right => "Right".into(),
+        KeyCode::PageUp => "PageUp".into(),
+        KeyCode::PageDown => "PageDown".into(),
+        KeyCode::Home => "Home".into(),
+        KeyCode::End => "End".into(),
         _ => return None,
     };
     let mut out = String::new();
@@ -346,6 +382,21 @@ impl Keybindings {
         });
         if let Some(b) = active {
             return parse(b.canonical);
+        }
+        // Legacy uppercase shortcuts remain accepted unless explicitly rebound.
+        if !editor && same(key, parse(",").unwrap())
+            && !self.overrides.contains_key("settings")
+        {
+            return parse("F9");
+        }
+        if !editor {
+            if let Some(binding) = BINDINGS.iter().find(|b| {
+                b.canonical.len() == 1
+                    && b.canonical.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+                    && b.default.starts_with("Alt+")
+                    && !self.overrides.contains_key(b.id)
+                    && same(key, parse(b.canonical).unwrap())
+            }) { return parse(binding.canonical); }
         }
         if BINDINGS.iter().any(|b| {
             b.editor == editor
@@ -608,6 +659,47 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, keys: &Keybindings, p: Pal
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_have_visible_function_key_and_legacy_aliases() {
+        let mut keys = Keybindings::default();
+        assert_eq!(keys.action_key("settings"), "F9");
+        for source in ["F9", "Alt+,", ","] {
+            let actual = keys.remap(parse(source).unwrap(), false).unwrap();
+            assert!(same(actual, parse(if source == "Alt+," { "Alt+," } else { "F9" }).unwrap()), "{source}");
+        }
+        let folder = tempfile::tempdir().unwrap();
+        keys.path = Some(folder.path().join("keys.conf"));
+        assert!(keys.update("settings", Some("F10".into())).is_err(),
+            "Settings is a fixed navigation key so the recovery entry remains reachable");
+        assert!(same(keys.remap(parse(",").unwrap(), false).unwrap(), parse("F9").unwrap()));
+    }
+
+    #[test]
+    fn uppercase_actions_use_explicit_alt_chords_without_breaking_legacy() {
+        let mut keys = Keybindings::default();
+        for (id, alt, canonical) in [
+            ("push", "Alt+p", "P"), ("history", "Alt+g", "G"),
+            ("external_editor", "Alt+e", "E"), ("branches", "Alt+b", "B"),
+            ("stashes", "Alt+z", "Z"), ("previous_hunk", "Alt+n", "N"),
+            ("selection_all", "Alt+v", "V"),
+        ] {
+            assert_eq!(keys.action_key(id), alt);
+            assert!(same(keys.remap(parse(alt).unwrap(), false).unwrap(),
+                parse(canonical).unwrap()), "{id}");
+            assert!(same(keys.remap(parse(canonical).unwrap(), false).unwrap(),
+                parse(canonical).unwrap()), "legacy {id}");
+        }
+        assert_eq!(keys.label("P"), "Alt-P");
+        assert!(same(keys.remap(parse("p").unwrap(), false).unwrap(), parse("p").unwrap()));
+        assert!(same(keys.remap(parse("g").unwrap(), false).unwrap(), parse("g").unwrap()));
+        let directory = tempfile::tempdir().unwrap();
+        keys.path = Some(directory.path().join("bindings.conf"));
+        keys.update("push", Some("F8".into())).unwrap();
+        assert!(keys.remap(parse("Alt+p").unwrap(), false).is_none());
+        assert!(keys.remap(parse("P").unwrap(), false).is_none());
+        assert!(same(keys.remap(parse("F8").unwrap(), false).unwrap(), parse("P").unwrap()));
+    }
+
     #[test]
     fn rebind_conflicts_persistence_reset_and_old_key_suppression() {
         let dir = tempfile::tempdir().unwrap();

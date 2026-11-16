@@ -23,6 +23,7 @@ arboard = { workspace = true }
 notify = { workspace = true }
 unicode-width = { workspace = true }
 shell-words = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

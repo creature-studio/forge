@@ -413,6 +413,7 @@ pub(super) enum Command {
     CycleTheme,
     ToggleStagedGutter,
     ToggleUnstagedGutter,
+    ToggleCodeWrap,
     ShortcutSettings,
     Discard,
     Branches,
@@ -440,7 +441,7 @@ const COMMANDS: &[(Command, &str)] = &[
     ),
     (
         Command::FindContent,
-        "Search file contents / regex             Ctrl-F",
+        "Search file contents / regex             Ctrl-Shift-F",
     ),
     (
         Command::OpenFile,
@@ -1077,6 +1078,10 @@ impl App {
                     value: RowValue::Command(Command::CycleTheme),
                 },
                 ToolRow {
+                    label: format!("Code auto wrap [{}]", if self.config.wrap_code { "On" } else { "Off" }),
+                    value: RowValue::Command(Command::ToggleCodeWrap),
+                },
+                ToolRow {
                     label: format!("Git Gutter: staged [{}]", if self.config.git.show_staged_gutter { "On" } else { "Off" }),
                     value: RowValue::Command(Command::ToggleStagedGutter),
                 },
@@ -1431,6 +1436,28 @@ impl App {
             format!("{}/", relative(&parent))
         };
         match command {
+            ToggleCodeWrap => {
+                let mut next = self.config.clone();
+                next.wrap_code = !next.wrap_code;
+                match next.save() {
+                    Ok(()) => {
+                        self.config = next;
+                        self.preview_state.text_rows.clear();
+                        self.preview_state.preview_scroll_x = 0;
+                        self.preview_state.preview_scroll = 0;
+                        self.reset_blame();
+                        self.reset_inline_diff();
+                        self.session.status = format!("Code auto wrap: {} · saved", if self.config.wrap_code { "On" } else { "Off" });
+                        let selected = self.tools.panel.as_ref().map_or(0, |p| p.selected);
+                        self.reload_tools();
+                        if let Some(p) = &mut self.tools.panel { p.selected = selected.min(p.rows.len().saturating_sub(1)); }
+                    }
+                    Err(err) => {
+                        self.session.status = format!("Code auto wrap not saved: {err}");
+                        if let Some(p) = &mut self.tools.panel { p.message = self.session.status.clone(); }
+                    }
+                }
+            }
             ToggleStagedGutter | ToggleUnstagedGutter => {
                 let mut next = self.config.clone();
                 let staged = matches!(command, ToggleStagedGutter);

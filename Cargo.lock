@@ -834,6 +834,7 @@ dependencies = [
  "notify",
  "ratatui",
  "ratatui-kit",
+ "regex",
  "shell-words",
  "tempfile",
  "tokio",

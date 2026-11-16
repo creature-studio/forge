@@ -416,7 +416,12 @@ pub struct HistoryView<'a> {
     pub files: &'a HashMap<String, Vec<CommitChange>>,
     /// The current branch's fetch upstream is local tracking state, not live remote data.
     pub upstream: &'a UpstreamStatus,
+    pub current_branch: &'a str,
     pub unpushed: &'a HashSet<String>,
+    pub incoming: &'a HashSet<String>,
+    pub ahead: usize,
+    pub behind: usize,
+    pub counts_truncated: bool,
 }
 
 /// Append the HISTORY section and, when open, each commit plus the file tree of
@@ -690,7 +695,18 @@ pub fn draw_scm_sidebar(
                     expanded,
                     loading,
                 } => history_section_item(
-                    theme, *count, *expanded, *loading, is_sel, focused, pinned,
+                    theme,
+                    *count,
+                    *expanded,
+                    *loading,
+                    state.history.upstream,
+                    state.history.ahead,
+                    state.history.behind,
+                    state.history.counts_truncated,
+                    body.width as usize,
+                    is_sel,
+                    focused,
+                    pinned,
                 ),
                 ScmRow::Commit { index } => {
                     let Some(commit) = state.history.commits.get(*index) else {
@@ -705,6 +721,8 @@ pub fn draw_scm_sidebar(
                         glyphs,
                         pending,
                         commit_push_badge(commit, state.history),
+                        state.history.upstream,
+                        state.history.current_branch,
                         is_sel,
                         focused,
                         body.width,
@@ -801,6 +819,11 @@ fn history_section_item(
     count: usize,
     expanded: bool,
     loading: bool,
+    upstream: &UpstreamStatus,
+    ahead: usize,
+    behind: usize,
+    counts_truncated: bool,
+    width: usize,
     selected: bool,
     focused: bool,
     pinned: bool,
@@ -849,6 +872,47 @@ fn history_section_item(
             " loading…",
             Style::default().fg(rgb(theme.muted)).bg(rgb(bg)),
         ));
+    } else {
+        let (status, fg) = match upstream {
+            UpstreamStatus::Tracking(_) => (
+                format!(
+                    " ↑{ahead}{} ↓{behind}{}",
+                    if counts_truncated && ahead >= 20_000 {
+                        "+"
+                    } else {
+                        ""
+                    },
+                    if counts_truncated && behind >= 20_000 {
+                        "+"
+                    } else {
+                        ""
+                    }
+                ),
+                theme.accent,
+            ),
+            UpstreamStatus::NotConfigured => (" · no upstream".into(), theme.muted),
+            UpstreamStatus::Unavailable => (" · upstream?".into(), theme.warning),
+            UpstreamStatus::Detached => (String::new(), theme.muted),
+        };
+        let used: usize = spans
+            .iter()
+            .map(|span| unicode_width::UnicodeWidthStr::width(span.content.as_ref()))
+            .sum();
+        let status = if used + status.width() + 1 > width {
+            match upstream {
+                UpstreamStatus::NotConfigured => " · local".to_owned(),
+                UpstreamStatus::Unavailable => " · ?".to_owned(),
+                _ => status,
+            }
+        } else {
+            status
+        };
+        if used + status.width() + 1 <= width {
+            spans.push(Span::styled(
+                status,
+                Style::default().fg(rgb(fg)).bg(rgb(bg)),
+            ));
+        }
     }
     spans.push(Span::styled(" ", pad));
     ListItem::new(Line::from(spans)).style(Style::default().bg(rgb(bg)))
@@ -869,32 +933,21 @@ fn history_child_visual_depth(depth: u16, glyphs: &[GraphCell], row_width: u16) 
     depth.saturating_add(extra.min(u16::MAX as usize) as u16)
 }
 
-/// A badge is only shown for the currently checked-out branch. Other
-/// branches in the --all graph are not compared against this upstream.
+/// Commit markers express differences relative to the checked-out branch's
+/// upstream. A shared/"pushed" commit gets no check mark: refs convey its tips.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommitPushBadge {
-    Unpushed,
-    Pushed,
-    NoUpstream,
-    Unavailable,
+    Outgoing,
+    Incoming,
 }
 
 fn commit_push_badge(commit: &GraphCommit, history: &HistoryView<'_>) -> Option<CommitPushBadge> {
     if history.unpushed.contains(&commit.id) {
-        return Some(CommitPushBadge::Unpushed);
-    }
-    let head = commit
-        .refs
-        .iter()
-        .any(|r| r.kind == forge_model::GraphRefKind::Head);
-    if !head {
-        return None;
-    }
-    match history.upstream {
-        UpstreamStatus::Tracking(_) => Some(CommitPushBadge::Pushed),
-        UpstreamStatus::NotConfigured => Some(CommitPushBadge::NoUpstream),
-        UpstreamStatus::Unavailable => Some(CommitPushBadge::Unavailable),
-        UpstreamStatus::Detached => None,
+        Some(CommitPushBadge::Outgoing)
+    } else if history.incoming.contains(&commit.id) {
+        Some(CommitPushBadge::Incoming)
+    } else {
+        None
     }
 }
 
@@ -905,6 +958,8 @@ fn commit_item(
     glyphs: &[GraphCell],
     pending: bool,
     push: Option<CommitPushBadge>,
+    upstream: &UpstreamStatus,
+    current_branch: &str,
     selected: bool,
     focused: bool,
     row_width: u16,
@@ -939,10 +994,8 @@ fn commit_item(
         // Preserve the commit subject in a narrow TUI; still show a single
         // status glyph when the complete label would crowd it out.
         let (long, short, fg) = match push {
-            CommitPushBadge::Unpushed => ("↑ unpushed ", "↑ ", theme.warning),
-            CommitPushBadge::Pushed => ("✓ pushed ", "✓ ", theme.git_added),
-            CommitPushBadge::NoUpstream => ("no upstream ", "local ", theme.muted),
-            CommitPushBadge::Unavailable => ("upstream? ", "? ", theme.warning),
+            CommitPushBadge::Outgoing => ("↑ outgoing ", "↑ ", theme.warning),
+            CommitPushBadge::Incoming => ("↓ incoming ", "↓ ", theme.accent),
         };
         let label = if width >= 50 && used + long.width() + 8 <= width {
             long
@@ -960,19 +1013,51 @@ fn commit_item(
             used += label.width();
         }
     }
-    // Local branches read better than the bare HEAD decoration.
-    let badge = commit
-        .refs
-        .iter()
-        .min_by_key(|reference| match reference.kind {
-            forge_model::GraphRefKind::LocalBranch => 0,
-            forge_model::GraphRefKind::Head => 1,
-            forge_model::GraphRefKind::Tag => 2,
-            forge_model::GraphRefKind::RemoteBranch => 3,
-        });
-    if let Some(reference) = badge {
-        let label = format!(" {} ", reference.name);
-        if width >= 34 && used + label.width() < width {
+    // The current branch and its upstream tell the push/pull story.
+    // A *different* local branch pointing to the upstream commit must not
+    // hide origin/main or be mistakenly drawn as synchronized with main.
+    let upstream_tip = match upstream {
+        UpstreamStatus::Tracking(name) => commit.refs.iter().find(|reference| {
+            reference.kind == forge_model::GraphRefKind::RemoteBranch && &reference.name == name
+        }),
+        _ => None,
+    };
+    let local_tip = commit.refs.iter().find(|reference| {
+        reference.kind == forge_model::GraphRefKind::LocalBranch && reference.name == current_branch
+    });
+    let primary = local_tip.or(upstream_tip).or_else(|| {
+        commit
+            .refs
+            .iter()
+            .min_by_key(|reference| match reference.kind {
+                forge_model::GraphRefKind::LocalBranch => 0,
+                forge_model::GraphRefKind::Head => 1,
+                forge_model::GraphRefKind::Tag => 2,
+                forge_model::GraphRefKind::RemoteBranch => 3,
+            })
+    });
+    let mut references = Vec::new();
+    if let Some(reference) = primary {
+        references.push(reference);
+    }
+    if let Some(reference) = upstream_tip {
+        if !references
+            .iter()
+            .any(|old| old.name == reference.name && old.kind == reference.kind)
+        {
+            references.push(reference);
+        }
+    }
+    // Show two branch tips when terminal width permits. In narrow terminals
+    // a shared local/upstream tip gets a compact linked-reference glyph.
+    let local_and_remote_here = local_tip.is_some() && upstream_tip.is_some();
+    for (idx, reference) in references.iter().enumerate() {
+        let label = if idx == 0 && local_and_remote_here && width < 60 {
+            format!(" {}↔ ", reference.name)
+        } else {
+            format!(" {} ", reference.name)
+        };
+        if width >= 26 && used + label.width() + 4 < width {
             let (fg, badge_bg) = match reference.kind {
                 forge_model::GraphRefKind::Head => (theme.badge_fg, theme.warning),
                 forge_model::GraphRefKind::LocalBranch => (theme.branch_fg, theme.branch_bg),
@@ -1691,6 +1776,11 @@ mod tests {
         files: HashMap<String, Vec<CommitChange>>,
         upstream: UpstreamStatus,
         unpushed: HashSet<String>,
+        current_branch: String,
+        incoming: HashSet<String>,
+        ahead: usize,
+        behind: usize,
+        counts_truncated: bool,
     }
 
     impl History {
@@ -1704,7 +1794,12 @@ mod tests {
                 expanded_dirs: &self.expanded_dirs,
                 files: &self.files,
                 upstream: &self.upstream,
+                current_branch: &self.current_branch,
                 unpushed: &self.unpushed,
+                incoming: &self.incoming,
+                ahead: self.ahead,
+                behind: self.behind,
+                counts_truncated: self.counts_truncated,
             }
         }
     }
@@ -1722,29 +1817,50 @@ mod tests {
     }
 
     #[test]
-    fn history_push_badges_distinguish_unpushed_synced_and_unconfigured() {
+    fn history_badges_are_directional_without_false_pushed_checks() {
         use ratatui::{buffer::Buffer, layout::Rect, widgets::Widget};
         let theme = Theme::modern_ide();
         let mut history = History::default();
-        let mut head = commit(
-            "abcdef0123456789",
-            "new local feature",
-            &["123456789abcdef0"],
-        );
-        head.refs.push(forge_model::GraphRef {
-            name: "HEAD".into(),
-            kind: forge_model::GraphRefKind::Head,
+        let mut local = commit("abcdef0123456789", "local feature", &["123456789abcdef0"]);
+        local.refs.push(forge_model::GraphRef {
+            name: "main".into(),
+            kind: forge_model::GraphRefKind::LocalBranch,
         });
-        let other = commit("123456789abcdef0", "old shared commit", &[]);
-        history.commits = vec![head.clone(), other.clone()];
+        let mut remote = commit("fedcba9876543210", "remote feature", &["123456789abcdef0"]);
+        remote.refs.push(forge_model::GraphRef {
+            name: "origin/main".into(),
+            kind: forge_model::GraphRefKind::RemoteBranch,
+        });
+        let common = commit("123456789abcdef0", "common", &[]);
+        history.commits = vec![local.clone(), remote.clone(), common.clone()];
         history.upstream = UpstreamStatus::Tracking("origin/main".into());
-        history.unpushed.insert(head.id.clone());
-        let badge = commit_push_badge(&head, &history.view());
-        assert_eq!(badge, Some(CommitPushBadge::Unpushed));
-        assert_eq!(commit_push_badge(&other, &history.view()), None);
-
-        let render = |badge| {
-            let item = commit_item(&theme, &head, &[], false, badge, false, false, 88, false);
+        history.unpushed.insert(local.id.clone());
+        history.incoming.insert(remote.id.clone());
+        history.ahead = 1;
+        history.behind = 1;
+        assert_eq!(
+            commit_push_badge(&local, &history.view()),
+            Some(CommitPushBadge::Outgoing)
+        );
+        assert_eq!(
+            commit_push_badge(&remote, &history.view()),
+            Some(CommitPushBadge::Incoming)
+        );
+        assert_eq!(commit_push_badge(&common, &history.view()), None);
+        let render = |commit: &GraphCommit, badge: Option<CommitPushBadge>| {
+            let item = commit_item(
+                &theme,
+                commit,
+                &[],
+                false,
+                badge,
+                &history.upstream,
+                &history.current_branch,
+                false,
+                false,
+                88,
+                false,
+            );
             let area = Rect::new(0, 0, 88, 1);
             let mut buf = Buffer::empty(area);
             List::new(vec![item]).render(area, &mut buf);
@@ -1753,27 +1869,16 @@ mod tests {
                 .map(|cell| cell.symbol())
                 .collect::<String>()
         };
-        assert!(render(badge).contains("unpushed"));
-
+        assert!(render(&local, commit_push_badge(&local, &history.view())).contains("↑ outgoing"));
+        assert!(render(&remote, commit_push_badge(&remote, &history.view())).contains("↓ incoming"));
+        assert!(!render(&common, None).contains('✓'));
         history.unpushed.clear();
-        assert_eq!(
-            commit_push_badge(&head, &history.view()),
-            Some(CommitPushBadge::Pushed)
-        );
-        assert!(render(commit_push_badge(&head, &history.view())).contains("pushed"));
+        history.incoming.clear();
+        assert_eq!(commit_push_badge(&local, &history.view()), None);
         history.upstream = UpstreamStatus::NotConfigured;
-        assert_eq!(
-            commit_push_badge(&head, &history.view()),
-            Some(CommitPushBadge::NoUpstream)
-        );
-        assert!(render(commit_push_badge(&head, &history.view())).contains("no upstream"));
+        assert_eq!(commit_push_badge(&local, &history.view()), None);
         history.upstream = UpstreamStatus::Unavailable;
-        assert_eq!(
-            commit_push_badge(&head, &history.view()),
-            Some(CommitPushBadge::Unavailable)
-        );
-        history.upstream = UpstreamStatus::Detached;
-        assert_eq!(commit_push_badge(&head, &history.view()), None);
+        assert_eq!(commit_push_badge(&local, &history.view()), None);
     }
 
     #[test]
@@ -1788,7 +1893,9 @@ mod tests {
             &commit,
             &[],
             false,
-            Some(CommitPushBadge::Unpushed),
+            Some(CommitPushBadge::Outgoing),
+            &UpstreamStatus::Tracking("origin/main".into()),
+            "main",
             false,
             false,
             area.width,

@@ -88,7 +88,10 @@ j/k, arrows, PageUp/PageDown or mouse wheel: scroll help.
 Typing ?, q, s or other shortcuts in the commit editor inserts text.
 \nSearch and workspace commands
 : opens searchable Commands; type a command name, Enter runs it.
-Ctrl-P: fuzzy filename search. Ctrl-F: global content search.
+Ctrl-P: fuzzy filename search. Ctrl-F: in-file find if a file is open,
+otherwise workspace search. Ctrl-Shift-F: always search the whole workspace.
+In-file find: Enter/Shift-Enter navigate, F3/Shift-F3 while open, Esc closes,
+Tab returns to scrolling. Alt-C case, Alt-W whole word, Alt-R regex.
 Ctrl-R in content search toggles regex. Enter jumps to the result line.
 Search respects ignore files; skips binary files, files over 2 MiB and .git.
 F: filters for Git status, extension, hidden files and excluded directories.
@@ -425,7 +428,7 @@ impl App {
                 },
                 Shortcut {
                     key: "Ctrl-F",
-                    label: "Search",
+                    label: "Find",
                 },
                 Shortcut {
                     key: "G",

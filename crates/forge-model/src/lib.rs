@@ -531,6 +531,13 @@ pub struct GraphSnapshot {
     /// Commits reachable from current HEAD but not from the upstream tip.
     /// Contains at most the graph page limit, and only when upstream exists.
     pub unpushed: HashSet<String>,
+    /// Upstream-only commits, relative to this branch (local tracking refs).
+    pub incoming: HashSet<String>,
+    /// Ahead/behind are graph reachability counts, not Git working-tree changes.
+    pub ahead: usize,
+    pub behind: usize,
+    /// A safety bound was hit; display a '+' after the count.
+    pub counts_truncated: bool,
 }
 
 /// How a file changed inside a commit.

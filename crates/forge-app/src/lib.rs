@@ -27,6 +27,8 @@ use forge_ui::{
 };
 mod auto_refresh;
 mod blame;
+mod file_find;
+mod file_find_ui;
 mod inline_diff;
 mod preview_selection;
 use preview_selection::PreviewSelection;
@@ -161,12 +163,17 @@ struct ScmState {
 
 struct PreviewState {
     preview_scroll: usize,
+    /// Horizontal displacement of source code columns (gutter stays fixed).
+    preview_scroll_x: usize,
+    find: file_find::FileFindState,
     markdown_code: bool,
     markdown: MarkdownPreview,
     selection: PreviewSelection,
     text_rows: TextRowsCache,
     /// Source file line to seek once Code rows have been measured for width.
     pending_source_line: Option<usize>,
+    /// UTF-8 byte column of a pending in-file Find result.
+    pending_find_byte: Option<usize>,
     split_cache: SplitRowsCache,
     diff_row_count: usize,
     pending_preview: Option<PendingPreview>,
@@ -481,11 +488,14 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         },
         preview_state: PreviewState {
             preview_scroll: 0,
+            preview_scroll_x: 0,
+            find: file_find::FileFindState::default(),
             markdown_code: false,
             markdown: MarkdownPreview::default(),
             selection: PreviewSelection::default(),
             text_rows: TextRowsCache::default(),
             pending_source_line: None,
+            pending_find_byte: None,
             split_cache: SplitRowsCache::default(),
             diff_row_count: 0,
             pending_preview: None,
@@ -817,7 +827,19 @@ impl App {
 
     fn request_list(&mut self) {
         self.invalidate_search_cache();
-        // Retain the selected path until the expanded descendants reload.
+        // Manual refresh (r), Git writes, and settings changes must not
+        // destroy the current file reader or its list viewport. A genuinely
+        // new workspace starts with an empty visible list and still resets.
+        if !self.files.visible.is_empty() {
+            self.record_refresh_anchor();
+            let shown_file = self.preview_state.preview.as_ref().map(|p| p.path.clone());
+            self.refresh_tree_in_place();
+            if let Some(path) = shown_file {
+                self.refresh_preview_if_affected(&[path]);
+            }
+            return;
+        }
+        // Cold start / explicit workspace change.
         self.record_refresh_anchor();
         self.files.children.clear();
         self.files.pending_lists.clear();
@@ -842,6 +864,24 @@ impl App {
         }
     }
 
+    /// Refresh directory contents without replacing the currently displayed
+    /// tree. Reload every expanded directory as well as root; stale children
+    /// stay visible until their respective async results arrive.
+    fn refresh_tree_in_place(&mut self) {
+        self.files.pending_lists.clear();
+        let root = self.files.tree_root.clone();
+        self.request_dir(root.clone());
+        let mut expanded: Vec<_> = self.files.expanded.iter()
+            .filter(|path| *path != &root && path.starts_with(&root))
+            .cloned()
+            .collect();
+        expanded.sort();
+        expanded.dedup();
+        for path in expanded {
+            self.request_dir(path);
+        }
+    }
+
     /// Refresh the directory cache and Git snapshot without dropping focus,
     /// expansion, or a loaded diff/preview. Editing drafts are never touched.
     ///
@@ -856,9 +896,7 @@ impl App {
         self.invalidate_search_cache();
         self.reset_inline_diff();
         self.record_refresh_anchor();
-        self.files.children.clear();
-        self.files.pending_lists.clear();
-        self.request_dir(self.files.tree_root.clone());
+        self.refresh_tree_in_place();
         self.request_status();
         if git_metadata_changed && self.history.expanded {
             self.request_history();
@@ -1034,7 +1072,14 @@ impl App {
         {
             return;
         }
+        if self
+            .selected_entry()
+            .is_some_and(|entry| self.preview_state.find.path != entry.path)
+        {
+            self.reset_file_find();
+        }
         self.cancel_preview_page();
+        self.preview_state.preview_scroll_x = 0;
         self.reset_blame();
         self.reset_inline_diff();
         self.preview_state.preview_mode = PreviewMode::File;
@@ -1042,6 +1087,7 @@ impl App {
         self.preview_state.markdown = MarkdownPreview::default();
         self.preview_state.text_rows.clear();
         self.preview_state.pending_source_line = None;
+        self.preview_state.pending_find_byte = None;
         self.clear_diff_view();
         self.services.jobs.cancel_key("git:diff");
         self.preview_state.pending_diff = None;
@@ -1098,9 +1144,22 @@ impl App {
             return; // The next directory load will request the new selection.
         }
         self.cancel_preview_page();
-        self.reset_blame();
+        self.refresh_blame_in_place();
+        // Read through the visible source line before swapping the new
+        // snapshot in. Replacing a 2,000-line preview with the first 400
+        // lines would otherwise make the renderer clamp scroll to 0.
+        let viewport = self.session.layout.preview_inner.height as usize;
+        let through_line = if self.preview_state.text_rows.line_count() > 0 {
+            self.preview_state.text_rows.row_to_source(
+                self.preview_state.preview_scroll.saturating_add(viewport),
+            ).saturating_add(16)
+        } else {
+            self.preview_state.preview_scroll.saturating_add(viewport).saturating_add(32)
+        };
         let path = entry.path.clone();
-        let handle = self.services.fs.preview(&self.services.jobs, path.clone(), entry.kind);
+        let handle = self.services.fs.preview_through_line(
+            &self.services.jobs, path.clone(), entry.kind, through_line,
+        );
         self.preview_state.pending_preview = Some(PendingPreview {
             id: handle.id,
             path,
@@ -1119,6 +1178,7 @@ impl App {
         };
         self.cancel_preview_page();
         self.preview_state.preview_mode = PreviewMode::Diff;
+        self.preview_state.preview_scroll_x = 0;
         self.preview_state.preview_loading = true;
         self.preview_state.preview_scroll = 0;
         self.preview_state.diff_label = match &source {
@@ -1329,7 +1389,9 @@ impl App {
 
     fn set_file_diff(&mut self, diff: FileDiff) {
         self.preview_state.selection.clear();
-        self.preview_state.split_cache.set_full_new_lines(diff.full_new_lines.as_deref());
+        self.preview_state
+            .split_cache
+            .set_full_new_lines(diff.full_new_lines.as_deref());
         let count = if diff.lines.is_empty() && diff.full_new_lines.is_none() {
             1
         } else {
@@ -1468,7 +1530,9 @@ impl App {
 
     fn poll_pending_page(&mut self) -> bool {
         let done = match self.preview_state.pending_page.as_mut() {
-            Some(pending) => pending.handle.try_join()
+            Some(pending) => pending
+                .handle
+                .try_join()
                 .map(|result| (pending.path.clone(), pending.from_offset, result)),
             None => None,
         };
@@ -1490,7 +1554,12 @@ impl App {
         if preview.path != path {
             return true;
         }
-        let PreviewContent::Text { lines, truncated, bytes_read } = &mut preview.content else {
+        let PreviewContent::Text {
+            lines,
+            truncated,
+            bytes_read,
+        } = &mut preview.content
+        else {
             return true;
         };
         if !*truncated || *bytes_read as u64 != from_offset {
@@ -1510,6 +1579,7 @@ impl App {
             Ok(Err(err)) => self.session.status = format!("preview page error: {err}"),
             Err(JobError::Cancelled | JobError::Shutdown) => {}
         }
+        self.advance_file_find_jump();
         true
     }
 
@@ -1531,7 +1601,12 @@ impl App {
         let Some(preview) = self.preview_state.preview.as_ref() else {
             return;
         };
-        let PreviewContent::Text { truncated: true, bytes_read, .. } = &preview.content else {
+        let PreviewContent::Text {
+            truncated: true,
+            bytes_read,
+            ..
+        } = &preview.content
+        else {
             return;
         };
         let Some(entry) = self.selected_entry() else {
@@ -1543,15 +1618,23 @@ impl App {
             return;
         }
         let viewport = self.session.layout.preview_inner.height as usize;
-        let remaining = self.preview_total_lines()
+        let remaining = self
+            .preview_total_lines()
             .saturating_sub(self.preview_state.preview_scroll.saturating_add(viewport));
-        if remaining > viewport.max(32) {
+        if remaining > viewport.max(32) && self.preview_state.find.jump_target.is_none() {
             return;
         }
         let path = preview.path.clone();
         let from_offset = *bytes_read as u64;
-        let handle = self.services.fs.preview_page(&self.services.jobs, path.clone(), from_offset);
-        self.preview_state.pending_page = Some(PendingPreviewPage { path, from_offset, handle });
+        let handle = self
+            .services
+            .fs
+            .preview_page(&self.services.jobs, path.clone(), from_offset);
+        self.preview_state.pending_page = Some(PendingPreviewPage {
+            path,
+            from_offset,
+            handle,
+        });
     }
 
     fn poll_pending_diff(&mut self) -> bool {
@@ -1752,7 +1835,12 @@ impl App {
                         } else {
                             old_scroll
                         };
-                        self.files.external_anchor = None;
+                        // Subsequent expanded-directory results can still shift
+                        // row indices. Retain the original anchor until the
+                        // entire refresh is complete, not just the root load.
+                        if self.files.pending_lists.is_empty() {
+                            self.files.external_anchor = None;
+                        }
                     } else if self.files.pending_lists.is_empty() {
                         // Removed paths fall back to their closest visible ancestor.
                         let mut parent = path.parent();
@@ -1928,8 +2016,9 @@ impl App {
             .as_ref()
             .is_some_and(|(selected, _)| selected == &path);
         if !refresh_anchor_matches
-            && !current
-                .is_some_and(|entry| entry.path == path || matches!(entry.kind, EntryKind::Directory))
+            && !current.is_some_and(|entry| {
+                entry.path == path || matches!(entry.kind, EntryKind::Directory)
+            })
         {
             return;
         }
@@ -1950,6 +2039,12 @@ impl App {
                 self.preview_state.pending_source_line = None;
                 self.preview_state.preview = Some(preview);
                 self.preview_state.preview_loading = false;
+                if same_file
+                    && self.preview_state.find.open
+                    && !self.preview_state.find.query.is_empty()
+                {
+                    self.start_file_find();
+                }
                 if !same_file {
                     self.preview_state.preview_scroll = 0;
                 }
@@ -1990,6 +2085,7 @@ impl App {
     }
 
     fn enter_git_sidebar(&mut self) {
+        self.close_file_find();
         self.tools.marks.clear();
         if !self.in_git_sidebar() {
             self.files_preview = Some((
@@ -2693,6 +2789,16 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) {
+        if self.preview_state.find.open {
+            if matches!(key.code, KeyCode::F(1) | KeyCode::F(2)) {
+                self.close_file_find();
+            } else if self.preview_state.find.input_active
+                || matches!(key.code, KeyCode::Esc | KeyCode::F(3))
+            {
+                self.handle_file_find_key(key);
+                return;
+            }
+        }
         if self.blame.popup.is_some() {
             self.handle_blame_key(key);
             return;
@@ -2823,7 +2929,20 @@ impl App {
                 self.open_tools(tools::PanelKind::Files)
             }
             KeyCode::Char('f' | 'F') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.open_tools(tools::PanelKind::Content)
+                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.open_tools(tools::PanelKind::Content);
+                } else if !self.in_git_sidebar()
+                    && matches!(self.preview_state.preview_mode, PreviewMode::File)
+                    && self
+                        .preview_state
+                        .preview
+                        .as_ref()
+                        .is_some_and(|p| matches!(p.content, PreviewContent::Text { .. }))
+                {
+                    self.open_file_find();
+                } else {
+                    self.open_tools(tools::PanelKind::Content);
+                }
             }
             KeyCode::Char(':') => self.open_tools(tools::PanelKind::Commands),
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -2840,6 +2959,7 @@ impl App {
             }
             KeyCode::Char('E') => self.run_command(tools::Command::Editor),
             KeyCode::Char('o') => self.open_selected_worktree_file(),
+            KeyCode::F(9) => self.open_tools(tools::PanelKind::Settings),
             KeyCode::Char(',') => self.open_tools(tools::PanelKind::Settings),
             KeyCode::Char('H') => self.run_command(tools::Command::FileHistory),
             KeyCode::Char('L') => self.run_command(tools::Command::History),
@@ -2995,6 +3115,35 @@ impl App {
                     self.open_selected();
                 }
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
+                if key.modifiers.contains(KeyModifiers::ALT)
+                    && self.session.focus == PaneFocus::Preview
+                    && !self.config.wrap_code
+                    && matches!(self.preview_state.preview_mode, PreviewMode::File | PreviewMode::Diff) =>
+            {
+                let max_x = if matches!(self.preview_state.preview_mode, PreviewMode::Diff) {
+                    let visible = (self.session.layout.preview_inner.width as usize / 2).saturating_sub(7);
+                    if let Some(diff) = &self.preview_state.file_diff {
+                        self.preview_state.split_cache.max_code_columns(&diff.lines).saturating_sub(visible)
+                    } else { 0 }
+                } else {
+                    let visible = self.session.layout.preview_inner.width.saturating_sub(5) as usize;
+                    self.preview_state.text_rows.max_code_columns().saturating_sub(visible)
+                };
+                let previous_x = self.preview_state.preview_scroll_x;
+                let offset = &mut self.preview_state.preview_scroll_x;
+                *offset = match key.code {
+                    KeyCode::Left => offset.saturating_sub(8),
+                    KeyCode::Right => offset.saturating_add(8).min(max_x),
+                    KeyCode::Home => 0,
+                    KeyCode::End => max_x,
+                    _ => *offset,
+                };
+                if previous_x != *offset {
+                    // Old visual selection coordinates refer to a different horizontal window.
+                    self.preview_state.selection.clear();
+                }
+            }
             KeyCode::Char('h') | KeyCode::Backspace | KeyCode::Left => {
                 if matches!(self.session.focus, PaneFocus::Preview) {
                     self.session.focus = PaneFocus::List;
@@ -3062,15 +3211,22 @@ impl App {
                     }
                 }
             }
-            KeyCode::PageDown => match self.session.focus {
-                PaneFocus::Preview => self.scroll_preview(10),
-                PaneFocus::List | PaneFocus::Staging if self.in_git_sidebar() => self.move_scm(5),
-                _ => self.move_sel(10),
-            },
-            KeyCode::PageUp => match self.session.focus {
-                PaneFocus::Preview => self.scroll_preview(-10),
-                PaneFocus::List | PaneFocus::Staging if self.in_git_sidebar() => self.move_scm(-5),
-                _ => self.move_sel(-10),
+            KeyCode::PageDown | KeyCode::PageUp => {
+                let sign = if key.code == KeyCode::PageDown { 1 } else { -1 };
+                match self.session.focus {
+                    PaneFocus::Preview => {
+                        let page = self.session.layout.preview_inner.height.saturating_sub(2).max(1) as isize;
+                        self.scroll_preview(sign * page);
+                    }
+                    PaneFocus::List | PaneFocus::Staging if self.in_git_sidebar() => {
+                        let page = self.session.layout.list_inner.height.saturating_sub(2).max(1) as isize;
+                        self.move_scm(sign * page);
+                    }
+                    _ => {
+                        let page = self.session.layout.list_inner.height.saturating_sub(2).max(1) as isize;
+                        self.move_sel(sign * page);
+                    }
+                }
             },
             _ => {}
         }
@@ -3103,6 +3259,37 @@ impl App {
                 _ => {}
             }
             return;
+        }
+        if self.preview_state.find.open
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            let rect = self.session.layout.file_find_rect;
+            if rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
+                if mouse.row == rect.y + 1 {
+                    self.preview_state.find.input_active = true;
+                } else if mouse.row == rect.y + 2 {
+                    let x = mouse.column.saturating_sub(rect.x);
+                    let w = rect.width;
+                    if w >= 34 && x >= w.saturating_sub(3) {
+                        self.close_file_find();
+                    } else if w >= 34 && x >= w.saturating_sub(9) {
+                        self.navigate_file_find(true);
+                    } else if w >= 34 && x >= w.saturating_sub(16) {
+                        self.navigate_file_find(false);
+                    } else if (2..6).contains(&x) {
+                        self.preview_state.find.match_case = !self.preview_state.find.match_case;
+                        self.start_file_find();
+                    } else if (7..11).contains(&x) {
+                        self.preview_state.find.whole_word = !self.preview_state.find.whole_word;
+                        self.start_file_find();
+                    } else if (12..17).contains(&x) {
+                        self.preview_state.find.regex = !self.preview_state.find.regex;
+                        self.start_file_find();
+                    }
+                }
+                return;
+            }
+            self.preview_state.find.input_active = false;
         }
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && !self.inline_popup_contains(mouse.column, mouse.row)
@@ -3558,7 +3745,8 @@ impl App {
         let total = self.preview_total_lines();
         let viewport = self.session.layout.preview_inner.height as usize;
         let max_scroll = total.saturating_sub(viewport);
-        let next = (self.preview_state.preview_scroll as isize).saturating_add(delta)
+        let next = (self.preview_state.preview_scroll as isize)
+            .saturating_add(delta)
             .clamp(0, max_scroll as isize) as usize;
         self.preview_state.preview_scroll = next;
         if delta > 0 {

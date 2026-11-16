@@ -83,6 +83,11 @@ pub enum PreviewView<'a> {
     TextRows {
         rows: &'a [Line<'static>],
     },
+    /// Unwrapped source, clipped after the fixed five-column line-number gutter.
+    TextRowsScrolled {
+        rows: &'a [Line<'static>],
+        horizontal_offset: usize,
+    },
     Diff {
         path: &'a str,
         side: &'a str,
@@ -90,6 +95,14 @@ pub enum PreviewView<'a> {
         hunk_start: Option<usize>,
         hunk_end: Option<usize>,
         hunk_idx: Option<(usize, usize)>,
+    },
+    /// Git split diff with synchronized horizontal displacement on both sides.
+    DiffScrolled {
+        path: &'a str,
+        lines: &'a [DiffLine],
+        hunk_start: Option<usize>,
+        hunk_end: Option<usize>,
+        horizontal_offset: usize,
     },
 }
 
@@ -110,6 +123,8 @@ pub struct TextRowsCache {
     bytes_read: usize,
     source_count: usize,
     source_rows: usize,
+    wrap_enabled: bool,
+    max_code_columns: usize,
 }
 
 impl TextRowsCache {
@@ -126,7 +141,20 @@ impl TextRowsCache {
         language: TextLang,
         width: u16,
     ) {
-        if self.width == width
+        self.ensure_wrapping(theme, lines, truncated, bytes_read, language, width, true);
+    }
+
+    pub fn ensure_wrapping(
+        &mut self,
+        theme: &Theme,
+        lines: &[String],
+        truncated: bool,
+        bytes_read: usize,
+        language: TextLang,
+        width: u16,
+        wrap_enabled: bool,
+    ) {
+        if self.width == width && self.wrap_enabled == wrap_enabled
             && self.theme.as_ref() == Some(theme)
             && self.lang == language
             && self.truncated == truncated
@@ -137,6 +165,7 @@ impl TextRowsCache {
         }
         self.rows.clear();
         self.source_starts.clear();
+        self.max_code_columns = 0;
         let width = width.max(1);
         self.rows.reserve(lines.len());
         self.source_starts.reserve(lines.len());
@@ -145,14 +174,18 @@ impl TextRowsCache {
                 crate::syntax::highlight_lines(theme, extension, lines, |index, body| {
                     self.source_starts.push(self.rows.len());
                     let source = numbered_line_with_body(theme, index + 1, body);
-                    self.rows.extend(wrap_line(&source, width));
+                    self.max_code_columns = self.max_code_columns.max(source.width().saturating_sub(5));
+                    if wrap_enabled { self.rows.extend(wrap_line(&source, width)); }
+                    else { self.rows.push(source); }
                 });
             }
             _ => {
                 for (index, line) in lines.iter().enumerate() {
                     self.source_starts.push(self.rows.len());
                     let source = text_line_numbered(theme, index + 1, line, &language);
-                    self.rows.extend(wrap_line(&source, width));
+                    self.max_code_columns = self.max_code_columns.max(source.width().saturating_sub(5));
+                    if wrap_enabled { self.rows.extend(wrap_line(&source, width)); }
+                    else { self.rows.push(source); }
                 }
             }
         }
@@ -172,6 +205,7 @@ impl TextRowsCache {
             self.rows.extend(wrap_line(&footer, width));
         }
         self.width = width;
+        self.wrap_enabled = wrap_enabled;
         self.theme = Some(theme.clone());
         self.lang = language;
         self.truncated = truncated;
@@ -181,6 +215,10 @@ impl TextRowsCache {
 
     pub fn rows(&self) -> &[Line<'static>] {
         &self.rows
+    }
+
+    pub fn max_code_columns(&self) -> usize {
+        self.max_code_columns
     }
 
     pub fn width(&self) -> u16 {
@@ -197,6 +235,43 @@ impl TextRowsCache {
             .get(line.saturating_sub(1))
             .copied()
             .unwrap_or(0)
+    }
+
+    /// Rendered-row interval of a source line, including soft wraps.
+    /// Only the file's code rows are included (not the load-more footer).
+    pub fn source_row_range(&self, line: usize) -> Option<std::ops::Range<usize>> {
+        let start = *self.source_starts.get(line.checked_sub(1)?)?;
+        let end = self
+            .source_starts
+            .get(line)
+            .copied()
+            .unwrap_or(self.source_rows);
+        Some(start..end)
+    }
+
+    /// Locate a UTF-8 byte offset inside a source line after soft wrapping.
+    /// This powers in-file Find jumps for long logs without changing row indices.
+    pub fn source_byte_to_row(&self, line: usize, byte: usize) -> usize {
+        let Some(range) = self.source_row_range(line) else { return 0; };
+        let mut seen_gutter = false;
+        let mut offset = 0usize;
+        let mut last = range.start;
+        for row_index in range {
+            let Some(row) = self.rows.get(row_index) else { continue; };
+            last = row_index;
+            for glyph in row.styled_graphemes(Style::default()) {
+                if !seen_gutter {
+                    if glyph.symbol == "│" { seen_gutter = true; }
+                    continue;
+                }
+                let next = offset + glyph.symbol.len();
+                if byte < next {
+                    return row_index;
+                }
+                offset = next;
+            }
+        }
+        last
     }
 
     /// 0-based rendered row -> 1-based source line for editor navigation.
@@ -222,6 +297,7 @@ pub struct SplitRowsCache {
     lines_len: usize,
     full_new_lines: Option<Vec<String>>,
     rows: Vec<SplitRow>,
+    max_columns: usize,
 }
 
 impl SplitRowsCache {
@@ -230,6 +306,7 @@ impl SplitRowsCache {
         self.lines_len = 0;
         self.full_new_lines = None;
         self.rows.clear();
+        self.max_columns = 0;
     }
 
     /// Complete file data remains separate from the actionable patch.
@@ -249,6 +326,13 @@ impl SplitRowsCache {
                 .and_then(|full| build_complete_split_rows(partial.clone(), full))
                 .unwrap_or(partial);
             annotate_split_line_numbers(&mut self.rows);
+            use unicode_width::UnicodeWidthStr;
+            self.max_columns = self.rows.iter().filter_map(|row| match &row.kind {
+                SplitRowKind::Pair { old, new, .. } => Some(
+                    old.as_deref().map_or(0, UnicodeWidthStr::width)
+                    .max(new.as_deref().map_or(0, UnicodeWidthStr::width))),
+                _ => None,
+            }).max().unwrap_or(0);
         }
         &self.rows
     }
@@ -256,6 +340,11 @@ impl SplitRowsCache {
     /// Ensure cache is warm; returns split-row count (0 if `lines` empty).
     pub fn ensure(&mut self, lines: &[DiffLine]) -> usize {
         self.rows_for(lines).len()
+    }
+
+    pub fn max_code_columns(&mut self, lines: &[DiffLine]) -> usize {
+        self.rows_for(lines);
+        self.max_columns
     }
 }
 
@@ -294,7 +383,7 @@ pub fn draw_preview(
         );
     }
 
-    let is_diff = matches!(view, PreviewView::Diff { .. });
+    let is_diff = matches!(view, PreviewView::Diff { .. } | PreviewView::DiffScrolled { .. });
     let inner = area;
     style::fill_panel(frame, inner, theme);
 
@@ -315,7 +404,7 @@ pub fn draw_preview(
 
     let style = Style::default().bg(rgb(theme.panel_bg)).fg(rgb(theme.fg));
     // Diff rows are pre-fitted to width; wrapping would break the split columns.
-    let para = if is_diff || matches!(view, PreviewView::TextRows { .. }) {
+    let para = if is_diff || matches!(view, PreviewView::TextRows { .. } | PreviewView::TextRowsScrolled { .. }) {
         Paragraph::new(visible).style(style)
     } else {
         Paragraph::new(visible)
@@ -324,6 +413,41 @@ pub fn draw_preview(
     };
     frame.render_widget(para, inner);
     inner
+}
+
+/// Clip an unwrapped syntax-highlighted source row, keeping its fixed
+/// line-number gutter. Offset/width are terminal cells, not UTF-8 bytes.
+/// Wide glyphs crossing the clip boundary become spaces rather than leaking
+/// half a CJK glyph into the adjacent pane.
+fn clip_source_row(line: &Line<'_>, offset: usize, width: usize) -> Line<'static> {
+    if width == 0 { return Line::default(); }
+    let gutter = width.min(5);
+    let mut result = Vec::<Span<'static>>::new();
+    let mut col = 0usize;
+    let mut written = 0usize;
+    let content_width = width.saturating_sub(gutter);
+    let end = offset.saturating_add(content_width);
+    for span in &line.spans {
+        let mut text = String::new();
+        for ch in span.content.chars() {
+            let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+            let next = col.saturating_add(cw);
+            if col < 5 {
+                if next <= gutter { text.push(ch); written += cw; }
+            } else if col >= 5 + offset && next <= 5 + end {
+                text.push(ch); written += cw;
+            } else if next > 5 + offset && col < 5 + offset && next <= 5 + end {
+                // A requested offset lands in the second cell of a wide glyph.
+                text.push(' '); written += 1;
+            }
+            col = next;
+        }
+        if !text.is_empty() {
+            result.push(Span::styled(text, span.style));
+        }
+    }
+    if written < width { result.push(Span::raw(" ".repeat(width - written))); }
+    Line::from(result)
 }
 
 /// Build only the `[start, end)` content lines (viewport virtualization).
@@ -338,9 +462,13 @@ fn build_visible_lines(
     if end <= start {
         return Vec::new();
     }
+    let diff_x = match &view { PreviewView::DiffScrolled { horizontal_offset, .. } => *horizontal_offset, _ => 0 };
     match view {
         PreviewView::Markdown { .. } => Vec::new(),
         PreviewView::TextRows { rows } => rows[start.min(rows.len())..end.min(rows.len())].to_vec(),
+        PreviewView::TextRowsScrolled { rows, horizontal_offset } =>
+            rows[start.min(rows.len())..end.min(rows.len())].iter()
+                .map(|row| clip_source_row(row, horizontal_offset, width as usize)).collect(),
         PreviewView::Loading => slice_static(
             start,
             end,
@@ -464,13 +592,8 @@ fn build_visible_lines(
             }
             out
         }
-        PreviewView::Diff {
-            path,
-            lines,
-            hunk_start,
-            hunk_end,
-            ..
-        } => {
+        PreviewView::Diff { path, lines, hunk_start, hunk_end, .. }
+        | PreviewView::DiffScrolled { path, lines, hunk_start, hunk_end, .. } => {
             let rows = split_cache.rows_for(lines);
             if rows.is_empty() {
                 return slice_static(
@@ -486,11 +609,13 @@ fn build_visible_lines(
             // Parse each side independently, once per visible window. Source and
             // viewport remain bounded; never tokenize the entire Git history.
             let left_text: Vec<String> = visible.iter().map(|row| match &row.kind {
-                SplitRowKind::Pair { old, .. } => fit_cell(old.as_deref().unwrap_or(""), left_w.saturating_sub(6)),
+                SplitRowKind::Pair { old, .. } => if diff_x > 0 { old.clone().unwrap_or_default() }
+                    else { fit_cell(old.as_deref().unwrap_or(""), left_w.saturating_sub(6)) },
                 _ => String::new(),
             }).collect();
             let right_text: Vec<String> = visible.iter().map(|row| match &row.kind {
-                SplitRowKind::Pair { new, .. } => fit_cell(new.as_deref().unwrap_or(""), right_w.saturating_sub(6)),
+                SplitRowKind::Pair { new, .. } => if diff_x > 0 { new.clone().unwrap_or_default() }
+                    else { fit_cell(new.as_deref().unwrap_or(""), right_w.saturating_sub(6)) },
                 _ => String::new(),
             }).collect();
             let left_syntax = highlight_code_lines(theme, path, &left_text);
@@ -500,8 +625,8 @@ fn build_visible_lines(
                     (Some(s), Some(e)) => row.src_indices.iter().any(|&i| i >= s && i < e),
                     _ => false,
                 };
-                render_split_row(theme, row, width, in_hunk,
-                    Some((&left_syntax[index], &right_syntax[index])))
+                render_split_row_with_offset(theme, row, width, in_hunk,
+                    Some((&left_syntax[index], &right_syntax[index])), diff_x)
             }).collect()
         }
     }
@@ -1048,25 +1173,39 @@ fn fit_cell(s: &str, width: usize) -> String {
 
 /// Preserve syntax colors while hard-clipping to the assigned terminal cells.
 /// Adding line numbers must never cause code to spill into the other pane.
-fn fit_styled_cell(line: &Line<'_>, width: usize, bg: ratatui::style::Color) -> Vec<Span<'static>> {
-    let mut out = Vec::new();
+fn fit_cell_window(value: &str, offset: usize, width: usize) -> String {
+    let line = Line::from(value.to_owned());
+    fit_styled_window(&line, offset, width, ratatui::style::Color::Reset)
+        .iter().map(|span| span.content.as_ref()).collect()
+}
+
+fn fit_styled_window(
+    line: &Line<'_>, offset: usize, width: usize, bg: ratatui::style::Color,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut column = 0usize;
     let mut used = 0usize;
-    let mut clipped = false;
+    let end = offset.saturating_add(width);
     for span in &line.spans {
-        let mut text = String::new();
+        let mut out = String::new();
         for ch in span.content.chars() {
             let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
-            if used + cw > width { clipped = true; break; }
-            text.push(ch);
-            used += cw;
+            let next = column.saturating_add(cw);
+            if column >= offset && next <= end {
+                out.push(ch);
+                used += cw;
+            } else if column < offset && next > offset && next <= end {
+                out.push(' ');
+                used += 1;
+            }
+            column = next;
+            if column >= end { break; }
         }
-        if !text.is_empty() { out.push(Span::styled(text, span.style.bg(bg))); }
-        if clipped { break; }
+        if !out.is_empty() { spans.push(Span::styled(out, span.style.bg(bg))); }
+        if column >= end { break; }
     }
-    if used < width {
-        out.push(Span::styled(" ".repeat(width - used), Style::default().bg(bg)));
-    }
-    out
+    if used < width { spans.push(Span::styled(" ".repeat(width - used), Style::default().bg(bg))); }
+    spans
 }
 
 /// accent(1) + left + │ + right == `total`. Returns `(left_w, right_w)`.
@@ -1080,12 +1219,24 @@ fn split_half_widths(total: usize) -> Option<(usize, usize)> {
     Some((left_w, right_w))
 }
 
+#[cfg(test)]
 fn render_split_row(
     theme: &Theme,
     row: &SplitRow,
     width: u16,
     in_active_hunk: bool,
     syntax: Option<(&Line<'_>, &Line<'_>)>,
+) -> Line<'static> {
+    render_split_row_with_offset(theme, row, width, in_active_hunk, syntax, 0)
+}
+
+fn render_split_row_with_offset(
+    theme: &Theme,
+    row: &SplitRow,
+    width: u16,
+    in_active_hunk: bool,
+    syntax: Option<(&Line<'_>, &Line<'_>)>,
+    offset: usize,
 ) -> Line<'static> {
     let w = width as usize;
     let base_bg = if in_active_hunk {
@@ -1146,8 +1297,8 @@ fn render_split_row(
         } => {
             let old_gutter = left_w.min(6);
             let new_gutter = right_w.min(6);
-            let left_txt = fit_cell(old.as_deref().unwrap_or(""), left_w - old_gutter);
-            let right_txt = fit_cell(new.as_deref().unwrap_or(""), right_w - new_gutter);
+            let left_txt = fit_cell_window(old.as_deref().unwrap_or(""), offset, left_w - old_gutter);
+            let right_txt = fit_cell_window(new.as_deref().unwrap_or(""), offset, right_w - new_gutter);
             let number_text = |number: Option<usize>, width: usize| -> String {
                 if let Some(number) = number {
                     fit_cell(&format!("{:>5} ", number), width)
@@ -1181,10 +1332,10 @@ fn render_split_row(
             if let Some((left, right)) = syntax {
                 let left_bg = if *old_del { theme.diff_del_bg } else { base_bg };
                 let right_bg = if *new_add { theme.diff_add_bg } else { base_bg };
-                spans.extend(fit_styled_cell(left, left_w - old_gutter, rgb(left_bg)));
+                spans.extend(fit_styled_window(left, offset, left_w - old_gutter, rgb(left_bg)));
                 spans.push(Span::styled("│".to_string(), sep_style));
                 spans.push(Span::styled(number_text(row.new_num, new_gutter), numbers_style));
-                spans.extend(fit_styled_cell(right, right_w - new_gutter, rgb(right_bg)));
+                spans.extend(fit_styled_window(right, offset, right_w - new_gutter, rgb(right_bg)));
             } else {
                 spans.push(Span::styled(left_txt, left_style));
                 spans.push(Span::styled("│".to_string(), sep_style));
@@ -1213,7 +1364,7 @@ pub fn diff_render_hunk_start(
 pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCache) -> usize {
     match view {
         PreviewView::Markdown { preview } => preview.line_count(),
-        PreviewView::TextRows { rows } => rows.len(),
+        PreviewView::TextRows { rows } | PreviewView::TextRowsScrolled { rows, .. } => rows.len(),
         PreviewView::Loading | PreviewView::Idle | PreviewView::Hint { .. } => 1,
         PreviewView::Error { .. } => 2,
         PreviewView::Binary { .. } => 4,
@@ -1224,7 +1375,7 @@ pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCach
         PreviewView::Text {
             lines, truncated, ..
         } => text_preview_line_count(lines, truncated),
-        PreviewView::Diff { lines, .. } => split_cache.ensure(lines).max(1),
+        PreviewView::Diff { lines, .. } | PreviewView::DiffScrolled { lines, .. } => split_cache.ensure(lines).max(1),
     }
 }
 
@@ -1978,5 +2129,53 @@ mod tests {
         assert_eq!(scroll, 70); // max = 100-30
         scroll_to_hunk(&mut scroll, 0, 100, 10);
         assert_eq!(scroll, 0);
+    }
+}
+
+#[cfg(test)]
+mod horizontal_scroll_tests {
+    use super::*;
+
+    #[test]
+    fn diff_pan_preserves_both_gutters_and_separator() {
+        let theme = Theme::modern_ide();
+        let row = SplitRow {
+            kind: SplitRowKind::Pair {
+                old: Some("abcdefghijklmnopQRSTUV".into()),
+                new: Some("1234567890abcdefghijk".into()),
+                old_del: true,
+                new_add: true,
+            },
+            old_num: Some(17), new_num: Some(18), src_indices: vec![1,2],
+        };
+        let width = 48;
+        let first = render_split_row_with_offset(&theme, &row, width, false, None, 0);
+        let scrolled = render_split_row_with_offset(&theme, &row, width, false, None, 7);
+        let joined = |line: &Line<'_>| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert_eq!(first.width(), width as usize);
+        assert_eq!(scrolled.width(), width as usize);
+        assert_eq!(joined(&scrolled).matches('│').count(), 1);
+        assert!(joined(&scrolled).contains("   17 "));
+        assert!(joined(&scrolled).contains("   18 "));
+        assert!(joined(&first).contains("abcdef"));
+        assert!(joined(&scrolled).contains("hijkl"));
+        assert!(joined(&scrolled).contains("890abc"));
+    }
+
+    #[test]
+    fn unwrapped_rows_preserve_source_count_and_fixed_gutter_with_wide_chars() {
+        let theme = Theme::modern_ide();
+        let lines = vec!["abcdefghij中文KLMNOPQRSTUVWXYZ".to_string(), "short".to_string()];
+        let mut cache = TextRowsCache::default();
+        cache.ensure_wrapping(&theme, &lines, false, 0, TextLang::Plain, 12, false);
+        assert_eq!(cache.line_count(), 2);
+        assert!(cache.max_code_columns() > 20);
+        let row = clip_source_row(&cache.rows()[0], 11, 12);
+        let rendered = row.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        assert!(rendered.starts_with("   1│"));
+        assert_eq!(row.width(), 12);
+        assert!(rendered.contains('文') || rendered.contains('中'));
+        cache.ensure_wrapping(&theme, &lines, false, 0, TextLang::Plain, 12, true);
+        assert!(cache.line_count() > 2);
     }
 }

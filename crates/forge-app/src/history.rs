@@ -42,6 +42,10 @@ pub(super) struct HistoryState {
     /// Status relative to the current branch's configured fetch upstream.
     pub upstream: forge_git::UpstreamStatus,
     pub unpushed: HashSet<String>,
+    pub incoming: HashSet<String>,
+    pub ahead: usize,
+    pub behind: usize,
+    pub counts_truncated: bool,
     pending_detail: Option<(String, JobHandle<Result<String>>)>,
     pending_graph: Option<PendingHistory>,
     pending_files: Vec<PendingCommitFiles>,
@@ -68,6 +72,10 @@ impl Default for HistoryState {
             files: HashMap::new(),
             upstream: forge_git::UpstreamStatus::default(),
             unpushed: HashSet::new(),
+            incoming: HashSet::new(),
+            ahead: 0,
+            behind: 0,
+            counts_truncated: false,
             pending_detail: None,
             pending_graph: None,
             pending_files: Vec::new(),
@@ -103,7 +111,12 @@ impl App {
             expanded_dirs: &self.history.expanded_dirs,
             files: &self.history.files,
             upstream: &self.history.upstream,
+            current_branch: &self.history.branch,
             unpushed: &self.history.unpushed,
+            incoming: &self.history.incoming,
+            ahead: self.history.ahead,
+            behind: self.history.behind,
+            counts_truncated: self.history.counts_truncated,
         }
     }
 
@@ -329,6 +342,10 @@ impl App {
                 self.history.branch = snapshot.branch;
                 self.history.upstream = snapshot.upstream;
                 self.history.unpushed = snapshot.unpushed;
+                self.history.incoming = snapshot.incoming;
+                self.history.ahead = snapshot.ahead;
+                self.history.behind = snapshot.behind;
+                self.history.counts_truncated = snapshot.counts_truncated;
                 self.history.commits = snapshot.commits;
                 self.history.layout = layout_graph(&self.history.commits);
                 self.history.exhausted = self.history.commits.len() < self.history.limit;

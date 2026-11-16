@@ -78,6 +78,20 @@ impl FsService {
         })
     }
 
+    /// Refresh the same viewed file without collapsing its current viewport
+    /// to the first 400-line page while the external read is in flight.
+    pub fn preview_through_line(
+        &self,
+        jobs: &JobScheduler,
+        path: PathBuf,
+        kind: EntryKind,
+        visible_through_line: usize,
+    ) -> JobHandle<Result<Preview, FsError>> {
+        jobs.spawn(JobPriority::High, Some("fs:preview".into()), async move {
+            preview::preview_path_through_line(path, kind, visible_through_line).await
+        })
+    }
+
     /// Read the next bounded set of complete source lines, independently of
     /// other file/preview tasks. The caller checks the path and byte cursor.
     pub fn preview_page(

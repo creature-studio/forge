@@ -173,6 +173,33 @@ pub async fn preview_path(path: PathBuf, kind: EntryKind) -> Result<Preview, FsE
     }
 }
 
+/// Re-read a text preview through the source line currently on screen.
+/// Used for refreshes of an already open, lazily paged file: the old
+/// preview remains on screen until the new result contains the viewport.
+/// Like normal pagination, this reads bounded pages, not a whole file.
+pub async fn preview_path_through_line(
+    path: PathBuf,
+    kind: EntryKind,
+    visible_through_line: usize,
+) -> Result<Preview, FsError> {
+    let mut preview = preview_path(path.clone(), kind).await?;
+    while let PreviewContent::Text { lines, truncated, bytes_read } = &mut preview.content {
+        if !*truncated || lines.len() >= visible_through_line {
+            break;
+        }
+        let current = *bytes_read as u64;
+        let next = read_text_page(path.clone(), current).await?;
+        if next.next_offset <= current {
+            *truncated = false;
+            break;
+        }
+        lines.extend(next.lines);
+        *bytes_read = next.next_offset as usize;
+        *truncated = !next.eof;
+    }
+    Ok(preview)
+}
+
 async fn preview_directory(path: PathBuf) -> Result<Preview, FsError> {
     let name = path
         .file_name()

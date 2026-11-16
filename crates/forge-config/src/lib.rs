@@ -27,6 +27,8 @@ pub struct Config {
     pub compact_folders: bool,
     /// Include dotfiles in the Files tree (Git tracked changes remain visible).
     pub show_hidden_files: bool,
+    /// Soft-wrap code previews; enabled for existing installations by default.
+    pub wrap_code: bool,
 }
 
 impl Default for Config {
@@ -37,6 +39,7 @@ impl Default for Config {
             tree_sticky_scroll: true,
             compact_folders: true,
             show_hidden_files: false,
+            wrap_code: true,
         }
     }
 }
@@ -122,6 +125,7 @@ impl Config {
             "show_hidden_files".into(),
             toml::Value::Boolean(self.show_hidden_files),
         );
+        table.insert("wrap_code".into(), toml::Value::Boolean(self.wrap_code));
         // Update only the explicitly managed keys. Preserve [git.blame] and
         // all unknown plugin/custom preferences in the same configuration.
         let git = table.entry("git").or_insert_with(|| toml::Value::Table(toml::Table::new()));
@@ -149,6 +153,16 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn code_wrap_is_enabled_for_old_files_and_persists_disabled() {
+        let old: Config = toml::from_str("theme = 'current'").unwrap();
+        assert!(old.wrap_code);
+        let disabled: Config = toml::from_str("wrap_code = false").unwrap();
+        assert!(!disabled.wrap_code);
+        let encoded = toml::to_string(&disabled).unwrap();
+        assert!(!toml::from_str::<Config>(&encoded).unwrap().wrap_code);
+    }
+
     #[test]
     fn defaults_and_old_configuration() {
         assert!(Config::default().tree_sticky_scroll);

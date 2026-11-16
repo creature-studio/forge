@@ -78,6 +78,8 @@ pub struct PaneLayout {
     pub list_inner: Rect,
     pub preview: Rect,
     pub preview_inner: Rect,
+    /// Floating in-file find widget, empty when closed.
+    pub file_find_rect: Rect,
     pub markdown_preview_tab: Rect,
     pub markdown_code_tab: Rect,
     /// Clickable Open file action in the Git Diff header.

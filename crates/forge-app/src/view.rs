@@ -19,6 +19,10 @@ use tui_input::backend::crossterm::EventHandler;
 // focus marks; selection is a quiet neutral surface, like NSH's TUI controls.
 fn workspace_palette() -> Palette {
     let mut palette = Palette::default();
+    // Never inherit the terminal profile background. Ubuntu's default purple
+    // otherwise leaks through empty header/footer/sidebar cells, while code
+    // panes paint their own dark background.
+    palette.bg = Color::Rgb(16, 18, 24);
     palette.selection = Color::DarkGray;
     palette.on_accent = Color::White;
     palette
@@ -90,6 +94,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             model.poll_pending_status();
             model.poll_pending_preview();
             model.poll_pending_page();
+            model.poll_file_find();
             model.poll_pending_diff();
             model.poll_pending_write();
             model.poll_tools();
@@ -500,6 +505,42 @@ struct NativePaneProps {
 
 /// Native bridges own no event loop or application lifetime. Kit computes their
 /// area; drawing only updates viewport caches without scheduling another frame.
+/// One-row horizontal position indicator; only shown for actual overflow.
+fn draw_horizontal_position(frame: &mut Frame<'_>, area: Rect, offset: usize, full: usize, p: Palette) {
+    if area.height == 0 || area.width < 6 { return; }
+    let width = area.width as usize;
+    let max_offset = full.saturating_sub(width);
+    if max_offset == 0 { return; }
+    let thumb = ((width * width + full / 2) / full).clamp(1, width);
+    let left = (offset.min(max_offset) * (width - thumb) + max_offset / 2) / max_offset;
+    for x in 0..width {
+        let selected = x >= left && x < left + thumb;
+        frame.buffer_mut()[(area.x + x as u16, area.y)]
+            .set_symbol(if selected { "━" } else { "─" })
+            .set_style(Style::default().bg(p.bg)
+                .fg(if selected { p.accent } else { p.border }));
+    }
+}
+
+/// One-column read-only scrollbar derived from the existing scroll state.
+fn draw_position_scrollbar(frame: &mut Frame<'_>, area: Rect, first: usize, total: usize, p: Palette) {
+    if area.width < 3 || area.height < 3 || total <= area.height as usize { return; }
+    let height = area.height as usize;
+    let max_scroll = total.saturating_sub(height);
+    let first = first.min(max_scroll);
+    let thumb = ((height * height + total / 2) / total).clamp(1, height);
+    let top = if max_scroll == 0 { 0 }
+        else { (first * (height - thumb) + max_scroll / 2) / max_scroll };
+    let x = area.right() - 1;
+    for y in 0..height {
+        let active = y >= top && y < top + thumb;
+        frame.buffer_mut()[(x, area.y + y as u16)]
+            .set_symbol(if active { "┃" } else { "│" })
+            .set_style(Style::default().bg(p.bg)
+                .fg(if active { p.accent } else { p.border }));
+    }
+}
+
 struct NativePane {
     app: Option<State<App>>,
     kind: PaneKind,
@@ -532,6 +573,13 @@ impl Component for NativePane {
         };
         let mut model = app.write_no_update();
         let mut area = drawer.area;
+        // Ratatui Reset is transparent to terminal background. Paint every
+        // cell owned by a pane before drawing text, including blank rows.
+        // This keeps all panels consistent across terminal color profiles.
+        drawer.frame.buffer_mut().set_style(
+            area,
+            Style::default().bg(self.palette.bg).fg(self.palette.fg),
+        );
         let theme = bridge_theme(self.palette);
         match self.kind {
             PaneKind::Header => {
@@ -594,12 +642,38 @@ impl Component for NativePane {
                     model.files.scroll = scroll;
                 }
                 draw_marks(drawer.frame, &model, self.palette);
+                let (first, total) = if model.in_git_sidebar() {
+                    (model.scm.scroll_scm, model.scm_rows().len())
+                } else { (model.files.scroll, model.files.visible.len()) };
+                draw_position_scrollbar(drawer.frame, area, first, total, self.palette);
             }
             PaneKind::Preview => {
                 model.session.layout.preview = area;
                 area = draw_preview_heading(drawer.frame, area, &mut model, self.palette);
                 if model.preview_state.text_rows.width() != area.width {
                     model.blame.cursor = None;
+                }
+                // Rebuild source-row mapping before asking whether inline
+                // Blame has a line to show. A same-file external refresh
+                // clears this cache; querying attribution first would hide
+                // its status row for one frame, expand the text viewport,
+                // and permanently clamp a reader positioned at EOF.
+                if model.config.git.blame.show_inline
+                    && !model.preview_state.preview_loading
+                    && matches!(model.preview_state.preview_mode, PreviewMode::File)
+                {
+                    let mut rows = std::mem::take(&mut model.preview_state.text_rows);
+                    if let Some(Preview {
+                        path,
+                        content: PreviewContent::Text { lines, truncated, bytes_read },
+                    }) = &model.preview_state.preview {
+                        rows.ensure_wrapping(
+                            &theme, lines, *truncated, *bytes_read,
+                            TextLang::from_name(&path.to_string_lossy()),
+                            area.width, model.config.wrap_code,
+                        );
+                    }
+                    model.preview_state.text_rows = rows;
                 }
                 let blame_bar = if model.config.git.blame.show_inline
                     && model.current_blame().is_some()
@@ -634,8 +708,11 @@ impl Component for NativePane {
                 let mut cache = std::mem::take(&mut model.preview_state.split_cache);
                 let mut text_cache = std::mem::take(&mut model.preview_state.text_rows);
                 let pending_line = model.preview_state.pending_source_line.take();
+                let pending_find_byte = model.preview_state.pending_find_byte.take();
                 let (_, content) = preview_content(&model);
                 let numbered = matches!(content, PreviewView::Text { .. });
+                let mut horizontal_x = model.preview_state.preview_scroll_x;
+                let mut horizontal_bar = None;
                 let inner = match content {
                     PreviewView::Text {
                         lines,
@@ -643,26 +720,58 @@ impl Component for NativePane {
                         bytes_read,
                         language,
                     } => {
-                        text_cache
-                            .ensure(&theme, lines, truncated, bytes_read, language, area.width);
+                        let wrap = model.config.wrap_code;
+                        text_cache.ensure_wrapping(&theme, lines, truncated, bytes_read, language, area.width, wrap);
+                        if !wrap && area.height > 2 && area.width > 7 {
+                            let visible_cols = area.width.saturating_sub(5) as usize;
+                            let max_x = text_cache.max_code_columns().saturating_sub(visible_cols);
+                            horizontal_x = horizontal_x.min(max_x);
+                            if max_x > 0 {
+                                horizontal_bar = Some((Rect::new(area.x + 5, area.bottom() - 1,
+                                    area.width.saturating_sub(6), 1), text_cache.max_code_columns().saturating_sub(1)));
+                                area.height -= 1;
+                            }
+                        } else { horizontal_x = 0; }
                         if let Some(line) = pending_line {
-                            scroll = text_cache.source_to_row(line);
+                            scroll = pending_find_byte
+                                .map_or_else(|| text_cache.source_to_row(line),
+                                    |byte| text_cache.source_byte_to_row(line, byte));
                         }
                         draw_preview(
                             drawer.frame,
                             area,
                             &theme,
-                            PreviewView::TextRows {
+                            if wrap { PreviewView::TextRows { rows: text_cache.rows() } }
+                            else { PreviewView::TextRowsScrolled {
                                 rows: text_cache.rows(),
-                            },
+                                horizontal_offset: horizontal_x,
+                            } },
                             &mut scroll,
                             &mut cache,
                         )
+                    }
+                    PreviewView::Diff { path, lines, hunk_start, hunk_end, .. }
+                        if !model.config.wrap_code =>
+                    {
+                        let half_content = (area.width as usize / 2).saturating_sub(7);
+                        let max_x = cache.max_code_columns(lines).saturating_sub(half_content);
+                        horizontal_x = horizontal_x.min(max_x);
+                        if max_x > 0 && area.height > 2 {
+                            horizontal_bar = Some((Rect::new(area.x, area.bottom() - 1,
+                                area.width.saturating_sub(1), 1),
+                                cache.max_code_columns(lines).saturating_add(area.width.saturating_sub(1) as usize).saturating_sub(half_content)));
+                            area.height -= 1;
+                        }
+                        draw_preview(drawer.frame, area, &theme,
+                            PreviewView::DiffScrolled { path, lines, hunk_start, hunk_end,
+                                horizontal_offset: horizontal_x },
+                            &mut scroll, &mut cache)
                     }
                     other => {
                         draw_preview(drawer.frame, area, &theme, other, &mut scroll, &mut cache)
                     }
                 };
+                model.preview_state.preview_scroll_x = horizontal_x;
                 model.preview_state.split_cache = cache;
                 model.preview_state.text_rows = text_cache;
                 model.preview_state.preview_scroll = scroll;
@@ -692,6 +801,25 @@ impl Component for NativePane {
                     draw_inline_blame(drawer.frame, inner, bar, &model, self.palette);
                 }
                 model.draw_inline_diff(drawer.frame, inner);
+                model.session.layout.file_find_rect = Rect::default();
+                if model.preview_state.find.open {
+                    super::file_find_ui::highlight_file_find_matches(
+                        drawer.frame,
+                        inner,
+                        &model,
+                        &theme,
+                    );
+                    model.session.layout.file_find_rect = super::file_find_ui::draw_file_find_bar(
+                        drawer.frame,
+                        inner,
+                        &model,
+                        self.palette,
+                    );
+                }
+                draw_position_scrollbar(drawer.frame, inner, scroll, model.preview_total_lines(), self.palette);
+                if let Some((bar, total)) = horizontal_bar {
+                    draw_horizontal_position(drawer.frame, bar, model.preview_state.preview_scroll_x, total, self.palette);
+                }
             }
             PaneKind::Divider => {
                 drawer.frame.render_widget(
@@ -1319,7 +1447,7 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
         Rect::new(inner.x, inner.y, inner.width, 1),
     );
     let rows_y = inner.y + 2;
-    let visible = (inner.bottom().saturating_sub(rows_y)).min(7);
+    let visible = (inner.bottom().saturating_sub(rows_y)).min(8);
     panel.list_area = Rect::new(inner.x, rows_y, inner.width, visible);
 
     for i in 0..visible as usize {
@@ -1337,8 +1465,9 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
             1 => "Compact Folders",
             2 => "Show hidden files",
             3 => "Color theme",
-            4 => "Git Gutter: staged",
-            5 => "Git Gutter: unstaged",
+            4 => "Code auto wrap",
+            5 => "Git Gutter: staged",
+            6 => "Git Gutter: unstaged",
             _ => "Keyboard shortcuts",
         };
         let value = match i {
@@ -1370,8 +1499,23 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
                 "nord" => "[ Nord ]",
                 _ => "[ Current ]",
             },
-            4 => if model.config.git.show_staged_gutter { "[ On ]" } else { "[ Off ]" },
-            5 => if model.config.git.show_unstaged_gutter { "[ On ]" } else { "[ Off ]" },
+            4 => {
+                if model.config.wrap_code { "[ On ]" } else { "[ Off ]" }
+            }
+            5 => {
+                if model.config.git.show_staged_gutter {
+                    "[ On ]"
+                } else {
+                    "[ Off ]"
+                }
+            }
+            6 => {
+                if model.config.git.show_unstaged_gutter {
+                    "[ On ]"
+                } else {
+                    "[ Off ]"
+                }
+            }
             _ => "[ Open F4 ]",
         };
         let width = inner.width as usize;
@@ -1388,14 +1532,15 @@ fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette)
         );
     }
     if inner.height >= 10 {
-        let detail_y = rows_y + 9;
+        let detail_y = rows_y + 10;
         let desc = match panel.selected {
             0 => "Pin expanded parent directories above the scrolled tree.\nApplies to Files, Git Changes/Staged and Commit History.",
             1 => "Join consecutive single-child folder paths into one row.\nApplies to Files, Git Changes/Staged and Commit History.",
             2 => "Show dotfiles in the Files tree.\n.git remains hidden; tracked changes in Git are unaffected.",
             3 => "Enter/Space cycles Current, VS Code Dark, VS Code Black, GitHub Dark and Nord.\nTheme changes apply immediately and persist across restarts.",
-            4 => "Show HEAD → Index staged changes in a secondary blue source gutter lane.\nCan overlap vivid unstaged markers; click the blue lane to peek.",
-            5 => "Show Index → Working Tree changes in source line numbers.\nClick a changed number to inspect its unstaged hunk.",
+            4 => "Soft-wrap long source lines (default On). When Off, horizontal scrolling is enabled.\nAlt+Left/Right pans by eight columns; Alt+Home/End jumps to edges.",
+            5 => "Show HEAD → Index staged changes in a secondary blue source gutter lane.\nCan overlap vivid unstaged markers; click the blue lane to peek.",
+            6 => "Show Index → Working Tree changes in source line numbers.\nClick a changed number to inspect its unstaged hunk.",
             _ => "Open the searchable F4 keyboard shortcuts view.\nExisting custom bindings remain unchanged.",
         };
         let detail = format!(" DESCRIPTION\n\n{desc}\n\nChanges save to forge/config.toml and survive a restart.\n{}",
@@ -1518,6 +1663,16 @@ fn draw_workspace_header(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: 
             Style::default().fg(p.fg_dim).bg(p.bg)
         };
         frame.render_widget(Paragraph::new(label).style(style), rect);
+    }
+    // Keep Settings visible in the persistent tab strip rather than taking
+    // space away from contextual footer hints (stage/unstage, history, etc.).
+    if tabs.width >= 44 {
+        frame.render_widget(
+            Paragraph::new(" F9 Settings ").style(
+                Style::default().fg(p.accent).bg(p.bg).add_modifier(Modifier::BOLD),
+            ),
+            Rect::new(git.right() + 1, tabs.y, 14, tabs.height.min(1)),
+        );
     }
     model.session.layout.files_tab = files;
     model.session.layout.git_tab = git;
@@ -1747,6 +1902,7 @@ fn draw_workspace_footer(frame: &mut Frame<'_>, area: Rect, model: &App, p: Pale
     let chip = if !model.session.commit_open
         && !model.session.help_open
         && model.session.context_menu.is_none()
+        && !file_find_has_focus(model)
     {
         git_status_chip(model, p, (area.width as usize / 2).min(46))
     } else {
@@ -1839,7 +1995,53 @@ fn git_status_chip(model: &App, p: Palette, max_width: usize) -> Option<(Line<'s
     Some((line, width))
 }
 
+/// The bottom row is a context-sensitive key guide, not a static key legend.
+fn file_find_has_focus(model: &App) -> bool {
+    model.preview_state.find.open
+        && model.preview_state.find.input_active
+        && model.tools.panel.is_none()
+        && !model.editing.active()
+        && !model.session.help_open
+        && !model.session.commit_open
+        && model.session.context_menu.is_none()
+}
+
+/// Keep the navigation and exit keys visible even in a narrow terminal.
+/// The remaining space is filled with the file-find mode toggles. This
+/// intentionally leaves out the usual global F4 / ? footer hints while
+/// the find input owns keyboard focus.
+fn file_find_footer_shortcuts(model: &App, width: usize) -> Vec<interaction::Shortcut> {
+    let navigation = [
+        interaction::Shortcut { key: "Enter", label: "Next" },
+        interaction::Shortcut { key: "Shift+Enter", label: "Prev" },
+    ];
+    let toggles = [
+        interaction::Shortcut { key: "Alt+C", label: "Case" },
+        interaction::Shortcut { key: "Alt+W", label: "Word" },
+        interaction::Shortcut { key: "Alt+R", label: "Regex" },
+    ];
+    let close = interaction::Shortcut { key: "Esc", label: "Close" };
+    let cost = |s: &interaction::Shortcut| model.keys.label(s.key).len() + s.label.len() + 5;
+    let mut remaining = width.saturating_sub(1); // leading space in footer renderer
+    let mut result = Vec::new();
+    let close_cost = cost(&close);
+    for hint in navigation.into_iter().chain(toggles) {
+        let size = cost(&hint);
+        if size + close_cost <= remaining {
+            remaining -= size;
+            result.push(hint);
+        }
+    }
+    if close_cost <= remaining {
+        result.push(close);
+    }
+    result
+}
+
 fn footer_shortcuts(model: &App, width: usize) -> Vec<interaction::Shortcut> {
+    if file_find_has_focus(model) {
+        return file_find_footer_shortcuts(model, width);
+    }
     let help_label = if model.session.help_open {
         "Close"
     } else {
@@ -2144,6 +2346,27 @@ pub(super) fn bridge_theme(p: Palette) -> forge_theme::Theme {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scrollbar_position_top_middle_bottom_and_no_overflow() {
+        let palette = workspace_palette();
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(12, 12)).unwrap();
+        let area = Rect::new(2, 1, 8, 10);
+        let capture = |terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>, first, total| {
+            terminal.draw(|frame| draw_position_scrollbar(frame, area, first, total, palette)).unwrap();
+            (1..=10).map(|y| terminal.backend().buffer()[(9, y)].symbol().to_owned()).collect::<Vec<_>>()
+        };
+        let top = capture(&mut terminal, 0, 100);
+        assert_eq!(top[0], "┃");
+        assert_eq!(top[1], "│");
+        let middle = capture(&mut terminal, 45, 100);
+        assert_eq!(middle[5], "┃");
+        let bottom = capture(&mut terminal, 90, 100);
+        assert_eq!(bottom[9], "┃");
+        // A short document has no track at all.
+        let empty = capture(&mut terminal, 0, 10);
+        assert!(empty.iter().all(|s| s != "┃" && s != "│"));
+    }
+
     #[test]
     fn theme_presets_have_distinct_backgrounds_and_current_preserves_legacy() {
         assert_eq!(theme_palette(None).bg, workspace_palette().bg);
@@ -2625,7 +2848,7 @@ mod tests {
         assert!(screen.contains("中文文件.rs"), "{screen}");
         assert!(screen.contains("fn main() {}"), "{screen}");
         assert!(buffer.content().iter().any(|cell| cell.fg == Color::Cyan));
-        assert_eq!(buffer[(1, 3)].bg, Color::Reset);
+        assert_eq!(buffer[(1, 3)].bg, workspace_palette().bg);
         assert_eq!(buffer[(30, 4)].symbol(), "│");
         assert_eq!(buffer[(0, 2)].symbol(), "›");
         assert_eq!(buffer[(29, 2)].bg, Color::DarkGray);
@@ -2745,6 +2968,56 @@ mod tests {
                 3,
             );
         }
+    }
+
+    #[tokio::test]
+    async fn footer_shortcut_row_follows_file_find_keyboard_focus() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path());
+        app.session.focus = PaneFocus::Preview;
+        app.preview_state.find.open = true;
+        app.preview_state.find.input_active = true;
+        app.preview_state.find.path = dir.path().join("中文文件.rs");
+
+        let keys = footer_shortcuts(&app, 120)
+            .into_iter()
+            .map(|shortcut| shortcut.key)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            ["Enter", "Shift+Enter", "Alt+C", "Alt+W", "Alt+R", "Esc"]
+        );
+        assert!(file_find_has_focus(&app));
+        let rendered = text(&render_frames(
+            element!(Workspace(initial: Some(app))),
+            120, 28, 3,
+        ));
+        for text in [
+            "Enter", "Next", "Shift+Enter", "Prev", "Alt+C", "Case",
+            "Alt+W", "Word", "Alt+R", "Regex", "Esc", "Close",
+        ] {
+            assert!(rendered.contains(text), "missing {text} in {rendered}");
+        }
+
+        let mut app = fixture(dir.path());
+        app.session.focus = PaneFocus::Preview;
+        app.preview_state.find.open = true;
+        app.preview_state.find.input_active = true;
+        let compact = footer_shortcuts(&app, 65);
+        assert!(compact.iter().any(|key| key.key == "Enter"));
+        assert!(compact.iter().any(|key| key.key == "Shift+Enter"));
+        assert!(compact.iter().any(|key| key.key == "Esc"));
+        assert!(compact.iter().all(|key| key.key != "F4" && key.key != "?"));
+
+        app.preview_state.find.input_active = false;
+        assert!(!file_find_has_focus(&app));
+        let unfocused = footer_shortcuts(&app, 120);
+        assert!(unfocused.iter().any(|key| key.key == "Ctrl-F"));
+        assert!(unfocused.iter().any(|key| key.key == "?"));
+
+        app.preview_state.find.input_active = true;
+        app.preview_state.find.open = false;
+        assert!(!file_find_has_focus(&app));
     }
 
     #[tokio::test]
@@ -2900,8 +3173,10 @@ mod tests {
             25,
             3,
         ));
-        assert!(screen.contains("STAGED") && screen.contains("SUBJECT")
-            && screen.contains("review"), "{screen}");
+        assert!(
+            screen.contains("STAGED") && screen.contains("SUBJECT") && screen.contains("review"),
+            "{screen}"
+        );
         let mut app = fixture(dir.path());
         app.open_file_context_menu(0, 5, 5);
         let screen = text(&render_frames(
@@ -2987,7 +3262,7 @@ mod tests {
                 app.preview_state.preview_mode = PreviewMode::Diff;
                 app.preview_state.hunk_index = Some(0);
                 app.set_file_diff(FileDiff {
-            full_new_lines: None,
+                    full_new_lines: None,
                     repo_root: dir.path().to_owned(),
                     path: "中文文件.rs".into(),
                     side,

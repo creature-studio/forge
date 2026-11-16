@@ -526,6 +526,113 @@ mod selection_tests {
     }
 
     #[tokio::test]
+    async fn auto_and_manual_refresh_preserve_scrolled_tree_through_partial_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("folder");
+        std::fs::create_dir(&folder).unwrap();
+        for n in 0..100 {
+            std::fs::write(dir.path().join(format!("file-{n:03}.rs")), format!("{n}\n")).unwrap();
+        }
+        for n in 0..25 {
+            std::fs::write(folder.join(format!("nested-{n:03}.rs")), format!("{n}\n")).unwrap();
+        }
+        let target = dir.path().join("file-075.rs");
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        flush_lists(&mut app).await;
+        app.files.expanded.insert(folder.clone());
+        app.request_missing_expanded();
+        flush_lists(&mut app).await;
+        app.files.selected = app.files.visible.iter()
+            .position(|row| row.entry.path == target).unwrap();
+        app.session.layout.list_inner.height = 14;
+        app.files.scroll = app.files.selected - 5;
+        let original_scroll = app.files.scroll;
+        let original_count = app.files.visible.len();
+
+        for manual in [false, true] {
+            if manual { app.request_list(); } else { app.refresh_external_changes(false); }
+            assert_eq!(app.files.visible.len(), original_count,
+                "a refresh must keep the old tree on screen while its jobs run");
+            assert_eq!(app.files.scroll, original_scroll);
+            assert_eq!(app.selected_entry().unwrap().path, target);
+            // A tree render between incoming async directory results must not
+            // clamp its scroll into the (temporarily partial) root listing.
+            let mut rendered_during_refresh = false;
+            for _ in 0..70 {
+                if app.poll_pending_list() {
+                    rendered_during_refresh = true;
+                    assert_eq!(app.files.visible.len(), original_count);
+                    assert_eq!(app.selected_entry().unwrap().path, target);
+                    assert_eq!(app.files.scroll, original_scroll);
+                }
+                if app.files.pending_lists.is_empty() { break; }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert!(rendered_during_refresh);
+            flush_lists(&mut app).await;
+            assert_eq!(app.selected_entry().unwrap().path, target);
+            assert_eq!(app.files.scroll, original_scroll);
+            assert!(app.files.external_anchor.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn changed_long_file_refresh_keeps_deep_preview_viewport() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("large.rs");
+        std::fs::write(&file,
+            (0..2800).map(|i| format!("old line {i:04} sample\n")).collect::<String>()
+        ).unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        flush_lists(&mut app).await;
+        app.files.selected = app.files.visible.iter()
+            .position(|row| row.entry.path == file).unwrap();
+        app.request_preview_for_selection();
+        flush_preview(&mut app).await;
+        // Emulate the reader having loaded several pages as the user scrolls.
+        let loaded = app.services.fs.preview_through_line(
+            &app.services.jobs, file.clone(), EntryKind::File, 2000);
+        let preview = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut loaded = loaded;
+            loop {
+                if let Some(result) = loaded.try_join() {
+                    break result.unwrap().unwrap();
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.unwrap();
+        assert!(matches!(&preview.content,
+            PreviewContent::Text { lines, .. } if lines.len() >= 2000));
+        app.preview_state.preview = Some(preview);
+        app.preview_state.preview_scroll = 1580;
+        app.session.layout.preview_inner.height = 25;
+
+        std::fs::write(&file,
+            (0..2800).map(|i| format!("new line {i:04} sample\n")).collect::<String>()
+        ).unwrap();
+        app.refresh_external_changes(false);
+        app.refresh_preview_if_affected(&[file.clone()]);
+        assert!(!app.preview_state.preview_loading,
+            "refresh should continue displaying the old scrolled content");
+        assert_eq!(app.preview_state.preview_scroll, 1580);
+        assert!(matches!(&app.preview_state.preview.as_ref().unwrap().content,
+            PreviewContent::Text { lines, .. } if lines[1580].starts_with("old")));
+        flush_preview(&mut app).await;
+        flush_lists(&mut app).await;
+        assert_eq!(app.preview_state.preview_scroll, 1580);
+        assert_eq!(app.selected_entry().unwrap().path, file);
+        assert!(matches!(&app.preview_state.preview.as_ref().unwrap().content,
+            PreviewContent::Text { lines, .. }
+                if lines.len() > 1605 && lines[1580].starts_with("new")));
+        // Manual refresh must also retain the same viewport.
+        app.request_list();
+        assert_eq!(app.preview_state.preview_scroll, 1580);
+        flush_lists(&mut app).await;
+        flush_preview(&mut app).await;
+        assert_eq!(app.preview_state.preview_scroll, 1580);
+    }
+
+    #[tokio::test]
     async fn refresh_keeps_nested_file_selected_after_root_and_children_reload() {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("src");

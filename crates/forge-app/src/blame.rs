@@ -171,6 +171,17 @@ impl App {
         self.blame.cursor = None;
     }
 
+    /// In-place file refresh must not remove an already visible inline blame
+    /// row, because the resulting viewport-height change clamps the user's
+    /// scroll by one (and may hide the last source line). Keep attribution
+    /// visible until the next verified background read replaces it.
+    pub(super) fn refresh_blame_in_place(&mut self) {
+        self.services.jobs.cancel_key("git:blame");
+        self.blame.pending = None;
+        self.blame.checked = None;
+        self.blame.cursor = None;
+    }
+
     /// Called after preview completion and on the one-second background tick.
     /// Validations read bounded bytes and HEAD through gix; cache hits spawn no git.
     pub(super) fn tick_blame(&mut self) {
