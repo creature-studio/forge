@@ -1,0 +1,64 @@
+---
+interface Props {
+  content: string;
+  english?: boolean;
+}
+const { content, english = false } = Astro.props;
+const navigation = content.match(/<nav\s+class="guide-toc"[^>]*>([\s\S]*?)<\/nav>/);
+if (!navigation) throw new Error('Guide content is missing its section navigation');
+const navigationHtml = navigation[1].replace(/<strong>[\s\S]*?<\/strong>/, '');
+const bodyHtml = content
+  .replace(navigation[0], '')
+  .replace(/^\s*<main\b[^>]*>/, '')
+  .replace(/<\/main>\s*$/, '');
+const tocTitle = english ? 'On this page' : '文档目录';
+const menuTitle = english ? 'Browse sections' : '查看文档目录';
+---
+<main id="main" class="docs-layout">
+  <aside class="docs-sidebar" aria-label={tocTitle}>
+    <div class="docs-sidebar-inner">
+      <div class="docs-sidebar-title">{tocTitle}</div>
+      <nav class="docs-section-nav" aria-label={tocTitle} set:html={navigationHtml} />
+      <div class="docs-sidebar-bottom">
+        <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>{english ? 'Release notes' : '发布说明'} <span aria-hidden="true">↗</span></a>
+        <a href="https://github.com/creature-studio/forge">GitHub <span aria-hidden="true">↗</span></a>
+      </div>
+    </div>
+  </aside>
+  <details class="docs-mobile-navigation">
+    <summary>{menuTitle} <span aria-hidden="true">⌄</span></summary>
+    <nav class="docs-section-nav" aria-label={tocTitle} set:html={navigationHtml} />
+  </details>
+  <div class="docs-main" set:html={bodyHtml} />
+</main>
+<script>
+  const navigation = document.querySelector('.docs-layout');
+  if (navigation) {
+    const links = Array.from(navigation.querySelectorAll<HTMLAnchorElement>('.docs-section-nav a[href^="#"]'));
+    const sections = links.map(link => document.getElementById(link.hash.slice(1))).filter((element): element is HTMLElement => !!element);
+    const updateCurrent = (id: string) => {
+      for (const link of links) {
+        if (link.hash === `#${id}`) link.setAttribute('aria-current', 'location');
+        else link.removeAttribute('aria-current');
+      }
+    };
+    if (sections.length) {
+      const syncCurrent = () => {
+        const current = sections.filter(section => section.getBoundingClientRect().top <= 150).at(-1) || sections[0];
+        updateCurrent(current.id);
+      };
+      let scheduled = false;
+      window.addEventListener('scroll', () => {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => { scheduled = false; syncCurrent(); });
+      }, { passive: true });
+      window.addEventListener('hashchange', syncCurrent);
+      syncCurrent();
+    }
+    const mobileMenu = navigation.querySelector<HTMLDetailsElement>('.docs-mobile-navigation');
+    mobileMenu?.querySelectorAll<HTMLAnchorElement>('a[href^="#"]').forEach(link => {
+      link.addEventListener('click', () => { mobileMenu.open = false; });
+    });
+  }
+</script>

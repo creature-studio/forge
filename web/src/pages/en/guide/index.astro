@@ -1,8 +1,9 @@
 ---
 import Base from '../../../layouts/Base.astro';
+import DocsLayout from '../../../components/DocsLayout.astro';
 import content from '../../../legacy/en-guide.html?raw';
 ---
 <Base title="Forge TUI Guide — Files, Git Diff and Keyboard Navigation" description="Learn how to install and use Forge: file management, search, Git staging, diffs, focus overview and Blame." path="/en/guide/" lang="en">
   <div class="subpage-links"><a href="/forge/guide/">中文操作文档</a> · <a href="/forge/en/releases/">Release notes</a></div>
-  <Fragment set:html={content} />
+  <DocsLayout content={content} english />
 </Base>
