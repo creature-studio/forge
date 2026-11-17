@@ -246,6 +246,9 @@ impl CliWriteBackend {
         let repo = repo.as_ref();
         let path = rela_path.as_ref();
         let mut args: Vec<String> = vec![
+            // Read-only diffs must never refresh the index or race Git writes
+            // for .git/index.lock (notably while staging/discarding changes).
+            "--no-optional-locks".into(),
             "--literal-pathspecs".into(),
             "diff".into(),
             "--no-ext-diff".into(),

@@ -142,7 +142,11 @@ impl CliWriteBackend {
         self.apply_cached_patch(repo, &patch, false).await
     }
     async fn text(&self, repo: &Path, args: Vec<String>) -> Result<String, GitWriteError> {
-        let out = run_git(repo, "workbench", args).await?;
+        // Queries only read Git state; prevent optional index refresh locks
+        // from competing with user-initiated write operations.
+        let mut read_args = vec!["--no-optional-locks".into()];
+        read_args.extend(args);
+        let out = run_git(repo, "workbench", read_args).await?;
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
