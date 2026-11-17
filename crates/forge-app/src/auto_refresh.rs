@@ -2,6 +2,41 @@
 use std::path::Path;
 
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use tokio::sync::mpsc;
+
+/// Notification callbacks run on filesystem watcher threads, so delivery must
+/// never block. On overflow we invalidate the snapshot instead of silently
+/// dropping changes or accumulating an unbounded queue.
+#[derive(Clone)]
+pub(super) struct WatchMailbox {
+    sender: mpsc::Sender<notify::Event>,
+    overflow: Arc<AtomicBool>,
+}
+
+impl WatchMailbox {
+    pub(super) fn new(capacity: usize) -> (Self, mpsc::Receiver<notify::Event>) {
+        let (sender, receiver) = mpsc::channel(capacity);
+        (Self { sender, overflow: Arc::new(AtomicBool::new(false)) }, receiver)
+    }
+
+    pub(super) fn offer(&self, event: notify::Event) {
+        if let Err(mpsc::error::TrySendError::Full(_)) = self.sender.try_send(event) {
+            self.mark_overflow();
+        }
+    }
+
+    pub(super) fn mark_overflow(&self) {
+        self.overflow.store(true, Ordering::Release);
+    }
+
+    pub(super) fn take_overflow(&self) -> bool {
+        self.overflow.swap(false, Ordering::AcqRel)
+    }
+}
 
 /// A linked worktree stores .git as a pointer file, not a directory.
 /// Resolve both its private HEAD/index and shared refs, without watching the
@@ -109,6 +144,22 @@ pub(super) fn relevant(event: &notify::Event, root: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bounded_mailbox_signals_overflow_and_recovers() {
+        let (queue, mut receiver) = super::WatchMailbox::new(1);
+        let event = || notify::Event::new(notify::EventKind::Any);
+        queue.offer(event());
+        queue.offer(event());
+        assert!(queue.take_overflow());
+        assert!(!queue.take_overflow());
+        assert!(receiver.try_recv().is_ok());
+        queue.offer(event());
+        assert!(receiver.try_recv().is_ok());
+        assert!(!queue.take_overflow());
+        queue.mark_overflow(); // watcher errors also trigger reconciliation
+        assert!(queue.take_overflow());
+    }
+
     use super::*;
     use notify::{event::ModifyKind, Event, EventKind};
     fn event(path: &str) -> Event {
@@ -269,6 +320,43 @@ mod selection_tests {
         })
         .await
         .expect("file preview should finish");
+    }
+
+    #[tokio::test]
+    async fn rapid_file_switch_and_refresh_keep_latest_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("first.rs");
+        let b = dir.path().join("second.rs");
+        std::fs::write(&a, "FIRST_CONTENT\n").unwrap();
+        std::fs::write(&b, "SECOND_CONTENT\n").unwrap();
+
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        flush_lists(&mut app).await;
+        let select = |app: &mut App, path: &Path| {
+            app.files.selected = app.files.visible.iter()
+                .position(|row| row.entry.path == path).unwrap();
+            app.request_preview_for_selection();
+        };
+        // Multiple requests overlap in real usage; latest selected file wins.
+        select(&mut app, &a);
+        select(&mut app, &b);
+        select(&mut app, &a);
+        select(&mut app, &b);
+        flush_preview(&mut app).await;
+        let preview = app.preview_state.preview.as_ref().unwrap();
+        assert_eq!(preview.path, b);
+        assert!(matches!(&preview.content,
+            PreviewContent::Text { lines, .. } if lines.iter().any(|s| s.contains("SECOND_CONTENT"))));
+
+        // An in-flight reload of B must not replace C after selection changes.
+        std::fs::write(&b, "SECOND_CHANGED\n").unwrap();
+        app.refresh_preview_if_affected(std::slice::from_ref(&b));
+        select(&mut app, &a);
+        flush_preview(&mut app).await;
+        let preview = app.preview_state.preview.as_ref().unwrap();
+        assert_eq!(preview.path, a);
+        assert!(matches!(&preview.content,
+            PreviewContent::Text { lines, .. } if lines.iter().any(|s| s.contains("FIRST_CONTENT"))));
     }
 
     #[tokio::test]

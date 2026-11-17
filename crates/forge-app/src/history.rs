@@ -267,10 +267,10 @@ impl App {
     /// Apply finished history / commit-file jobs. Returns whether anything changed.
     pub(super) fn poll_history(&mut self) -> bool {
         let mut changed = false;
-        if let Some((oid, handle)) = self.history.pending_detail.as_mut() {
-            if let Some(result) = handle.try_join() {
-                let oid = oid.clone();
-                self.history.pending_detail = None;
+        if let Some(((oid, _), result)) = pending_request::take_ready(
+            &mut self.history.pending_detail,
+            |(_, handle)| handle.try_join(),
+        ) {
                 let selected = matches!(self.selected_scm_row(), Some(ScmRow::Commit { index })
                     if self.history.commits.get(index).is_some_and(|c| c.id == oid));
                 if self.session.activity == ActivityTab::Git
@@ -298,28 +298,21 @@ impl App {
                     });
                 }
                 changed = true;
-            }
         }
-        if let Some(pending) = self.history.pending_graph.as_mut() {
-            if let Some(result) = pending.handle.try_join() {
-                self.history.pending_graph = None;
-                self.apply_history_result(result);
-                changed = true;
-            }
+        if let Some((_, result)) = pending_request::take_ready(
+            &mut self.history.pending_graph,
+            |pending| pending.handle.try_join(),
+        ) {
+            self.apply_history_result(result);
+            changed = true;
         }
 
-        let mut finished = Vec::new();
-        let mut index = 0;
-        while index < self.history.pending_files.len() {
-            match self.history.pending_files[index].handle.try_join() {
-                Some(result) => {
-                    let pending = self.history.pending_files.remove(index);
-                    finished.push((pending.oid, result));
-                }
-                None => index += 1,
-            }
-        }
-        for (oid, result) in finished {
+        let finished = pending_request::drain_ready(
+            &mut self.history.pending_files,
+            |pending| pending.handle.try_join(),
+        );
+        for (pending, result) in finished {
+            let oid = pending.oid;
             match result {
                 Ok(Ok(changes)) => {
                     self.history.files.insert(oid, changes);

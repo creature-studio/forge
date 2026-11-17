@@ -9,8 +9,10 @@ mod file_list;
 mod graph;
 mod icons;
 mod markdown;
+mod list_viewport;
 mod preview_pane;
 mod staging;
+mod scrollbar;
 mod sticky;
 mod style;
 mod syntax;
@@ -30,6 +32,7 @@ pub use graph::{
 };
 pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, IconMode, Icons};
 pub use markdown::{wrap_line as wrap_text_line, MarkdownPreview};
+pub use list_viewport::ListViewport;
 pub use preview_pane::{
     diff_render_hunk_start, draw_preview, highlight_code_lines, preview_line_count, scroll_to_hunk, PreviewView,
     SplitRowsCache, TextLang, TextRowsCache,
@@ -40,6 +43,7 @@ pub use staging::{
     scm_jump_to_column, staging_index_at, HistoryView, ScmRow, StagingColumn, StagingLayout,
     StagingState,
 };
+pub use scrollbar::{ScrollbarDrag, VerticalScrollbar};
 pub use sticky::index_at as sticky_index_at;
 pub use style::rgb as to_color;
 pub use style::{color_mode, set_color_mode};
@@ -76,10 +80,14 @@ pub enum ActivityTab {
 pub struct PaneLayout {
     pub list: Rect,
     pub list_inner: Rect,
+    /// Mouse-interactive scrollbar for Files or Git sidebar.
+    pub sidebar_scrollbar: Rect,
     pub preview: Rect,
     pub preview_inner: Rect,
     /// Clickable focus overview ruler beside a code preview.
     pub overview_ruler: Rect,
+    /// Dedicated one-cell vertical scrollbar lane for file and Git Diff previews.
+    pub preview_scrollbar: Rect,
     /// Floating in-file find widget, empty when closed.
     pub file_find_rect: Rect,
     pub markdown_preview_tab: Rect,

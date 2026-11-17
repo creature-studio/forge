@@ -16,7 +16,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragr
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::file_list::ensure_selected_visible;
+use crate::ListViewport;
 use crate::graph::{
     change_color, flatten_changes, lane_color, ChangeRow, GraphCell, GraphLayout, LANE_WIDTH,
 };
@@ -625,36 +625,22 @@ pub fn draw_scm_sidebar(
     let selected = state.selected.min(count.saturating_sub(1));
 
     style::fill_panel(frame, body, theme);
-    let viewport = body.height as usize;
-    let headers = if state.sticky_scroll {
-        sticky::layout(
-            count,
-            selected,
-            state.scroll,
-            viewport,
-            |i| find_scm_parent_row(&rows, i),
-            state.follow_selection,
-        )
-    } else {
-        if state.follow_selection {
-            ensure_selected_visible(selected, state.scroll, viewport, count);
-        } else {
-            *state.scroll = (*state.scroll).min(count.saturating_sub(viewport));
-        }
-        Vec::new()
-    };
-    *state.sticky_headers = headers.clone();
-    let start = *state.scroll;
-    let end = (start + viewport.saturating_sub(headers.len())).min(count);
+    let viewport = ListViewport::calculate(
+        count,
+        selected,
+        state.scroll,
+        body.height as usize,
+        state.sticky_scroll,
+        state.follow_selection,
+        |i| find_scm_parent_row(&rows, i),
+    );
+    *state.sticky_headers = viewport.pinned.clone();
     let focused = state.focused;
-    let items: Vec<ListItem<'_>> = headers
-        .iter()
-        .copied()
-        .chain(start..end)
+    let items: Vec<ListItem<'_>> = viewport.indices()
         .map(|index| {
             let scm = &rows[index];
             let is_sel = index == selected;
-            let pinned = headers.contains(&index);
+            let pinned = viewport.pinned.contains(&index);
             match scm {
                 ScmRow::Section { title, count, .. } => {
                     section_item(theme, title, *count, is_sel, focused, pinned)
@@ -790,7 +776,7 @@ pub fn draw_scm_sidebar(
 
     let list = List::new(items).style(Style::default().bg(rgb(theme.panel_bg)));
     frame.render_widget(list, body);
-    sticky::paint(frame, body, theme, &headers, selected);
+    sticky::paint(frame, body, theme, &viewport.pinned, selected);
 
     StagingLayout {
         area,
@@ -1532,8 +1518,9 @@ pub fn draw_git_strip(
 /// Centered commit-message modal.
 pub fn draw_commit_modal(frame: &mut Frame<'_>, theme: &Theme, input: &str) {
     let area = frame.area();
-    let width = area.width.min(64).max(24);
-    let height = 5u16;
+    // Keep the modal within the actual terminal width, even below 24 cells.
+    let width = area.width.min(64);
+    let height = 5u16.min(area.height);
     let x = area.x + (area.width.saturating_sub(width)) / 2;
     let y = area.y + (area.height.saturating_sub(height)) / 2;
     let rect = Rect {
@@ -1595,6 +1582,17 @@ pub fn draw_commit_modal(frame: &mut Frame<'_>, theme: &Theme, input: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn commit_modal_handles_terminal_narrower_than_minimum_dialog_width() {
+        use ratatui::{backend::TestBackend, Terminal};
+        for (width, height) in [(10, 3), (20, 8), (5, 2)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let theme = forge_theme::Theme::modern_ide();
+            terminal.draw(|frame| super::draw_commit_modal(frame, &theme, "tiny")).unwrap();
+        }
+    }
+
+
     use super::*;
     use forge_model::{ChangeEntry, DiffSide, GitStatus};
     use std::collections::HashSet;

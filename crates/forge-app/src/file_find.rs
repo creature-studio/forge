@@ -201,16 +201,12 @@ impl App {
     }
 
     pub(super) fn poll_file_find(&mut self) -> bool {
-        let result = self
-            .preview_state
-            .find
-            .pending
-            .as_mut()
-            .and_then(|job| job.try_join());
-        let Some(result) = result else {
+        let Some((_, result)) = pending_request::take_ready(
+            &mut self.preview_state.find.pending,
+            |job| job.try_join(),
+        ) else {
             return false;
         };
-        self.preview_state.find.pending = None;
         if !self.preview_state.find.open {
             return true;
         }

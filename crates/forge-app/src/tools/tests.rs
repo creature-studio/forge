@@ -300,6 +300,7 @@ async fn finish(app: &mut App) {
             app.poll_pending_status();
             app.poll_pending_preview();
             app.poll_pending_diff();
+            app.poll_pending_write();
             if app.tools.pending_task.is_none()
                 && app.tools.pending_read.is_none()
                 && app.tools.pending_index.is_none()
@@ -308,6 +309,7 @@ async fn finish(app: &mut App) {
                 && app.preview_state.pending_preview.is_none()
                 && app.preview_state.pending_diff.is_none()
                 && app.scm.pending_status.is_none()
+                && app.scm.pending_write.is_none()
             {
                 break;
             }
@@ -1965,6 +1967,70 @@ async fn open_file_from_narrowed_worktree_re_roots_to_reach_external_repository_
         root.join("a.rs")
     );
     assert_eq!(app.session.focus, PaneFocus::List);
+}
+
+#[tokio::test]
+async fn stale_git_status_from_previous_folder_in_same_repo_is_ignored() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    let old_root = dir.path().to_path_buf();
+    let new_root = old_root.join("folder");
+    let old_snapshot = app.services.git.status(&old_root).unwrap();
+    assert_eq!(old_snapshot.repo_root, old_root);
+
+    app.switch_workspace(new_root.clone());
+    // Even though the repository root contains the new workspace, its
+    // previous root-specific snapshot must not overwrite the new view.
+    assert!(app.scm.git_status.is_none());
+    app.apply_status_result(old_root.clone(), Ok(Ok(Some(old_snapshot))));
+    assert!(app.scm.git_status.is_none(), "old status leaked across workspace roots");
+    assert!(app.scm.branch.is_empty());
+
+    // The old no-repository/error result must also be ignored.
+    app.apply_status_result(old_root.clone(), Ok(Ok(None)));
+    assert!(app.scm.git_status.is_none());
+
+    finish(&mut app).await;
+    let new_snapshot = app.scm.git_status.clone().expect("new workspace never loaded status");
+    let new_branch = app.scm.branch.clone();
+    assert_eq!(app.files.tree_root, new_root);
+    // Late responses must not reset a successfully loaded new snapshot.
+    app.apply_status_result(old_root.clone(), Ok(Ok(None)));
+    assert_eq!(app.scm.git_status.as_ref().unwrap().repo_root, new_snapshot.repo_root);
+    assert_eq!(app.scm.branch, new_branch);
+    app.apply_status_result(
+        old_root,
+        Ok(Err(GitReadError::Status("outdated worker error".into()))),
+    );
+    assert_eq!(app.scm.git_status.as_ref().unwrap().repo_root, new_snapshot.repo_root);
+    assert_eq!(app.scm.branch, new_branch);
+}
+
+#[tokio::test]
+async fn directory_listing_deduplicates_pending_paths_and_refresh_replaces_generation() {
+    let (dir, mut app) = fixture();
+    let root = dir.path().to_path_buf();
+    // The workspace starts with an initial listing already in flight.
+    assert_eq!(
+        app.files.pending_lists.iter().filter(|p| p.path == root).count(), 1
+    );
+    let first_id = app.files.pending_lists[0].id;
+    app.request_dir(root.clone());
+    app.request_missing_expanded();
+    assert_eq!(
+        app.files.pending_lists.iter().filter(|p| p.path == root).count(), 1,
+        "repeated requests must not fan out duplicate directory reads"
+    );
+    assert_eq!(app.files.pending_lists[0].id, first_id);
+    app.refresh_tree_in_place();
+    assert_eq!(app.files.pending_lists.len(), 1);
+    assert_ne!(app.files.pending_lists[0].id, first_id);
+    let second_id = app.files.pending_lists[0].id;
+    app.refresh_tree_in_place();
+    assert_eq!(app.files.pending_lists.len(), 1);
+    assert_ne!(app.files.pending_lists[0].id, second_id);
+    finish(&mut app).await;
+    assert!(app.files.children.contains_key(&root));
 }
 
 #[tokio::test]

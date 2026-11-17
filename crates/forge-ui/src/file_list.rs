@@ -11,6 +11,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::icons::{icon_mode, IconMode, Icons};
 use crate::sticky;
+use crate::ListViewport;
 use crate::style::{self, rgb};
 use crate::tree::{find_parent_row, fit_compact_label, TreeRow};
 
@@ -32,24 +33,7 @@ pub struct FileListState<'a> {
 }
 
 /// Keep `selected` inside the visible window `[scroll, scroll + height)`.
-pub fn ensure_selected_visible(selected: usize, scroll: &mut usize, height: usize, len: usize) {
-    if len == 0 || height == 0 {
-        *scroll = 0;
-        return;
-    }
-    let max_scroll = len.saturating_sub(height);
-    if *scroll > max_scroll {
-        *scroll = max_scroll;
-    }
-    if selected < *scroll {
-        *scroll = selected;
-    } else if selected >= *scroll + height {
-        *scroll = selected + 1 - height;
-    }
-    if *scroll > max_scroll {
-        *scroll = max_scroll;
-    }
-}
+pub use crate::list_viewport::ensure_selected_visible;
 
 /// Draw the file list into a borderless pane (no section title chip).
 /// Returns the content rect for hit-testing.
@@ -64,36 +48,22 @@ pub fn draw_file_list(
     }
     style::fill_panel(frame, area, theme);
 
-    let viewport = area.height as usize;
-    let headers = if state.sticky_scroll {
-        sticky::layout(
-            state.rows.len(),
-            state.selected,
-            state.scroll,
-            viewport,
-            |i| find_parent_row(state.rows, i),
-            state.follow_selection,
-        )
-    } else {
-        if state.follow_selection {
-            ensure_selected_visible(state.selected, state.scroll, viewport, state.rows.len());
-        } else {
-            *state.scroll = (*state.scroll).min(state.rows.len().saturating_sub(viewport));
-        }
-        Vec::new()
-    };
-    *state.sticky_headers = headers.clone();
-    let start = *state.scroll;
-    let end = (start + viewport.saturating_sub(headers.len())).min(state.rows.len());
+    let viewport = ListViewport::calculate(
+        state.rows.len(),
+        state.selected,
+        state.scroll,
+        area.height as usize,
+        state.sticky_scroll,
+        state.follow_selection,
+        |i| find_parent_row(state.rows, i),
+    );
+    *state.sticky_headers = viewport.pinned.clone();
     let row_width = area.width;
     let focused = state.focused;
-    let items: Vec<ListItem<'_>> = headers
-        .iter()
-        .copied()
-        .chain(start..end)
+    let items: Vec<ListItem<'_>> = viewport.indices()
         .map(|index| {
             let tree_row = &state.rows[index];
-            let pinned = headers.contains(&index);
+            let pinned = viewport.pinned.contains(&index);
             list_item(
                 theme,
                 index,
@@ -109,7 +79,7 @@ pub fn draw_file_list(
 
     let list = List::new(items).style(Style::default().bg(rgb(theme.panel_bg)));
     frame.render_widget(list, area);
-    sticky::paint(frame, area, theme, &headers, state.selected);
+    sticky::paint(frame, area, theme, &viewport.pinned, state.selected);
     area
 }
 
