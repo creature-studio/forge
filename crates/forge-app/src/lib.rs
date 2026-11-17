@@ -22,7 +22,7 @@ use forge_ui::{
     expand_ancestors_for_path, file_list_items, find_parent_row, find_scm_parent_row, flatten_tree,
     init_icons_from_env, scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode,
     staging_items, sticky_index_at, ActivityTab, ContextAction, ContextMenu, ContextTarget,
-    ScrollbarDrag, VerticalScrollbar,
+    ScrollbarDrag, VerticalScrollbar, HoverTargets,
     MarkdownPreview, PaneFocus, PaneLayout, ScmRow, SplitRowsCache, StagingColumn, TextLang,
     TextRowsCache, TreeRow,
 };
@@ -253,7 +253,7 @@ struct App {
     /// Inactive PTY sessions remain alive; only the active terminal is drawn.
     terminal_tabs: Vec<embedded_terminal::EmbeddedTerminal>,
     /// Exact hit targets for controls painted in the Terminal header.
-    terminal_tab_hits: Vec<(ratatui::layout::Rect, TerminalTabAction)>,
+    terminal_tab_hits: HoverTargets<TerminalTabAction>,
     terminal_tab_bar: ratatui::layout::Rect,
     terminal_help_return: bool,
     terminal_notify: std::sync::Arc<tokio::sync::Notify>,
@@ -575,7 +575,7 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         inline_diff: inline_diff::InlineDiff::default(),
         terminal: None,
         terminal_tabs: Vec::new(),
-        terminal_tab_hits: Vec::new(),
+        terminal_tab_hits: HoverTargets::default(),
         terminal_tab_bar: ratatui::layout::Rect::default(),
         terminal_help_return: false,
         terminal_notify: std::sync::Arc::new(tokio::sync::Notify::new()),

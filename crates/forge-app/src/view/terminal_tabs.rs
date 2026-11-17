@@ -72,12 +72,14 @@ pub(super) fn draw_tab_strip(frame: &mut Frame<'_>, area: Rect, model: &mut App,
             shorten(&tab.name,10),if tab.ended {"!"} else {""},
             if tab.history>0 {" ↑"} else {""});
         let body=Rect::new(x,bar.y,width.saturating_sub(3),1);
-        frame.render_widget(Paragraph::new(label).style(Style::default().fg(fg).bg(bg)),body);
-        model.terminal_tab_hits.push((body,TerminalTabAction::Activate(tab.id)));
+        model.terminal_tab_hits.draw_text(frame,body,TerminalTabAction::Activate(tab.id),
+            &label,Style::default().fg(fg).bg(bg),
+            Style::default().fg(if active {palette.on_accent} else {palette.fg})
+                .bg(if active {palette.accent} else {palette.selection}));
         let close=Rect::new(x+width-3,bar.y,3,1);
-        frame.render_widget(Paragraph::new(" × ").style(Style::default()
-            .fg(if active {palette.fg} else {palette.fg_dim}).bg(bg)),close);
-        model.terminal_tab_hits.push((close,TerminalTabAction::Close(tab.id)));
+        model.terminal_tab_hits.draw_text(frame,close,TerminalTabAction::Close(tab.id),
+            " × ",Style::default().fg(if active {palette.fg} else {palette.fg_dim}).bg(bg),
+            Style::default().fg(palette.on_accent).bg(palette.accent));
         x+=width;
     }
     let mut right=area.right().saturating_sub(control_width);
@@ -99,10 +101,10 @@ pub(super) fn draw_tab_strip(frame: &mut Frame<'_>, area: Rect, model: &mut App,
         let width=label.width() as u16;
         if right>=area.x && right.saturating_add(width)<=area.right() {
             let rect=Rect::new(right,bar.y,width,1);
-            frame.render_widget(Paragraph::new(label).style(Style::default()
-                .fg(if action==TerminalTabAction::New {palette.accent} else {palette.fg_dim})
-                .bg(palette.bg)),rect);
-            model.terminal_tab_hits.push((rect,action));
+            model.terminal_tab_hits.draw_text(frame,rect,action,label,
+                Style::default().fg(if action==TerminalTabAction::New {palette.accent} else {palette.fg_dim})
+                    .bg(palette.bg),
+                Style::default().fg(palette.fg).bg(palette.selection));
         }
         right=right.saturating_add(width);
     }
@@ -128,6 +130,42 @@ mod tests {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
         });
+    }
+
+    #[tokio::test]
+    async fn hovering_terminal_controls_changes_color_without_clicking() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::NONE));
+        let first = app.terminal.as_ref().unwrap().id;
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::SHIFT));
+        let active_before = app.terminal.as_ref().unwrap().id;
+        paint(&mut app,95);
+        let inactive_rect = app.terminal_tab_hits.iter().find(|(_,action)|
+            *action == TerminalTabAction::Activate(first)).unwrap().0;
+        let close_rect = app.terminal_tab_hits.iter().find(|(_,action)|
+            *action == TerminalTabAction::Close(first)).unwrap().0;
+
+        let painted_bg = |app: &mut App, col, row| {
+            let mut terminal = Terminal::new(TestBackend::new(95, 15)).unwrap();
+            terminal.draw(|frame| {
+                draw_tab_strip(frame, Rect::new(0, 4, 95, 10), app, workspace_palette());
+            }).unwrap();
+            terminal.backend().buffer()[(col, row)].bg
+        };
+        let moved = |app: &mut App, col, row| {
+            app.handle_mouse(MouseEvent { kind: MouseEventKind::Moved,
+                column:col, row, modifiers:KeyModifiers::NONE });
+        };
+        assert_eq!(painted_bg(&mut app, inactive_rect.x, inactive_rect.y), workspace_palette().bg);
+        moved(&mut app,inactive_rect.x,inactive_rect.y);
+        assert_eq!(painted_bg(&mut app, inactive_rect.x, inactive_rect.y), workspace_palette().selection);
+        assert_eq!(app.terminal.as_ref().unwrap().id,active_before, "hover must not activate tab");
+        moved(&mut app,close_rect.x,close_rect.y);
+        assert_eq!(painted_bg(&mut app, close_rect.x, close_rect.y), workspace_palette().accent);
+        assert_eq!(painted_bg(&mut app, inactive_rect.x, inactive_rect.y), workspace_palette().bg);
+        moved(&mut app,0,0);
+        assert_eq!(painted_bg(&mut app, close_rect.x, close_rect.y), workspace_palette().bg);
     }
 
     #[tokio::test]

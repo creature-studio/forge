@@ -763,7 +763,13 @@ impl App {
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
         let point = ratatui::layout::Position::new(mouse.column,mouse.row);
+        if matches!(mouse.kind, MouseEventKind::Moved) {
+            // Pointer location belongs to Forge; never send hover-only events
+            // as synthetic terminal input. Repainting uses the same hit boxes.
+            self.terminal_tab_hits.hover_at(mouse.column, mouse.row);
+        }
         if self.session.help_open {
+            self.terminal_tab_hits.clear_hover();
             self.handle_help_mouse(mouse);
             return;
         }
@@ -812,9 +818,7 @@ impl App {
             && !self.session.help_open && !self.editing.active()
             && self.terminal_tab_bar.contains(ratatui::layout::Position::new(mouse.column,mouse.row))
         {
-            let action = self.terminal_tab_hits.iter().find(|(rect,_)|
-                rect.contains(ratatui::layout::Position::new(mouse.column,mouse.row))
-            ).map(|(_, action)| *action);
+            let action = self.terminal_tab_hits.action_at(mouse.column, mouse.row);
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     if let Some(action) = action { self.handle_terminal_tab_action(action); }

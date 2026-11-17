@@ -4,6 +4,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod interactive;
+pub use interactive::HoverTargets;
 mod context_menu;
 mod file_list;
 mod graph;
