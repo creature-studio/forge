@@ -15,10 +15,11 @@ use ratatui::{
 use ratatui_kit::{Component, ComponentDrawer, ComponentUpdater, Context};
 use tui_input::backend::crossterm::EventHandler;
 mod terminal_tabs;
+pub(crate) mod commit_detail;
 
 // Keep the terminal's own foreground and background. Accent belongs to small
 // focus marks; selection is a quiet neutral surface, like NSH's TUI controls.
-fn workspace_palette() -> Palette {
+pub(crate) fn workspace_palette() -> Palette {
     let mut palette = Palette::default();
     // Never inherit the terminal profile background. Ubuntu's default purple
     // otherwise leaks through empty header/footer/sidebar cells, while code
@@ -765,6 +766,11 @@ impl Component for NativePane {
             PaneKind::Preview => {
                 model.session.layout.preview = area;
                 area = draw_preview_heading(drawer.frame, area, &mut model, self.palette);
+                if commit_detail::draw(drawer.frame,area,&mut model,self.palette) {
+                    model.session.layout.overview_ruler = Rect::default();
+                    model.session.layout.preview_scrollbar = Rect::default();
+                    model.session.layout.file_find_rect = Rect::default();
+                } else {
                 // A 3-column focus ruler, not a code minimap: preserve source width.
                 let ruler_area = if model.config.show_overview_ruler
                     && area.width >= 36 && area.height >= 5
@@ -1009,6 +1015,7 @@ impl Component for NativePane {
                 }
                 if let Some((bar, total)) = horizontal_bar {
                     draw_horizontal_position(drawer.frame, bar, model.preview_state.preview_scroll_x, total, self.palette);
+                }
                 }
             }
             PaneKind::Divider => {

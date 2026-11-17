@@ -912,6 +912,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selecting_commit_folder_keeps_styled_commit_detail_preview() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let dir = repo();
+        let mut app = app(dir.path());
+        app.show_history();
+        settle(&mut app).await;
+        let commit_row = app.scm.scm_selected;
+        let oid = app.history.commits[0].id.clone();
+        // Load children without changing the currently displayed detail.
+        app.toggle_history_row(commit_row);
+        settle(&mut app).await;
+        let before_path = app.preview_state.preview.as_ref().unwrap().path.clone();
+        assert_eq!(before_path, std::path::PathBuf::from(&oid));
+
+        let render = |app: &mut App| {
+            let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            let mut used_commit_renderer = false;
+            term.draw(|frame| {
+                used_commit_renderer = crate::view::commit_detail::draw(
+                    frame, ratatui::layout::Rect::new(0, 0, 100, 30),
+                    app, crate::view::workspace_palette(),
+                );
+            }).unwrap();
+            (used_commit_renderer,term.backend().buffer().content().iter()
+                .map(|cell|cell.symbol().to_owned()).collect::<Vec<_>>().join(""))
+        };
+        let (initial, initial_text) = render(&mut app);
+        assert!(initial);
+        assert!(initial_text.contains("CHANGED FILES"));
+
+        let folder = app.scm_rows().iter().position(|row|
+            matches!(row, ScmRow::CommitFolder { commit: 0, .. })
+        ).expect("commit folder");
+        app.scm.scm_selected = folder;
+        app.request_diff_for_scm_selection();
+        assert_eq!(app.preview_state.preview.as_ref().unwrap().path,before_path);
+        let (folder_rendered, text) = render(&mut app);
+        assert!(folder_rendered,"folder must retain commit detail renderer");
+        assert!(text.contains("CHANGED FILES"));
+        assert!(text.contains("fix: add a line"));
+
+        app.toggle_history_row(folder);
+        let (expanded_rendered, _) = render(&mut app);
+        assert!(expanded_rendered,"expanding folder must not replace commit details");
+    }
+
+    #[tokio::test]
     async fn history_is_empty_outside_a_repository() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = app(dir.path());
