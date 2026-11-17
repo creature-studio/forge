@@ -151,6 +151,17 @@ def main():
         version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
         if len(apps) != 1 or apps[0].get("softwareVersion") != version:
             errors.append(f"{name}: wrong software schema version")
+    # Keep the previously submitted /forge/sitemap.xml usable after the
+    # migration to Astro, and ensure it contains the live, full index.
+    alias = SITE / "sitemap.xml"
+    index = SITE / "sitemap-index.xml"
+    if not alias.is_file() or alias.read_bytes() != index.read_bytes():
+        errors.append("legacy sitemap.xml missing or not identical to Astro sitemap-index.xml")
+    else:
+        alias_root = ET.parse(alias).getroot()
+        if alias_root.tag != "{http://www.sitemaps.org/schemas/sitemap/0.9}sitemapindex":
+            errors.append("legacy sitemap.xml is not a sitemap index")
+
     sitemap = ET.parse(SITE / "sitemap-0.xml")
     namespace = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
     urls = [x.text for x in sitemap.findall(".//s:url/s:loc", namespace)]

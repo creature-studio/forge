@@ -8,7 +8,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "check:site": "npm run build && python3 ../scripts/check-site-seo.py",
-    "prebuild": "node scripts/copy-installer.mjs"
+    "prebuild": "node scripts/copy-installer.mjs",
+    "postbuild": "node scripts/ensure-sitemap-legacy.mjs"
   },
   "dependencies": {
     "@astrojs/sitemap": "^3.7.0",
