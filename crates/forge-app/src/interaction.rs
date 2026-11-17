@@ -183,6 +183,15 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.session.help_open = false
             }
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Char('1' | '2') => {
+                self.session.help_reference = match key.code {
+                    KeyCode::Char('1') => false,
+                    KeyCode::Char('2') => true,
+                    _ => !self.session.help_reference,
+                };
+                self.session.help_scroll = 0;
+                self.session.help_scroll_limit = 0;
+            }
             KeyCode::Down | KeyCode::Char('j') => self.scroll_help(1),
             KeyCode::Up | KeyCode::Char('k') => self.scroll_help(-1),
             KeyCode::PageDown => self.scroll_help(10),

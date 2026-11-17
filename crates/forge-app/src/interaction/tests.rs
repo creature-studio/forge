@@ -340,6 +340,12 @@ async fn help_consumes_keys_and_mouse_then_restores_focus_and_selection() {
         modifiers: KeyModifiers::NONE,
     });
     assert_eq!(app.session.help_scroll, 4);
+    assert!(!app.session.help_reference);
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert!(app.session.help_reference);
+    assert_eq!(app.session.help_scroll, 0);
+    app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+    assert!(!app.session.help_reference);
     assert_eq!(app.preview_state.hunk_index, Some(0));
     assert!(app.scm.pending_write.is_none());
     assert!(!app.session.commit_open);
