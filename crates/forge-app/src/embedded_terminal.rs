@@ -227,13 +227,17 @@ impl EmbeddedTerminal {
         // Clone only visible 32-byte cells while holding the parser mutex.
         // Ratatui writes and style calculations happen *after* unlocking, so
         // large frames cannot starve the PTY reader or delay input echo.
-        let (cells, cursor, scrolled) = {
+        let (cells, cursor, draw_cursor) = {
             let Ok(parser) = self.parser.lock() else { return; };
             let screen = parser.screen();
             let cells = (0..area.height).flat_map(|y|
                 (0..area.width).map(move |x| screen.cell(y,x).cloned())
             ).collect::<Vec<_>>();
-            (cells, screen.cursor_position(), screen.scrollback() > 0)
+            // Full-screen TUIs (including coding agents) often hide the cursor
+            // while animating status rows. Drawing our synthetic reversed cell
+            // over their UI makes those rows visibly flicker.
+            let draw_cursor = self.focused && !screen.hide_cursor() && screen.scrollback() == 0;
+            (cells, screen.cursor_position(), draw_cursor)
         };
         let selection = self.selection.map(|(start,end)| {
             if (start.1,start.0) <= (end.1,end.0) {(start,end)} else {(end,start)}
@@ -245,7 +249,7 @@ impl EmbeddedTerminal {
                     .fg(to_color(cell.fgcolor(), fg))
                     .bg(to_color(cell.bgcolor(), bg))
                     .add_modifier(if cell.bold() { Modifier::BOLD } else { Modifier::empty() });
-                if self.focused && !scrolled && cursor == (y, x) {
+                if draw_cursor && cursor == (y, x) {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
                 if selection.is_some_and(|(start,end)|
@@ -465,6 +469,44 @@ mod tests {
         assert!(term.parser.lock().unwrap().screen().scrollback() > 0);
         term.scroll_to_bottom();
         assert_eq!(term.parser.lock().unwrap().screen().scrollback(),0);
+    }
+
+    #[test]
+    fn terminal_renderer_respects_child_cursor_visibility() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let cwd = std::env::current_dir().unwrap();
+        let mut embedded = EmbeddedTerminal::start(
+            &cwd, 40, 8, Arc::new(tokio::sync::Notify::new())
+        ).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
+
+        // The foreground TUI owns its cursor visibility through DECSET 25.
+        // Even when Forge's terminal pane has focus, a hidden child cursor
+        // must not overwrite the status character with inverse video.
+        {
+            let mut parser = embedded.parser.lock().unwrap();
+            parser.process(b"\x1b[?25l\x1b[1;1HSTATUS");
+            assert!(parser.screen().hide_cursor());
+        }
+        embedded.focused = true;
+        terminal.draw(|frame| {
+            embedded.render(frame, Rect::new(0, 0, 40, 8), Color::Black, Color::White);
+        }).unwrap();
+        let first = &terminal.backend().buffer()[(0, 0)];
+        assert_eq!(first.symbol(), "S");
+        assert!(!first.modifier.contains(Modifier::REVERSED));
+
+        // Once the child explicitly shows its cursor again, Forge may draw it.
+        {
+            let mut parser = embedded.parser.lock().unwrap();
+            parser.process(b"\x1b[?25h\x1b[1;1H");
+            assert!(!parser.screen().hide_cursor());
+        }
+        terminal.draw(|frame| {
+            embedded.render(frame, Rect::new(0, 0, 40, 8), Color::Black, Color::White);
+        }).unwrap();
+        let first = &terminal.backend().buffer()[(0, 0)];
+        assert!(first.modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
