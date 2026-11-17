@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.2] - 2026-11-16
+
+### Added
+- Workspace Switcher (`Alt+O`) for recent directories and opening any folder, including non-Git workspaces; `O` opens a directory prompt.
+- Persist up to 12 recently visited workspace roots; Git Worktrees remain available separately with `W`.
+- Shared list viewport and scrollbar controls for Files and Git, with navigation improvements to Help.
+- Regression coverage for rapid file switching, stale Git status, directory refresh, watcher overflow, and Terminal bursts.
+
+### Improved
+- Extract UI rendering, tool controls, and input handling into focused modules; unify asynchronous request completion and cancel superseded directory listings.
+- Prevent Git read-only queries from taking optional index locks while staging or discarding changes.
+- Bound filesystem-watch notifications with overflow reconciliation, and harden Terminal input errors, shell exit handling, reaping, and drawing under PTY output.
+- Prevent Git snapshots from previous workspace roots from overwriting current repository state.
+- Make UI color assertions theme-aware and prevent path operations from silently defaulting to an invalid Git root.
+
+### Notes
+- This is a source/version tag; creating it locally does not publish release binaries.
+- Existing `W` Git Worktree management is unchanged; `Alt+O` switches regular workspace directories.
+
+
 ## [0.3.1] - 2026-11-16
 
 ### Added
