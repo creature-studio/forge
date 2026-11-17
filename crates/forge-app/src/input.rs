@@ -3,7 +3,244 @@
 use super::*;
 
 impl App {
+    fn open_terminal_tab(&mut self) {
+        if self.terminal_tabs.len() >= 7
+            && self.terminal.as_ref().is_some_and(|t| !t.ended.load(std::sync::atomic::Ordering::Acquire))
+        {
+            self.session.status = "Terminal limit: 8 tabs (Ctrl+Shift+W closes one)".into();
+            return;
+        }
+        let next = embedded_terminal::EmbeddedTerminal::start(
+            &self.files.tree_root, 80, 12, self.terminal_notify.clone(),
+        );
+        match next {
+            Ok(mut next) => {
+                next.maximized = self.terminal.as_ref().is_some_and(|t| t.maximized);
+                if let Some(previous) = self.terminal.take() {
+                    // A finished session is not a usable tab. Restart replaces
+                    // it rather than keeping a dead shell in tab history.
+                    if !previous.ended.load(std::sync::atomic::Ordering::Acquire) {
+                        self.terminal_tabs.push(previous);
+                    }
+                }
+                self.session.status = "New terminal tab".into();
+                self.terminal = Some(next);
+            }
+            Err(error) => self.session.status = format!("Terminal: {error}"),
+        }
+    }
+
+    fn activate_terminal_number(&mut self, position: usize) {
+        // The displayed numbers are ordered by creation id, not by rotation
+        // of the inactive sessions during F12 switching.
+        let mut ids = self.terminal_tabs.iter().map(|t| t.id).collect::<Vec<_>>();
+        if let Some(term) = &self.terminal { ids.push(term.id); }
+        ids.sort_unstable();
+        if let Some(id) = ids.get(position).copied() {
+            self.activate_terminal_tab(id);
+        }
+    }
+
+    fn switch_terminal_tab(&mut self, backwards: bool) {
+        if self.terminal_tabs.is_empty() { return; }
+        let Some(active) = self.terminal.take() else { return; };
+        let new = if backwards {
+            self.terminal_tabs.pop().expect("nonempty terminal tab set")
+        } else {
+            self.terminal_tabs.remove(0)
+        };
+        self.terminal_tabs.push(active);
+        let mut new = new;
+        new.visible = true;
+        new.focused = !new.ended.load(std::sync::atomic::Ordering::Acquire);
+        self.terminal = Some(new);
+    }
+
+    fn activate_terminal_tab(&mut self, id: u64) {
+        if self.terminal.as_ref().is_some_and(|term| term.id == id) {
+            if let Some(term) = &mut self.terminal {
+                term.focused = !term.ended.load(std::sync::atomic::Ordering::Acquire);
+            }
+            return;
+        }
+        let Some(index) = self.terminal_tabs.iter().position(|term| term.id == id) else { return; };
+        let Some(active) = self.terminal.take() else { return; };
+        let mut selected = self.terminal_tabs.remove(index);
+        selected.visible = true;
+        selected.focused = !selected.ended.load(std::sync::atomic::Ordering::Acquire);
+        selected.maximized = active.maximized;
+        self.terminal_tabs.push(active);
+        self.terminal = Some(selected);
+    }
+
+    fn close_terminal_tab_by_id(&mut self, id: u64) {
+        if self.terminal.as_ref().is_some_and(|term| term.id == id) {
+            self.close_terminal_tab();
+        } else if let Some(index) = self.terminal_tabs.iter().position(|term| term.id == id) {
+            self.terminal_tabs.remove(index);
+            self.session.status = "Terminal tab closed".into();
+        }
+    }
+
+    fn open_terminal_help(&mut self) {
+        self.terminal_help_return = self.terminal.as_ref().is_some_and(|term| term.visible && term.focused);
+        if let Some(term) = &mut self.terminal { term.focused = false; }
+        self.session.help_open = true;
+        self.session.help_reference = false;
+        self.session.help_scroll = 0;
+    }
+
+    fn handle_terminal_tab_action(&mut self, action: TerminalTabAction) {
+        match action {
+            TerminalTabAction::Activate(id) => self.activate_terminal_tab(id),
+            TerminalTabAction::Close(id) => self.close_terminal_tab_by_id(id),
+            TerminalTabAction::New => self.open_terminal_tab(),
+            TerminalTabAction::Previous => self.switch_terminal_tab(true),
+            TerminalTabAction::Next => self.switch_terminal_tab(false),
+            TerminalTabAction::Maximize => {
+                if let Some(term) = &mut self.terminal { term.maximized = !term.maximized; }
+            }
+            TerminalTabAction::Help => self.open_terminal_help(),
+            TerminalTabAction::Hide => {
+                if let Some(term) = &mut self.terminal {
+                    term.visible = false;
+                    term.focused = false;
+                }
+            }
+        }
+    }
+
+    fn copy_terminal_text(&mut self, text: &str) {
+        if text.is_empty() {
+            self.session.status = "No terminal selection".into();
+            return;
+        }
+        if text.len() > 256 * 1024 {
+            self.session.status = "Terminal selection exceeds 256 KiB".into();
+            return;
+        }
+        #[cfg(not(test))]
+        {
+            let native = copy_path_clipboard(text).is_ok();
+            let osc52 = if native { false } else {
+                crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::clipboard::CopyToClipboard::to_clipboard_from(text)
+                ).is_ok()
+            };
+            self.session.status = if native {
+                format!("Copied {} terminal characters",text.chars().count())
+            } else if osc52 {
+                format!("Terminal copied via OSC 52 ({} chars)",text.chars().count())
+            } else {
+                "Terminal clipboard unavailable".into()
+            };
+        }
+        #[cfg(test)]
+        { self.session.status = format!("Terminal selected {} characters",text.chars().count()); }
+    }
+
+    fn close_terminal_tab(&mut self) {
+        if self.terminal.is_none() { return; }
+        self.terminal.take(); // Drop terminates the local PTY
+        if let Some(mut previous) = self.terminal_tabs.pop() {
+            previous.visible = true;
+            previous.focused = !previous.ended.load(std::sync::atomic::Ordering::Acquire);
+            self.terminal = Some(previous);
+        }
+        self.session.status = "Terminal tab closed".into();
+    }
+
     pub(super) fn handle_key(&mut self, key: KeyEvent) {
+        // Modal keyboard ownership must precede all PTY and workspace hotkeys.
+        // In particular a previously open find input must not eat Esc or Tab
+        // while the Help overlay is visible.
+        if self.keys.open {
+            self.keys.handle(key);
+            return;
+        }
+        if self.session.help_open {
+            self.handle_help_key(key);
+            return;
+        }
+        // Alt+1..8 selects the *visible tab number* from anywhere in the
+        // workspace while Terminal is shown. Do not steal modal/editor keys.
+        if self.terminal.as_ref().is_some_and(|term| term.visible)
+            && !self.keys.open && !self.session.help_open
+            && self.tools.panel.is_none() && !self.editing.active()
+            && key.modifiers == KeyModifiers::ALT
+        {
+            if let KeyCode::Char(d @ '1'..='8') = key.code {
+                self.activate_terminal_number(d as usize - '1' as usize);
+                return;
+            }
+        }
+        // F4 in Terminal opens the in-app help with a dedicated Terminal guide.
+        if key.code == KeyCode::F(4)
+            && self.terminal.as_ref().is_some_and(|term| term.visible && term.focused)
+        {
+            self.open_terminal_help();
+            return;
+        }
+        // Function-key alternatives work even in host terminals that swallow
+        // Ctrl+Shift combinations or report them as plain Ctrl.
+        if key.code == KeyCode::F(8) && key.modifiers.contains(KeyModifiers::SHIFT) {
+            self.open_terminal_tab(); return;
+        }
+        if key.code == KeyCode::F(12) && self.terminal.as_ref().is_some_and(|t| t.visible) {
+            self.switch_terminal_tab(key.modifiers.contains(KeyModifiers::SHIFT));
+            return;
+        }
+        // Host shortcuts are intercepted before the child PTY receives keys.
+        let both = key.modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        if both {
+            match key.code {
+                KeyCode::Char('N' | 'n') => { self.open_terminal_tab(); return; }
+                KeyCode::Char('W' | 'w') if self.terminal.is_some() => { self.close_terminal_tab(); return; }
+                KeyCode::Left if self.terminal.is_some() => { self.switch_terminal_tab(true); return; }
+                KeyCode::Right if self.terminal.is_some() => { self.switch_terminal_tab(false); return; }
+                KeyCode::Char('C' | 'c') if self.terminal.is_some() => {
+                    let selected = self.terminal.as_ref().and_then(|t| t.selected_text());
+                    if let Some(selected) = selected.filter(|s| !s.is_empty()) {
+                        self.copy_terminal_text(&selected);
+                    } else {
+                        self.session.status = "Select terminal text with the mouse first".into();
+                    }
+                    return;
+                }
+                KeyCode::Char('V' | 'v') if self.terminal.as_ref().is_some_and(|t| t.visible) => {
+                    let pasted = arboard::Clipboard::new().and_then(|mut cb| cb.get_text());
+                    match pasted {
+                        Ok(text) => {
+                            if let Some(term) = &mut self.terminal {
+                                if let Err(error) = term.paste(&text) {
+                                    self.session.status = format!("Paste failed: {error}");
+                                }
+                            }
+                        }
+                        Err(e) => self.session.status = format!("Clipboard unavailable: {e}"),
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if let Some(term) = &mut self.terminal {
+            if term.visible && term.focused && !term.on_alternate_screen()
+                && key.modifiers.contains(KeyModifiers::SHIFT) {
+                match key.code {
+                    KeyCode::PageUp => { term.scroll(-10); return; },
+                    KeyCode::PageDown => { term.scroll(10); return; },
+                    KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        term.scroll(isize::MIN); return;
+                    }
+                    KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        term.scroll_to_bottom(); return;
+                    }
+                    _ => {}
+                }
+            }
+        }
         // F11 toggles terminal maximize while preserving the PTY and its
         // shell session. Ctrl+Shift+Enter is supported when distinguishable.
         if key.code == KeyCode::F(11)
@@ -28,14 +265,9 @@ impl App {
             });
             if restart {
                 let was_opened = self.terminal.is_some();
-                match embedded_terminal::EmbeddedTerminal::start(&self.files.tree_root, 80, 12, self.terminal_notify.clone()) {
-                    Ok(term) => {
-                        self.terminal = Some(term);
-                        if was_opened {
-                            self.session.status = "Terminal restarted".into();
-                        }
-                    }
-                    Err(err) => self.session.status = format!("Terminal: {err}"),
+                self.open_terminal_tab();
+                if was_opened && self.terminal.as_ref().is_some_and(|t| t.visible) {
+                    self.session.status = "Terminal restarted".into();
                 }
             } else if let Some(term) = &mut self.terminal {
                 term.visible = !term.visible;
@@ -508,7 +740,96 @@ impl App {
         }
     }
 
+    fn handle_help_mouse(&mut self, mouse: MouseEvent) {
+        let point = ratatui::layout::Position::new(mouse.column,mouse.row);
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let inside = self.session.help_area.contains(point);
+                if self.session.help_close_rect.contains(point) || !inside {
+                    self.handle_help_key(KeyEvent::new(KeyCode::Esc,KeyModifiers::NONE));
+                } else if self.session.help_overview_rect.contains(point) {
+                    self.session.help_reference = false;
+                    self.session.help_scroll = 0;
+                } else if self.session.help_reference_rect.contains(point) {
+                    self.session.help_reference = true;
+                    self.session.help_scroll = 0;
+                }
+            }
+            MouseEventKind::ScrollDown => self.scroll_help(3),
+            MouseEventKind::ScrollUp => self.scroll_help(-3),
+            _ => {}
+        }
+    }
+
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
+        let point = ratatui::layout::Position::new(mouse.column,mouse.row);
+        if self.session.help_open {
+            self.handle_help_mouse(mouse);
+            return;
+        }
+        // Input ownership must follow the clicked pane, not visibility of
+        // the embedded terminal. Popups always take priority over the PTY.
+        let modal = self.blame.popup.is_some()
+            || self.keys.open || self.editing.active()
+            || self.tools.panel.is_some() || self.session.help_open
+            || self.session.commit_open || self.session.context_menu.is_some();
+        if !modal && matches!(mouse.kind,MouseEventKind::Down(MouseButton::Left)) {
+            let tab_strip = self.terminal_tab_bar.contains(point);
+            let terminal_area = self.terminal.as_ref()
+                .is_some_and(|t|t.visible && t.area.contains(point));
+            let workspace_click = self.session.layout.contains_list(mouse.column,mouse.row)
+                || self.session.layout.contains_preview(mouse.column,mouse.row)
+                || self.session.layout.files_tab.contains(point)
+                || self.session.layout.git_tab.contains(point);
+            if workspace_click && !tab_strip && !terminal_area {
+                if let Some(term) = &mut self.terminal {term.focused=false;}
+            }
+        }
+        // Route terminal mouse events to the child when it enabled tracking.
+        // Otherwise scroll/drag select in the host and copy on release.
+        // Shift always overrides child tracking for host text selection.
+        if !modal {
+            if let Some(term) = &mut self.terminal {
+                if term.visible && term.area.contains(point) {
+                    // Also focus when the child has enabled mouse reporting;
+                    // that mode does not pass through the host selection path.
+                    if matches!(mouse.kind,MouseEventKind::Down(MouseButton::Left)) {
+                        term.focused = !term.ended.load(std::sync::atomic::Ordering::Acquire);
+                    }
+                    match term.mouse(mouse) {
+                    Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
+                    Err(error) => self.session.status = format!("Terminal mouse: {error}"),
+                    _ => {}
+                }
+                    return;
+                }
+            }
+        }
+        // The tab strip is part of Forge, not of the nested terminal's PTY.
+        // Hit boxes are produced by the same frame renderer that paints them.
+        if !modal && self.terminal.as_ref().is_some_and(|term| term.visible)
+            && self.tools.panel.is_none() && !self.keys.open
+            && !self.session.help_open && !self.editing.active()
+            && self.terminal_tab_bar.contains(ratatui::layout::Position::new(mouse.column,mouse.row))
+        {
+            let action = self.terminal_tab_hits.iter().find(|(rect,_)|
+                rect.contains(ratatui::layout::Position::new(mouse.column,mouse.row))
+            ).map(|(_, action)| *action);
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(action) = action { self.handle_terminal_tab_action(action); }
+                }
+                MouseEventKind::Down(MouseButton::Middle) => {
+                    if let Some(TerminalTabAction::Activate(id) | TerminalTabAction::Close(id)) = action {
+                        self.close_terminal_tab_by_id(id);
+                    }
+                }
+                MouseEventKind::ScrollUp => self.switch_terminal_tab(true),
+                MouseEventKind::ScrollDown => self.switch_terminal_tab(false),
+                _ => {},
+            }
+            return;
+        }
         if self.scrollbar_drag.is_some() && self.handle_scrollbar_mouse(mouse) {
             return;
         }
@@ -661,12 +982,16 @@ impl App {
             if self.session.layout.files_tab.contains(point) {
                 if self.in_git_sidebar() {
                     self.leave_git_sidebar();
+                } else {
+                    self.session.focus = PaneFocus::List;
                 }
                 return;
             }
             if self.session.layout.git_tab.contains(point) {
                 if !self.in_git_sidebar() {
                     self.enter_git_sidebar();
+                } else {
+                    self.session.focus = PaneFocus::List;
                 }
                 return;
             }

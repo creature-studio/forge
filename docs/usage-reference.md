@@ -14,13 +14,32 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 
 安装脚本会下载 `forge-<target>.tar.gz`，用同一版本的 `SHA256SUMS` 校验后安装到 `~/.local/bin`。可用 `FORGE_INSTALL_DIR` 指定目录，用 `FORGE_VERSION=v0.2.0` 固定版本。也可以直接下载 <https://github.com/creature-studio/forge/releases/latest> 里的压缩包自行放置。
 
-## 内嵌终端（v0.3.1）
+## 内嵌终端（开发版：增强终端）
 
-按 `F8` 打开/隐藏底部 Terminal。第一次打开时在当前 Forge 项目目录启动本地 Shell；隐藏面板后会话继续运行，再次打开可恢复。按 `F11` 最大化或还原，部分终端也可使用 `Ctrl+Shift+Enter`。
+Forge 使用 `portable-pty + vt100` 提供最多八个本地终端会话。按 `F8` 打开/隐藏，`F11` 最大化/还原。隐藏不会终止会话；关闭 Forge 会结束本地 Shell。
 
-Terminal 有焦点时，普通按键发送给 Shell（包括 `Ctrl+C`）；按 `Ctrl+Shift+Tab` 可将焦点交还 Forge（取决于外层终端能否区分此快捷键）。关闭 Forge 会结束内嵌 Shell。
+| 按键 | 功能 |
+|---|---|
+| `F8` | 打开/隐藏 Terminal |
+| `F11` | 最大化/恢复 Terminal |
+| `Alt+1`～`Alt+8` | 按标签编号直接切换 Terminal Tab |
+| `F4`（Terminal 有焦点） | 打开终端操作指南 |
+| `Ctrl+Shift+N` 或 `Shift+F8` | 新建终端 Tab |
+| `Ctrl+Shift+←/→` 或 `Shift+F12 / F12` | 切换前一个/后一个 Tab |
+| `Ctrl+Shift+W` | 关闭当前 Tab |
+| `Ctrl+Shift+Tab` | 把焦点交还 Forge |
+| `Shift+PageUp/PageDown` | 查看普通屏幕的历史输出 |
+| `Ctrl+Shift+Home/End` | 到历史顶部/返回最新输出 |
+| `Ctrl+Shift+C` | 复制当前选择 |
+| `Ctrl+Shift+V` | 粘贴系统剪贴板内容 |
 
-当前只支持一个内嵌会话；不包含 tmux 持久化，也不能保证所有全屏 CLI 或终端鼠标协议已经兼容。
+Terminal 顶部有可点击的标签栏：点击标签切换 Shell，点击标签右侧的 `×` 或鼠标中键关闭该会话；右侧的 `+` 新建本地 Shell、`‹/›` 切换会话、`□` 最大化/恢复、`?` 显示操作指南、`−` 隐藏面板。鼠标在标签栏上滚动也能切换会话。Terminal 获取焦点后，底部快捷键提示区自动显示新建、切换、关闭、帮助等操作；最大化模式下仍可通过标签栏的 `?` 或 `F4` 查看操作指南。标签栏与 PTY 内容区独立，前台 TUI 的鼠标事件不会吞掉标签点击。窄窗口优先展示活动标签，部分次要按钮会隐藏，可继续使用功能键操作。
+
+终端历史默认最多 2,000 行；支持鼠标滚轮、拖拽选择复制、OSC 52 剪贴板回退。前台程序启用 xterm 鼠标模式时会接收鼠标事件，按住 Shift 可绕过前台程序进行宿主选择。粘贴会尊重前台程序协商的 Bracketed Paste 模式；在未启用该模式的程序中，多行粘贴仍可能被逐行执行。
+
+键盘输入支持传统 xterm/VT 修饰键、功能键与 Application Cursor 模式，但**尚未实现 Kitty Keyboard Protocol**；某些终端不能传递所有 Ctrl+Shift 组合，建议使用对应的功能键替代。全屏 TUI 程序在不同终端模拟器中仍需兼容性测试。
+
+所有 Terminal Tab 都是 Forge 管理的本地 PTY Shell；隐藏面板不会终止会话，关闭 Tab 或退出 Forge 会结束对应 Shell，不提供跨进程持久会话。
 
 ## 更新
 

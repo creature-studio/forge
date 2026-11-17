@@ -107,6 +107,47 @@ pub(super) fn quick_guide(p: Palette, width: usize) -> Vec<Line<'static>> {
     out
 }
 
+pub(super) fn terminal_guide(p: Palette, width: usize) -> Vec<Line<'static>> {
+    let mut out = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  TERMINAL", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled("   /   TABS + KEYBOARD + MOUSE", Style::default().fg(p.info)),
+        ]),
+        Line::styled("  Each tab is an independent local Shell.", Style::default().fg(p.fg_dim)),
+    ];
+    if width < 52 {
+        guide_section(&mut out, "KEYBOARD", p);
+        for line in [
+            "  Alt+1..8     Go directly to Tab",
+            "  F12         Next Tab",
+            "  Shift+F12   Previous Tab",
+            "  Shift+F8    New Tab",
+            "  Ctrl+Shift+W Close Tab",
+            "  F8 / F11    Hide / Maximize",
+            "  F4          This help",
+        ] {
+            out.push(Line::styled(line, Style::default().fg(p.fg)));
+        }
+    } else {
+        guide_section(&mut out, "01   TERMINAL TAB NAVIGATION", p);
+        guide_step(&mut out, "1", "Switch tabs", "Alt+1..8 · F12 · Shift+F12", "Direct / next / previous", p);
+        guide_step(&mut out, "2", "Create and close", "Shift+F8 · Ctrl+Shift+W", "Independent local Shells", p);
+        guide_step(&mut out, "3", "Layout and focus", "F8 · F11 · Ctrl+Shift+Tab", "Hide / maximize / back to Forge", p);
+        guide_step(&mut out, "4", "Scroll history", "Shift+PageUp/PageDown", "Return with Ctrl+Shift+End", p);
+    }
+    out.push(Line::styled("  F4 opens this guide; Esc closes it and returns to the Shell.", Style::default().fg(p.info)));
+    guide_section(&mut out, "02   MOUSE", p);
+    out.push(Line::styled("  Click tab = switch     × / middle-click = close", Style::default().fg(p.fg)));
+    out.push(Line::styled("  + new     ‹ / › switch     □ maximize     ? help     − hide", Style::default().fg(p.fg_dim)));
+    guide_section(&mut out, "03   CLIPBOARD", p);
+    out.push(Line::styled("  Drag select to copy · Ctrl+Shift+C / V", Style::default().fg(p.fg)));
+    out.push(Line::styled("  Shift+mouse selects text when child TUI tracks the mouse", Style::default().fg(p.fg_dim)));
+    out.push(Line::from(""));
+    out.push(Line::styled("  Tab → Full Reference · Esc → Close", Style::default().fg(p.info)));
+    out
+}
+
 pub(super) fn reference_guide(width: usize, p: Palette) -> Vec<Line<'static>> {
     use unicode_width::UnicodeWidthStr;
     let mut out = Vec::new();
@@ -147,6 +188,10 @@ pub(super) fn reference_guide(width: usize, p: Palette) -> Vec<Line<'static>> {
 
 pub(super) fn draw_help_guide(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette) {
     frame.render_widget(Clear, area);
+    model.session.help_area = area;
+    model.session.help_close_rect = Rect::default();
+    model.session.help_overview_rect = Rect::default();
+    model.session.help_reference_rect = Rect::default();
     if area.width < 2 || area.height < 2 { return; }
     frame.render_widget(Block::default().borders(Borders::ALL)
         .border_style(Style::default().fg(p.border))
@@ -157,14 +202,42 @@ pub(super) fn draw_help_guide(frame: &mut Frame<'_>, area: Rect, model: &mut App
     if content.width < 1 || content.height < 1 { return; }
     let overview = !model.session.help_reference;
     let tab = if overview { "   [1 Overview]  2 Reference" } else { "   1 Overview  [2 Reference]" };
+    let terminal_help = model.terminal.as_ref().is_some_and(|term| term.visible);
+    // The close hit target is independent of terminal text and remains
+    // accessible even when the help modal owns pointer input.
+    let close_text = " × Close ";
+    let close_width = unicode_width::UnicodeWidthStr::width(close_text) as u16;
+    let close_x = area.right().saturating_sub(close_width + 1);
+    if close_x >= content.x.saturating_add(32) {
+        let close_rect = Rect::new(close_x,content.y,close_width,1);
+        model.session.help_close_rect = close_rect;
+        frame.render_widget(Paragraph::new(close_text).style(
+            Style::default().fg(p.info).bg(p.bg)),close_rect);
+    }
+    // Header navigation is clickable as well as keyboard-operated.
+    let tab_x = content.x.saturating_add(
+        if terminal_help && overview { "FORGE  /  TERMINAL GUIDE".len() as u16 }
+        else if overview { "FORGE  /  QUICK START".len() as u16 }
+        else { "FORGE  /  REFERENCE".len() as u16 }
+    );
+    model.session.help_overview_rect = Rect::new(tab_x,content.y,16.min(content.width),1);
+    model.session.help_reference_rect = Rect::new(tab_x.saturating_add(16),content.y,15.min(content.width.saturating_sub(16)),1);
     frame.render_widget(Paragraph::new(Line::from(vec![
         Span::styled("FORGE", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        Span::styled(if overview { "  /  QUICK START" } else { "  /  REFERENCE" }, Style::default().fg(p.info)),
+        Span::styled(if overview && terminal_help { "  /  TERMINAL GUIDE" }
+            else if overview { "  /  QUICK START" } else { "  /  REFERENCE" },
+            Style::default().fg(p.info)),
         Span::styled(tab, Style::default().fg(p.fg_dim)),
     ])).style(Style::default().bg(p.bg)), Rect::new(content.x, content.y, content.width, 1));
+    if model.session.help_close_rect.width > 0 {
+        frame.render_widget(Paragraph::new(close_text).style(
+            Style::default().fg(p.info).bg(p.bg)),model.session.help_close_rect);
+    }
     if content.height < 4 { return; }
     let body = Rect::new(content.x, content.y + 2, content.width, content.height - 4);
-    let lines = if overview { quick_guide(p, body.width as usize) } else { reference_guide(body.width as usize, p) };
+    let lines = if overview && terminal_help { terminal_guide(p, body.width as usize) }
+        else if overview { quick_guide(p, body.width as usize) }
+        else { reference_guide(body.width as usize, p) };
     model.session.help_scroll_limit = lines.len().saturating_sub(body.height as usize)
         .min(u16::MAX as usize) as u16;
     model.session.help_scroll = model.session.help_scroll.min(model.session.help_scroll_limit);

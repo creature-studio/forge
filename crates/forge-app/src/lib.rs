@@ -206,6 +206,10 @@ struct SessionState {
     help_reference: bool,
     help_scroll: u16,
     help_scroll_limit: u16,
+    help_area: ratatui::layout::Rect,
+    help_close_rect: ratatui::layout::Rect,
+    help_overview_rect: ratatui::layout::Rect,
+    help_reference_rect: ratatui::layout::Rect,
     activity: ActivityTab,
     commit_open: bool,
     context_menu: Option<ContextMenu>,
@@ -216,6 +220,18 @@ struct SessionState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ScrollbarTarget { Sidebar, Preview }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalTabAction {
+    Activate(u64),
+    Close(u64),
+    New,
+    Previous,
+    Next,
+    Maximize,
+    Help,
+    Hide,
+}
 
 struct App {
     services: Services,
@@ -234,6 +250,12 @@ struct App {
     blame: blame::BlameState,
     inline_diff: inline_diff::InlineDiff,
     terminal: Option<embedded_terminal::EmbeddedTerminal>,
+    /// Inactive PTY sessions remain alive; only the active terminal is drawn.
+    terminal_tabs: Vec<embedded_terminal::EmbeddedTerminal>,
+    /// Exact hit targets for controls painted in the Terminal header.
+    terminal_tab_hits: Vec<(ratatui::layout::Rect, TerminalTabAction)>,
+    terminal_tab_bar: ratatui::layout::Rect,
+    terminal_help_return: bool,
     terminal_notify: std::sync::Arc<tokio::sync::Notify>,
     terminal_frame_epoch: u64,
     /// Pointer capture persists regardless of horizontal mouse movement.
@@ -534,6 +556,10 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             help_reference: false,
             help_scroll: 0,
             help_scroll_limit: 0,
+            help_area: ratatui::layout::Rect::default(),
+            help_close_rect: ratatui::layout::Rect::default(),
+            help_overview_rect: ratatui::layout::Rect::default(),
+            help_reference_rect: ratatui::layout::Rect::default(),
             activity: ActivityTab::Files,
             commit_open: false,
             context_menu: None,
@@ -548,6 +574,10 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         blame: blame::BlameState::default(),
         inline_diff: inline_diff::InlineDiff::default(),
         terminal: None,
+        terminal_tabs: Vec::new(),
+        terminal_tab_hits: Vec::new(),
+        terminal_tab_bar: ratatui::layout::Rect::default(),
+        terminal_help_return: false,
         terminal_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         terminal_frame_epoch: 0,
         scrollbar_drag: None,

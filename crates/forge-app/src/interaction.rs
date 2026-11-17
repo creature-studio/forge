@@ -15,7 +15,20 @@ pub(super) struct Shortcut {
     pub label: &'static str,
 }
 
-pub(super) const HELP_TEXT: &str = "Git help
+pub(super) const HELP_TEXT: &str = "Terminal tabs
+F8: show/hide embedded Terminal; F11 maximizes/restores it.
+Shift+F8 or Ctrl+Shift+N: create a local Shell tab (up to eight).
+Alt+1 through Alt+8: jump directly to a tab by its displayed number.
+F12 / Shift+F12: next / previous terminal tab.
+Ctrl+Shift+W: close the current terminal tab.
+F4: show the Terminal guide while Terminal has focus.
+Ctrl+Shift+Tab: return focus to Forge without closing the Shell.
+Shift+PageUp/PageDown: scroll Shell history; Ctrl+Shift+End returns to latest output.
+Ctrl+Shift+C/V: copy selected output / paste. Click tabs to switch;
+click × or middle-click to close. + new, ‹/› switch, □ maximize, ? help, − hide.
+All tabs use local PTY Shells; no persistent session integration.
+
+Git help
 \nStage: add changes to the staging area for the next commit.
 Unstage: remove changes from the next commit; keep your edits.
 Commit: save ALL staged changes in this repository, including files outside the selected folder.
@@ -199,6 +212,12 @@ impl App {
             KeyCode::Home => self.session.help_scroll = 0,
             KeyCode::End => self.session.help_scroll = self.session.help_scroll_limit,
             _ => {}
+        }
+        if !self.session.help_open && self.terminal_help_return {
+            if let Some(term) = &mut self.terminal {
+                term.focused = term.visible && !term.ended.load(std::sync::atomic::Ordering::Acquire);
+            }
+            self.terminal_help_return = false;
         }
     }
     pub(super) fn stage_target(&self, action: ContextAction) -> Result<StageTarget, &'static str> {

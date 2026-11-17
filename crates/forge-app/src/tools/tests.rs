@@ -2798,3 +2798,32 @@ async fn workspace_prompt_rejects_missing_directory_without_switching() {
     assert!(matches!(app.tools.panel.as_ref().unwrap().kind, PanelKind::Prompt(PromptAction::OpenWorkspace)));
     assert!(app.tools.panel.as_ref().unwrap().message.contains("Cannot open directory"));
 }
+
+
+#[cfg(unix)]
+#[tokio::test]
+async fn embedded_terminal_tabs_keep_sessions_and_close_independently() {
+    let (_dir, mut app) = fixture();
+    app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    assert!(app.terminal.as_ref().unwrap().visible);
+    let first_revision = app.terminal.as_ref().unwrap().revision.clone();
+    let first_id = app.terminal.as_ref().unwrap().id;
+    let shift_ctrl = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+    app.handle_key(KeyEvent::new(KeyCode::Char('N'), shift_ctrl));
+    assert_eq!(app.terminal_tabs.len(), 1);
+    assert_ne!(first_id, app.terminal.as_ref().unwrap().id);
+    assert!(!std::sync::Arc::ptr_eq(&first_revision,
+        &app.terminal.as_ref().unwrap().revision));
+    app.handle_key(KeyEvent::new(KeyCode::Left, shift_ctrl));
+    assert!(std::sync::Arc::ptr_eq(&first_revision,
+        &app.terminal.as_ref().unwrap().revision));
+    app.handle_key(KeyEvent::new(KeyCode::Right, shift_ctrl));
+    assert!(!std::sync::Arc::ptr_eq(&first_revision,
+        &app.terminal.as_ref().unwrap().revision));
+    app.handle_key(KeyEvent::new(KeyCode::Char('W'), shift_ctrl));
+    assert_eq!(app.terminal_tabs.len(),0);
+    assert!(std::sync::Arc::ptr_eq(&first_revision,
+        &app.terminal.as_ref().unwrap().revision));
+    app.handle_key(KeyEvent::new(KeyCode::Char('W'),shift_ctrl));
+    assert!(app.terminal.is_none());
+}

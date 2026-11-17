@@ -1,0 +1,298 @@
+//! Mouse-accessible terminal tabs; the header belongs to Forge, not the PTY.
+use super::*;
+use ratatui::{style::Style, widgets::Paragraph};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+struct Label {
+    id: u64,
+    name: String,
+    ended: bool,
+    history: usize,
+}
+fn shorten(name: &str, width: usize) -> String {
+    let (mut out,mut n)=(String::new(),0);
+    for ch in name.chars() {
+        let w=ch.width().unwrap_or(0);
+        if n+w>width {break;}
+        n+=w;out.push(ch);
+    }
+    out
+}
+pub(super) fn draw_tab_strip(frame: &mut Frame<'_>, area: Rect, model: &mut App, palette: Palette) -> Rect {
+    model.terminal_tab_hits.clear();
+    model.terminal_tab_bar=Rect::default();
+    if area.width == 0 || area.height == 0 {return Rect::default();}
+    let bar=Rect::new(area.x,area.y,area.width,1);
+    model.terminal_tab_bar=bar;
+    frame.render_widget(ratatui::widgets::Block::default()
+        .style(Style::default().bg(palette.bg)),bar);
+    let current=model.terminal.as_ref().map(|t| t.id);
+    let mut tabs:Vec<_>=model.terminal_tabs.iter().chain(model.terminal.iter()).map(|t|
+        Label {id:t.id,name:t.name.clone(),
+            ended:t.ended.load(std::sync::atomic::Ordering::Acquire),
+            history:if Some(t.id)==current {t.scrollback_position()} else {0}}
+    ).collect();
+    tabs.sort_by_key(|t| t.id);
+    // At narrow widths, give the active tab priority over secondary buttons.
+    let controls: Vec<_> = if area.width < 24 {
+        vec![(" + ",TerminalTabAction::New)]
+    } else if area.width < 42 {
+        vec![(" + ",TerminalTabAction::New),
+             (" ‹ ",TerminalTabAction::Previous),
+             (" › ",TerminalTabAction::Next)]
+    } else {
+        vec![(" + ",TerminalTabAction::New),
+             (" ‹ ",TerminalTabAction::Previous),
+             (" › ",TerminalTabAction::Next),
+             (" □ ",TerminalTabAction::Maximize),
+             (" ? ",TerminalTabAction::Help),
+             (" − ",TerminalTabAction::Hide)]
+    };
+    let control_width:u16=controls.iter().map(|(s,_)|s.width() as u16).sum();
+    let available=area.width.saturating_sub(control_width);
+    let tab_width=|tab:&Label,n:usize| {
+        let title=shorten(&tab.name,10);
+        let label=format!(" {} {}{} ",n+1,title,if tab.ended {"!"} else {""});
+        (label.width()+3).min(21).min(available as usize) as u16
+    };
+    let current_idx=tabs.iter().position(|t|Some(t.id)==current).unwrap_or(0);
+    let mut first=0;
+    while first<current_idx && tabs[first..=current_idx].iter()
+        .enumerate().map(|(i,t)|tab_width(t,first+i) as usize).sum::<usize>() > available as usize
+    {first+=1;}
+    let mut x=area.x;
+    let limit=area.x.saturating_add(available);
+    for (i,tab) in tabs.iter().enumerate().skip(first) {
+        let width=tab_width(tab,i);
+        if x.saturating_add(width)>limit {break;}
+        let active=Some(tab.id)==current;
+        let fg=if active {palette.accent} else {palette.fg_dim};
+        let bg=if active {palette.selection} else {palette.bg};
+        let label=format!(" {} {}{}{} ",i+1,
+            shorten(&tab.name,10),if tab.ended {"!"} else {""},
+            if tab.history>0 {" ↑"} else {""});
+        let body=Rect::new(x,bar.y,width.saturating_sub(3),1);
+        frame.render_widget(Paragraph::new(label).style(Style::default().fg(fg).bg(bg)),body);
+        model.terminal_tab_hits.push((body,TerminalTabAction::Activate(tab.id)));
+        let close=Rect::new(x+width-3,bar.y,3,1);
+        frame.render_widget(Paragraph::new(" × ").style(Style::default()
+            .fg(if active {palette.fg} else {palette.fg_dim}).bg(bg)),close);
+        model.terminal_tab_hits.push((close,TerminalTabAction::Close(tab.id)));
+        x+=width;
+    }
+    let mut right=area.right().saturating_sub(control_width);
+    // Maximized Terminal has no workspace footer. Keep an always-visible
+    // keyboard hint in the spare strip between tabs and action buttons.
+    if model.terminal.as_ref().is_some_and(|term| term.maximized) {
+        let hint = " Alt+1-8 tabs   Shift+F8 new   F12 next   F4 help ";
+        let room = right.saturating_sub(x);
+        let text = if room as usize >= hint.width() { hint }
+            else if room >= 22 { " Alt+1-8 tabs · F4 help " }
+            else if room >= 11 { " F4 help " }
+            else { "" };
+        if !text.is_empty() {
+            frame.render_widget(Paragraph::new(text).style(Style::default()
+                .fg(palette.fg_dim).bg(palette.bg)),Rect::new(x,bar.y,room,1));
+        }
+    }
+    for (label,action) in controls {
+        let width=label.width() as u16;
+        if right>=area.x && right.saturating_add(width)<=area.right() {
+            let rect=Rect::new(right,bar.y,width,1);
+            frame.render_widget(Paragraph::new(label).style(Style::default()
+                .fg(if action==TerminalTabAction::New {palette.accent} else {palette.fg_dim})
+                .bg(palette.bg)),rect);
+            model.terminal_tab_hits.push((rect,action));
+        }
+        right=right.saturating_add(width);
+    }
+    Rect::new(area.x,area.y.saturating_add(1),area.width,area.height.saturating_sub(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn paint(app: &mut App, width: u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, 15)).unwrap();
+        terminal.draw(|frame| {
+            draw_tab_strip(frame, Rect::new(0, 4, width, 10), app, workspace_palette());
+        }).unwrap();
+    }
+
+    fn click(app: &mut App, action: TerminalTabAction) {
+        let rect = app.terminal_tab_hits.iter().find(|(_,a)|*a==action).unwrap().0;
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[tokio::test]
+    async fn click_switch_close_and_new_are_separate_targets() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::NONE));
+        let first = app.terminal.as_ref().unwrap().id;
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::SHIFT));
+        let second = app.terminal.as_ref().unwrap().id;
+        paint(&mut app,95);
+        let first_body = app.terminal_tab_hits.iter().find(|(_,a)|
+            *a==TerminalTabAction::Activate(first)).unwrap().0;
+        let first_close = app.terminal_tab_hits.iter().find(|(_,a)|
+            *a==TerminalTabAction::Close(first)).unwrap().0;
+        assert_eq!(first_body.right(), first_close.x);
+        click(&mut app, TerminalTabAction::Activate(first));
+        assert_eq!(app.terminal.as_ref().unwrap().id,first);
+        paint(&mut app,95);
+        click(&mut app,TerminalTabAction::Close(second));
+        assert_eq!(app.terminal.as_ref().unwrap().id,first);
+        assert!(app.terminal_tabs.is_empty());
+        paint(&mut app,95);
+        click(&mut app,TerminalTabAction::New);
+        assert_ne!(app.terminal.as_ref().unwrap().id,first);
+        assert_eq!(app.terminal_tabs.len(),1);
+        paint(&mut app,95);
+        click(&mut app,TerminalTabAction::Hide);
+        assert!(!app.terminal.as_ref().unwrap().visible);
+    }
+
+    #[tokio::test]
+    async fn alt_digits_select_stable_tab_numbers_and_help_returns_to_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::NONE));
+        let first = app.terminal.as_ref().unwrap().id;
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::SHIFT));
+        let second = app.terminal.as_ref().unwrap().id;
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::SHIFT));
+        let third = app.terminal.as_ref().unwrap().id;
+        app.handle_key(KeyEvent::new(KeyCode::Char('1'),KeyModifiers::ALT));
+        assert_eq!(app.terminal.as_ref().unwrap().id,first);
+        app.handle_key(KeyEvent::new(KeyCode::Char('3'),KeyModifiers::ALT));
+        assert_eq!(app.terminal.as_ref().unwrap().id,third);
+        app.handle_key(KeyEvent::new(KeyCode::Char('2'),KeyModifiers::ALT));
+        assert_eq!(app.terminal.as_ref().unwrap().id,second);
+        app.handle_key(KeyEvent::new(KeyCode::Char('8'),KeyModifiers::ALT));
+        assert_eq!(app.terminal.as_ref().unwrap().id,second, "missing numbered tab must be no-op");
+
+        let footer = footer_shortcuts(&app,120);
+        assert!(footer.iter().any(|s| s.key=="Alt+1-8"));
+        assert!(footer.iter().any(|s| s.key=="F4" && s.label=="Help"));
+        app.handle_key(KeyEvent::new(KeyCode::F(4),KeyModifiers::NONE));
+        assert!(app.session.help_open);
+        assert!(!app.terminal.as_ref().unwrap().focused);
+        assert!(app.terminal_help_return);
+        app.handle_key(KeyEvent::new(KeyCode::Esc,KeyModifiers::NONE));
+        assert!(!app.session.help_open);
+        assert!(app.terminal.as_ref().unwrap().focused);
+        assert!(!app.terminal_help_return);
+    }
+
+    #[tokio::test]
+    async fn help_button_opens_terminal_guide() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::NONE));
+        paint(&mut app,110);
+        click(&mut app,TerminalTabAction::Help);
+        assert!(app.session.help_open);
+        assert!(!app.session.help_reference);
+        let text = terminal_guide(workspace_palette(),90).iter()
+            .map(|l| l.to_string()).collect::<Vec<_>>().join(" ");
+        assert!(text.contains("Alt+1..8"));
+        assert!(text.contains("Shift+F8"));
+        assert!(text.contains("F4"));
+    }
+
+    fn render_help(app: &mut App) {
+        let mut t = Terminal::new(TestBackend::new(110, 36)).unwrap();
+        t.draw(|frame| {
+            draw_help_guide(frame, Rect::new(5, 2, 100, 30), app, workspace_palette());
+        }).unwrap();
+    }
+
+    fn help_mouse(app: &mut App, x: u16, y: u16) {
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: x, row: y, modifiers: KeyModifiers::NONE,
+        });
+    }
+
+    #[tokio::test]
+    async fn help_from_terminal_question_mark_is_closable_by_mouse_and_keyboard() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        // Real route: click '?' in the terminal tab strip.
+        paint(&mut app, 110);
+        click(&mut app, TerminalTabAction::Help);
+        assert!(app.session.help_open);
+        assert!(app.terminal_help_return);
+        render_help(&mut app);
+        let close = app.session.help_close_rect;
+        assert!(close.width>0);
+        help_mouse(&mut app, close.x, close.y);
+        assert!(!app.session.help_open);
+        assert!(app.terminal.as_ref().unwrap().focused);
+
+        paint(&mut app, 110);
+        click(&mut app, TerminalTabAction::Help);
+        render_help(&mut app);
+        help_mouse(&mut app, 0, 0); // Clicking outside overlay closes it.
+        assert!(!app.session.help_open);
+        assert!(app.terminal.as_ref().unwrap().focused);
+
+        // A stale file-find must not steal Esc when Help owns keyboard focus.
+        app.preview_state.find.open = true;
+        app.preview_state.find.input_active = true;
+        paint(&mut app,110);
+        click(&mut app, TerminalTabAction::Help);
+        assert!(app.session.help_open);
+        app.handle_key(KeyEvent::new(KeyCode::Esc,KeyModifiers::NONE));
+        assert!(!app.session.help_open);
+        assert!(app.terminal.as_ref().unwrap().focused);
+    }
+
+    #[tokio::test]
+    async fn help_header_mouse_switches_reference_without_closing_overlay() {
+        let dir=tempfile::tempdir().unwrap();
+        let mut app=create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::NONE));
+        paint(&mut app,110);
+        click(&mut app, TerminalTabAction::Help);
+        render_help(&mut app);
+        let reference=app.session.help_reference_rect;
+        assert!(reference.width > 0);
+        help_mouse(&mut app,reference.x,reference.y);
+        assert!(app.session.help_reference);
+        assert!(app.session.help_open);
+        render_help(&mut app);
+        let overview=app.session.help_overview_rect;
+        help_mouse(&mut app,overview.x,overview.y);
+        assert!(!app.session.help_reference);
+        assert!(app.session.help_open);
+    }
+
+    #[tokio::test]
+    async fn narrow_tab_strip_never_overflows_and_keeps_active_clickable() {
+        let dir=tempfile::tempdir().unwrap();
+        let mut app=create_workspace_at(ColorMode::Ansi16,dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::NONE));
+        for _ in 0..6 {
+            app.handle_key(KeyEvent::new(KeyCode::F(8),KeyModifiers::SHIFT));
+        }
+        let current=app.terminal.as_ref().unwrap().id;
+        for width in [10,20,36,60,120] {
+            paint(&mut app,width);
+            assert!(app.terminal_tab_hits.iter().any(|(_,a)|
+                *a==TerminalTabAction::Activate(current)),"active tab not visible at {width}");
+            for (rect,_) in &app.terminal_tab_hits {
+                assert!(rect.right() <= width,"tab hit target exceeds {width}: {rect:?}");
+                assert_eq!(rect.y,4);
+            }
+        }
+    }
+}

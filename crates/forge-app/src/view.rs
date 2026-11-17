@@ -14,6 +14,7 @@ use ratatui::{
 };
 use ratatui_kit::{Component, ComponentDrawer, ComponentUpdater, Context};
 use tui_input::backend::crossterm::EventHandler;
+mod terminal_tabs;
 
 // Keep the terminal's own foreground and background. Accent belongs to small
 // focus marks; selection is a quiet neutral surface, like NSH's TUI controls.
@@ -1019,19 +1020,7 @@ impl Component for NativePane {
                 );
             }
             PaneKind::Terminal => {
-                let focused = model.terminal.as_ref().is_some_and(|t| t.focused);
-                let maximized = model.terminal.as_ref().is_some_and(|t| t.maximized);
-                let title = if maximized {
-                    " TERMINAL · F11 restore · F8 hide "
-                } else if focused {
-                    " TERMINAL · F11 maximize · F8 hide · Ctrl+Shift+Tab Forge "
-                } else {
-                    " TERMINAL · F11 maximize · F8 focus/hide "
-                };
-                let block = Block::default().title(title).borders(Borders::TOP)
-                    .border_style(Style::default().fg(self.palette.fg_dim));
-                let inner = block.inner(area);
-                drawer.frame.render_widget(block, area);
+                let inner = terminal_tabs::draw_tab_strip(drawer.frame, area, &mut model, self.palette);
                 if let Some(term) = &mut model.terminal {
                     term.render(drawer.frame, inner, self.palette.bg, self.palette.fg);
                 }
