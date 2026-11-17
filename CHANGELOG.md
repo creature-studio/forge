@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.3] - 2026-11-16
+
+### Added
+- Interactive multi-terminal tabs with click-to-switch, close/new controls, Alt+1–8 direct navigation, F12 cycling, and up to eight independent local PTY Shells.
+- Terminal scrollback and text selection/copy, bracketed paste support, xterm keyboard and mouse input handling, and a Terminal-specific help guide.
+- Theme-aware Git History commit details: structured author/date/message, colored file additions and deletions, and a readable change summary.
+
+### Improved
+- Extract a focus-aware footer that follows the active Files, Preview, Git, Terminal, editor, search, or modal context instead of the merely visible panel.
+- Transfer keyboard focus correctly across Terminal and workspace mouse clicks; prioritize help modals and provide mouse-close controls.
+- Keep the styled commit summary visible while expanding/collapsing commit folders; show a file diff only when a changed file is selected.
+- Snapshot visible terminal cells before drawing to reduce time holding the VT parser lock.
+
+### Notes
+- All Terminal tabs are local PTY sessions; no tmux persistence integration.
+- Keyboard handling supports traditional xterm/VT sequences but not the full Kitty Keyboard Protocol.
+- This release tag is prepared locally; publishing requires pushing both master and v0.3.3.
+
 ## [0.3.2] - 2026-11-16
 
 ### Added
