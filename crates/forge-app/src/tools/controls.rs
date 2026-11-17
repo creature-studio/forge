@@ -94,6 +94,11 @@ impl App {
             }
             return;
         }
+        if key.code == KeyCode::Char('O') && matches!(kind, PanelKind::Workspaces) {
+            self.prompt(PromptAction::OpenWorkspace, "Open workspace directory",
+                String::new(), "Absolute path, ~/path, or relative to current workspace · Enter open");
+            return;
+        }
         if key.code == KeyCode::Enter {
             match kind {
                 PanelKind::Prompt(action) => {
@@ -131,6 +136,20 @@ impl App {
                 self.reveal_file(path, line);
             }
             RowValue::Line(_) => {}
+            RowValue::Workspace(path) => {
+                if self.write_busy() {
+                    if let Some(panel) = &mut self.tools.panel {
+                        panel.message = "Wait for the current write to finish".into();
+                    }
+                } else if !path.is_dir() {
+                    if let Some(panel) = &mut self.tools.panel {
+                        panel.message = "Directory no longer exists · press O for another path".into();
+                    }
+                } else {
+                    self.close_tools();
+                    self.switch_workspace(path);
+                }
+            }
             RowValue::Git(item) => match kind {
                 PanelKind::Git(GitQuery::History(_) | GitQuery::HistoryPage { .. }) => {
                     self.open_history_child(PanelKind::Git(GitQuery::Commit(item.id)))

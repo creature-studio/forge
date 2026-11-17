@@ -32,6 +32,8 @@ pub struct Config {
     /// Show compact Git/search navigation marks beside the preview.
     #[serde(alias = "show_minimap")]
     pub show_overview_ruler: bool,
+    /// Last used workspace roots, most recent first (up to 12).
+    pub recent_workspaces: Vec<PathBuf>,
 }
 
 impl Default for Config {
@@ -44,6 +46,7 @@ impl Default for Config {
             show_hidden_files: false,
             wrap_code: true,
             show_overview_ruler: true,
+            recent_workspaces: Vec::new(),
         }
     }
 }
@@ -132,6 +135,9 @@ impl Config {
         table.insert("wrap_code".into(), toml::Value::Boolean(self.wrap_code));
         table.remove("show_minimap");
         table.insert("show_overview_ruler".into(), toml::Value::Boolean(self.show_overview_ruler));
+        table.insert("recent_workspaces".into(), toml::Value::Array(
+            self.recent_workspaces.iter().map(|path| toml::Value::String(path.to_string_lossy().into_owned())).collect(),
+        ));
         // Update only the explicitly managed keys. Preserve [git.blame] and
         // all unknown plugin/custom preferences in the same configuration.
         let git = table.entry("git").or_insert_with(|| toml::Value::Table(toml::Table::new()));

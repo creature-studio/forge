@@ -230,6 +230,9 @@ impl App {
                 }
             }
             KeyCode::Char('E') => self.run_command(tools::Command::Editor),
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.open_tools(tools::PanelKind::Workspaces)
+            }
             KeyCode::Char('o') => self.open_selected_worktree_file(),
             KeyCode::F(9) => self.open_tools(tools::PanelKind::Settings),
             KeyCode::Char(',') => self.open_tools(tools::PanelKind::Settings),

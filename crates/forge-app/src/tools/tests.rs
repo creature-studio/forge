@@ -2748,3 +2748,53 @@ async fn scm_section_right_click_and_keyboard_open_same_menu() {
         })
     ));
 }
+
+#[tokio::test]
+async fn workspace_switcher_opens_non_git_directory_and_restores_recent_roots() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    let original = dir.path().to_path_buf();
+    let plain = tempfile::tempdir().unwrap();
+    std::fs::write(plain.path().join("standalone.txt"), "standalone").unwrap();
+    let plain_root = plain.path().canonicalize().unwrap();
+
+    app.open_tools(PanelKind::Workspaces);
+    assert!(app.tools.panel.as_ref().unwrap().rows.iter().any(
+        |row| matches!(&row.value, RowValue::Workspace(path) if path == &original)
+    ));
+
+    app.handle_tools_key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE));
+    assert!(matches!(app.tools.panel.as_ref().unwrap().kind, PanelKind::Prompt(PromptAction::OpenWorkspace)));
+    app.tools.panel.as_mut().unwrap().input =
+        tui_input::Input::new(plain_root.to_string_lossy().to_string());
+    app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    finish(&mut app).await;
+    assert_eq!(app.files.tree_root, plain_root);
+    assert!(app.scm.git_status.is_none(), "plain workspace must not inherit Git");
+    assert!(app.files.visible.iter().any(|row| row.entry.name == "standalone.txt"));
+
+    app.open_tools(PanelKind::Workspaces);
+    let recent = app.tools.panel.as_ref().unwrap().rows.iter()
+        .find(|row| matches!(&row.value, RowValue::Workspace(path) if path == &original))
+        .unwrap().value.clone();
+    app.activate_tool_row(PanelKind::Workspaces, recent);
+    finish(&mut app).await;
+    assert_eq!(app.files.tree_root, original);
+    assert!(app.scm.git_status.is_some());
+    assert_eq!(app.config.recent_workspaces.first(), Some(&original));
+    assert_eq!(app.config.recent_workspaces.get(1), Some(&plain_root));
+}
+
+#[tokio::test]
+async fn workspace_prompt_rejects_missing_directory_without_switching() {
+    let (dir, mut app) = fixture();
+    let original = dir.path().to_path_buf();
+    app.open_tools(PanelKind::Workspaces);
+    app.handle_tools_key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE));
+    app.tools.panel.as_mut().unwrap().input =
+        tui_input::Input::new(original.join("not-a-directory").to_string_lossy().into());
+    app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert_eq!(app.files.tree_root, original);
+    assert!(matches!(app.tools.panel.as_ref().unwrap().kind, PanelKind::Prompt(PromptAction::OpenWorkspace)));
+    assert!(app.tools.panel.as_ref().unwrap().message.contains("Cannot open directory"));
+}

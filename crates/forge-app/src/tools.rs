@@ -280,6 +280,7 @@ pub(super) enum PanelKind {
     Content,
     Filters,
     Settings,
+    Workspaces,
     Git(GitQuery),
     Lines(FileDiff),
     Prompt(PromptAction),
@@ -302,6 +303,7 @@ pub(super) enum PromptAction {
     StashUnstaged,
     Amend,
     Worktree,
+    OpenWorkspace,
 }
 
 #[derive(Clone)]
@@ -318,6 +320,7 @@ pub(super) enum RowValue {
     Command(Command),
     File(PathBuf, usize),
     Git(GitItem),
+    Workspace(PathBuf),
     Line(usize),
 }
 #[derive(Clone)]
@@ -426,6 +429,7 @@ pub(super) enum Command {
     Sync,
     Fetch,
     Worktrees,
+    Workspaces,
     AbortMerge,
     AbortCherryPick,
     AbortRevert,
@@ -521,6 +525,10 @@ const COMMANDS: &[(Command, &str)] = &[
     (Command::Sync, "Remote status / fetch / pull / push      S"),
     (Command::Fetch, "Fetch all remotes"),
     (
+        Command::Workspaces,
+        "Switch workspace: recent directories / open folder  Alt-O",
+    ),
+    (
         Command::Worktrees,
         "Worktrees: list / create / switch / remove    W",
     ),
@@ -606,7 +614,7 @@ impl Panel {
     pub fn is_input(&self) -> bool {
         matches!(
             self.kind,
-            PanelKind::Commands | PanelKind::Files | PanelKind::Content | PanelKind::Prompt(_)
+            PanelKind::Commands | PanelKind::Files | PanelKind::Content | PanelKind::Workspaces | PanelKind::Prompt(_)
         )
     }
 }
@@ -977,6 +985,7 @@ impl App {
             PanelKind::Content => "Search contents",
             PanelKind::Filters => "File filters",
             PanelKind::Settings => "Settings",
+            PanelKind::Workspaces => "Workspaces · O open folder",
             PanelKind::Git(q) => match q {
                 GitQuery::History(Some(_)) | GitQuery::HistoryPage { path: Some(_), .. } => {
                     "File history"
@@ -1041,6 +1050,25 @@ impl App {
         let kind = panel.kind.clone();
         let query = panel.input.value().to_owned();
         let regex = panel.regex;
+        if matches!(kind, PanelKind::Workspaces) {
+            let mut recent = vec![self.files.tree_root.clone()];
+            recent.extend(self.config.recent_workspaces.iter().cloned());
+            let query = query.to_ascii_lowercase();
+            let mut seen = HashSet::new();
+            panel.rows = recent.into_iter()
+                .filter(|path| seen.insert(path.clone()))
+                .filter(|path| path.to_string_lossy().to_ascii_lowercase().contains(&query))
+                .map(|path| ToolRow {
+                    label: format!("{}  {}", if path == self.files.tree_root { "●" } else { " " }, path.display()),
+                    value: RowValue::Workspace(path),
+                }).collect();
+            panel.message = if panel.rows.is_empty() {
+                "No matching recent directories · press O to open a folder".into()
+            } else { String::new() };
+            panel.detail = "Enter switch · O open any directory · type to filter · Esc close
+Git Worktrees are managed separately with W.".into();
+            return;
+        }
         if matches!(kind, PanelKind::Settings) {
             panel.rows = vec![
                 ToolRow {
@@ -1842,6 +1870,17 @@ impl App {
         }
         // Capture identity (absolute path) rather than a fragile row index.
         let current_root = self.files.tree_root.clone();
+        self.config.recent_workspaces.retain(|p| p != &path && p != &current_root);
+        self.config.recent_workspaces.insert(0, current_root.clone());
+        self.config.recent_workspaces.insert(0, path.clone());
+        self.config.recent_workspaces.truncate(12);
+        // Test fixtures switch workspaces often; never rewrite the developer's
+        // real ~/.config/forge/config.toml from a unit test.
+        if !cfg!(test) {
+            if let Err(error) = self.config.save() {
+                self.session.status = format!("Workspace history not saved: {error}");
+            }
+        }
         let navigation = WorkspaceNavigation {
             selected_path: self.selected_entry().map(|entry| entry.path.clone()),
             selected_scroll: self.files.scroll,

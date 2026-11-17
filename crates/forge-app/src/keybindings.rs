@@ -99,6 +99,7 @@ static BINDINGS: &[Binding] = &[
     binding!("branches", "Branches", false, "Alt+b", "B"),
     binding!("stashes", "Stashes", false, "Alt+z", "Z"),
     binding!("sync", "Remote synchronization", false, "Alt+s", "S"),
+    binding!("workspaces", "Switch workspace", false, "Alt+o", "Alt+o"),
     binding!("worktrees", "Worktrees", false, "Alt+w", "W"),
     binding!("lines", "Diff line actions", false, "Alt+i", "I"),
     binding!("previous_hunk", "Previous diff hunk", false, "Alt+n", "N"),

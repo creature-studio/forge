@@ -287,6 +287,7 @@ impl App {
             Amend => self.prompt(PromptAction::Amend,"Amend latest commit",String::new(),"New commit message · includes ALL staged changes · rewrites HEAD · confirmation follows"),
             Sync => self.open_tools(PanelKind::Git(GitQuery::Sync)), Fetch => self.start_tool_operation(Operation::Git(GitAction::Fetch),Some(PanelKind::Git(GitQuery::Sync))),
             Worktrees => self.open_tools(PanelKind::Git(GitQuery::Worktrees)),
+            Workspaces => self.open_tools(PanelKind::Workspaces),
             AbortMerge | AbortCherryPick | AbortRevert | ContinueCherryPick | ContinueRevert => {
                 let action = match command { AbortMerge=>GitAction::AbortMerge, AbortCherryPick=>GitAction::AbortCherryPick, AbortRevert=>GitAction::AbortRevert, ContinueCherryPick=>GitAction::ContinueCherryPick, _=>GitAction::ContinueRevert };
                 self.confirm(Operation::Git(action),"Apply the selected recovery command to this repository? Abort restores the pre-operation state.".into(),Some(PanelKind::Git(GitQuery::Conflicts)));
@@ -297,6 +298,43 @@ impl App {
 
     pub(crate) fn submit_prompt(&mut self, action: PromptAction, value: String) {
         use PromptAction::*;
+        if matches!(action, OpenWorkspace) {
+            let input = value.trim();
+            if input.is_empty() {
+                if let Some(panel) = &mut self.tools.panel { panel.message = "Directory path is required".into(); }
+                return;
+            }
+            let path = if input == "~" || input.starts_with("~/") {
+                match std::env::var_os("HOME") {
+                    Some(home) => PathBuf::from(home).join(input.strip_prefix("~/").unwrap_or("")),
+                    None => {
+                        if let Some(panel) = &mut self.tools.panel { panel.message = "HOME is unavailable".into(); }
+                        return;
+                    }
+                }
+            } else {
+                let path = PathBuf::from(input);
+                if path.is_absolute() { path } else { self.files.tree_root.join(path) }
+            };
+            let path = match path.canonicalize() {
+                Ok(path) if path.is_dir() => path,
+                Ok(_) => {
+                    if let Some(panel) = &mut self.tools.panel { panel.message = "Path is not a directory".into(); }
+                    return;
+                }
+                Err(error) => {
+                    if let Some(panel) = &mut self.tools.panel { panel.message = format!("Cannot open directory: {error}"); }
+                    return;
+                }
+            };
+            if self.write_busy() {
+                if let Some(panel) = &mut self.tools.panel { panel.message = "Wait for the current write to finish".into(); }
+                return;
+            }
+            self.close_tools();
+            self.switch_workspace(path);
+            return;
+        }
         if matches!(action, Extension | Exclusions) {
             self.files.revealed_path = None;
             if matches!(action, Extension) {
