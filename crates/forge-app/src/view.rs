@@ -1085,6 +1085,7 @@ mod help_guide;
 mod preview_content;
 mod tools_panel;
 mod workspace;
+mod footer;
 
 pub(crate) use decorations::draw_blame_popup;
 use decorations::*;
@@ -1093,6 +1094,7 @@ pub(crate) use preview_content::bridge_theme;
 use preview_content::*;
 use tools_panel::*;
 use workspace::*;
+use footer::*;
 
 #[cfg(test)]
 mod tests;
