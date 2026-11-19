@@ -11,7 +11,32 @@ use ratatui::{layout::Rect, style::{Color, Modifier, Style}, Frame};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
+mod protocol;
+use protocol::InputProtocol;
+
 static NEXT_TERMINAL_ID: AtomicU64 = AtomicU64::new(1);
+
+// Pin the left-button gesture to the owner chosen on mouse-down.
+// Never turn a child TUI's ongoing drag into a host text selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LeftGesture {
+    HostSelection,
+    ChildMouse,
+}
+
+
+#[cfg(unix)]
+fn foreground_owner(master: &dyn MasterPty) -> Option<i32> {
+    master.process_group_leader()
+}
+
+#[cfg(not(unix))]
+fn foreground_owner(_master: &dyn MasterPty) -> Option<i32> {
+    // portable-pty does not currently expose an equivalent Windows PTY
+    // foreground job identifier.
+    Some(0)
+}
+
 
 pub struct EmbeddedTerminal {
     pub id: u64,
@@ -22,12 +47,14 @@ pub struct EmbeddedTerminal {
     pub drawn_revision: u64,
     pub ended: Arc<AtomicBool>,
     parser: Arc<Mutex<vt100::Parser>>,
-    master: Mutex<Box<dyn MasterPty + Send>>,
+    protocol: Arc<Mutex<InputProtocol>>,
+    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
     writer: Mutex<Box<dyn Write + Send>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     size: (u16, u16),
     pub area: Rect,
     selection: Option<((u16,u16),(u16,u16))>,
+    left_gesture: Option<LeftGesture>,
     /// Human readable tab title.
     pub name: String,
 }
@@ -55,6 +82,10 @@ impl EmbeddedTerminal {
             NonZeroU16::new(cols).unwrap(), 2000,
         )));
         let revision = Arc::new(AtomicU64::new(0));
+        let protocol = Arc::new(Mutex::new(InputProtocol::default()));
+        let master = Arc::new(Mutex::new(pty.master));
+        let read_master = master.clone();
+        let read_protocol = protocol.clone();
         let read_parser = parser.clone();
         let read_revision = revision.clone();
         let read_notify = notify.clone();
@@ -69,8 +100,15 @@ impl EmbeddedTerminal {
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(_) => break,
                 };
-                if let Ok(mut parser) = read_parser.lock() {
-                    parser.process(&bytes[..n]);
+                // The PTY reader owns output protocol negotiation. Bind
+                // requested input modes to the foreground job that emitted
+                // them, and end the previous lease when job ownership moves.
+                let foreground = read_master.lock().ok()
+                    .and_then(|master| foreground_owner(&**master));
+                if let (Ok(mut protocol), Ok(mut parser)) =
+                    (read_protocol.lock(), read_parser.lock())
+                {
+                    protocol.output(&mut parser, foreground, &bytes[..n]);
                     read_revision.fetch_add(1, Ordering::Release);
                     // Wake the UI on output instead of waiting for a polling tick.
                     read_notify.notify_one();
@@ -82,8 +120,8 @@ impl EmbeddedTerminal {
         Ok(Self {
             id: NEXT_TERMINAL_ID.fetch_add(1, Ordering::Relaxed),
             visible: true, focused: true, maximized: false, revision, drawn_revision: 0, ended,
-            parser, master: Mutex::new(pty.master), writer: Mutex::new(writer), child, size: (cols, rows),
-            area: Rect::default(), selection: None,
+            parser, protocol, master, writer: Mutex::new(writer), child, size: (cols, rows),
+            area: Rect::default(), selection: None, left_gesture: None,
             name: cwd.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "Shell".into()),
         })
     }
@@ -120,8 +158,7 @@ impl EmbeddedTerminal {
     pub fn paste(&mut self, text: &str) -> std::io::Result<()> {
         // Respect mode negotiated by the foreground program. In bracketed
         // paste, lines are delivered for editing rather than as Enter keys.
-        let bracketed = self.parser.lock().map_err(|_| std::io::Error::other("terminal parser lock poisoned"))?
-            .screen().bracketed_paste();
+        let bracketed = self.input_screen(|screen| screen.bracketed_paste())?;
         if bracketed {
             let mut bytes = Vec::with_capacity(text.len() + 12);
             bytes.extend_from_slice(b"\x1b[200~");
@@ -134,8 +171,7 @@ impl EmbeddedTerminal {
     }
 
     pub fn send(&mut self, key: KeyEvent) -> std::io::Result<()> {
-        let application = self.parser.lock().map_err(|_| std::io::Error::other("terminal parser lock poisoned"))?
-            .screen().application_cursor();
+        let application = self.input_screen(|screen| screen.application_cursor())?;
         let Some(data) = encode_key(key, application) else { return Ok(()); };
         self.scroll_to_bottom(); // any input returns to the live viewport
         self.selection = None;
@@ -163,41 +199,124 @@ impl EmbeddedTerminal {
         self.parser.lock().map(|parser| parser.screen().alternate_screen()).unwrap_or(false)
     }
 
-    /// Mouse events within the terminal viewport. Shift forces host selection.
+    fn input_screen<T>(&self, read: impl FnOnce(&vt100::Screen) -> T)
+        -> std::io::Result<T>
+    {
+        let foreground = self.master.lock()
+            .map_err(|_| std::io::Error::other("terminal master lock poisoned"))
+            .map(|master| foreground_owner(&**master))?;
+        let mut protocol = self.protocol.lock()
+            .map_err(|_| std::io::Error::other("terminal protocol lock poisoned"))?;
+        let mut parser = self.parser.lock()
+            .map_err(|_| std::io::Error::other("terminal parser lock poisoned"))?;
+        protocol.sync(&mut parser, foreground);
+        Ok(read(parser.screen()))
+    }
+
+    /// True while this terminal owns a left-button selection gesture, even
+    /// if the pointer has left the viewport (release must reach its owner).
+    pub fn captures_left_drag(&self) -> bool {
+        self.left_gesture.is_some()
+    }
+
+    /// The foreground TUI owns mouse input if it negotiated a mouse mode.
+    /// Shift+left-drag explicitly overrides that mode for host text selection.
+    /// A gesture retains its initial owner until release, including when the
+    /// pointer leaves the viewport or the modifier keys change mid-drag.
     pub fn mouse(&mut self, event: MouseEvent) -> std::io::Result<Option<String>> {
-        if !self.area.contains((event.column,event.row).into()) { return Ok(None); }
+        if self.area.width == 0 || self.area.height == 0 { return Ok(None); }
+        let inside = self.area.contains((event.column, event.row).into());
+        if !inside && !self.captures_left_drag() { return Ok(None); }
+        // Keep a captured drag alive when it crosses the terminal border.
+        let event = MouseEvent {
+            column: event.column.clamp(self.area.x, self.area.right().saturating_sub(1)),
+            row: event.row.clamp(self.area.y, self.area.bottom().saturating_sub(1)),
+            ..event
+        };
         let x = event.column.saturating_sub(self.area.x);
         let y = event.row.saturating_sub(self.area.y);
-        let (mode, encoding, selecting) = {
-            let parser = self.parser.lock().map_err(|_| std::io::Error::other("terminal parser lock poisoned"))?;
-            let screen = parser.screen();
-            (screen.mouse_protocol_mode(), screen.mouse_protocol_encoding(),
-                event.modifiers.contains(KeyModifiers::SHIFT) || screen.mouse_protocol_mode() == MouseProtocolMode::None)
-        };
-        if selecting {
+
+        if self.left_gesture == Some(LeftGesture::HostSelection) {
             match event.kind {
-                MouseEventKind::ScrollUp => self.scroll(-3),
-                MouseEventKind::ScrollDown => self.scroll(3),
-                MouseEventKind::Down(MouseButton::Left) => {
-                    self.selection = Some(((x,y),(x,y))); self.focused = true;
-                },
                 MouseEventKind::Drag(MouseButton::Left) => {
-                    if let Some((start,_)) = self.selection { self.selection = Some((start,(x,y))); }
-                },
-                MouseEventKind::Up(MouseButton::Left) => {
-                    if let Some((start,_)) = self.selection {
-                        self.selection = Some((start,(x,y)));
-                        if start != (x,y) { return Ok(self.selected_text()); }
+                    if let Some((start, _)) = self.selection {
+                        self.selection = Some((start, (x, y)));
+                        self.revision.fetch_add(1, Ordering::Release);
                     }
-                },
-                _ => {},
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    self.left_gesture = None;
+                    if let Some((start, _)) = self.selection {
+                        self.selection = Some((start, (x, y)));
+                        self.revision.fetch_add(1, Ordering::Release);
+                        if start != (x, y) { return Ok(self.selected_text()); }
+                    }
+                }
+                _ => {}
             }
-            self.revision.fetch_add(1,Ordering::Release);
             return Ok(None);
         }
-        if let Some(bytes) = encode_mouse(event, self.area, mode, encoding) {
-            self.write_input(&bytes)?;
+
+        let foreground = self.master.lock()
+            .map_err(|_| std::io::Error::other("terminal master lock poisoned"))
+            .map(|master| foreground_owner(&**master))?;
+        let negotiated = {
+            let mut protocol = self.protocol.lock()
+                .map_err(|_| std::io::Error::other("terminal protocol lock poisoned"))?;
+            let mut parser = self.parser.lock()
+                .map_err(|_| std::io::Error::other("terminal parser lock poisoned"))?;
+            protocol.mouse(&mut parser, foreground)
+        };
+        // Shift can override mouse tracking only when starting a new gesture.
+        // Releasing Shift mid-drag must not steal it from the child or host.
+        let child_mouse = if self.left_gesture != Some(LeftGesture::ChildMouse)
+            && event.modifiers.contains(KeyModifiers::SHIFT) {
+            None
+        } else {
+            negotiated
+        };
+
+        if self.left_gesture == Some(LeftGesture::ChildMouse)
+            && matches!(event.kind, MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left))
+        {
+            if let Some((mode, encoding)) = child_mouse {
+                if let Some(bytes) = encode_mouse(event, self.area, mode, encoding) {
+                    self.write_input(&bytes)?;
+                }
+            }
+            if matches!(event.kind, MouseEventKind::Up(MouseButton::Left)) {
+                self.left_gesture = None;
+            }
+            return Ok(None);
         }
+
+        if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.focused = true;
+            self.selection = None;
+            if child_mouse.is_some() {
+                self.left_gesture = Some(LeftGesture::ChildMouse);
+            } else {
+                self.left_gesture = Some(LeftGesture::HostSelection);
+                self.selection = Some(((x, y), (x, y)));
+                self.revision.fetch_add(1, Ordering::Release);
+                return Ok(None);
+            }
+            self.revision.fetch_add(1, Ordering::Release);
+        }
+        if let Some((mode, encoding)) = child_mouse {
+            if let Some(bytes) = encode_mouse(event, self.area, mode, encoding) {
+                self.write_input(&bytes)?;
+            }
+            return Ok(None);
+        }
+        if matches!(event.kind, MouseEventKind::Moved) { return Ok(None); }
+        match event.kind {
+            MouseEventKind::ScrollUp => self.scroll(-3),
+            MouseEventKind::ScrollDown => self.scroll(3),
+            _ => {}
+        }
+        self.revision.fetch_add(1, Ordering::Release);
         Ok(None)
     }
 
@@ -400,6 +519,17 @@ impl Drop for EmbeddedTerminal {
 mod tests {
     use super::*;
 
+    #[derive(Clone)]
+    struct Capture(Arc<Mutex<Vec<u8>>>);
+    impl Write for Capture {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+    }
+
+
     #[test]
     fn xterm_key_sequences_cover_application_mode_and_modifiers() {
         let key = |code, mods| KeyEvent::new(code, mods);
@@ -413,28 +543,181 @@ mod tests {
         assert_eq!(encode_key(key(KeyCode::Char(' '), KeyModifiers::CONTROL),false).unwrap(), b"\x00");
     }
 
+    /// Emulate a decoder receiving bytes while a specific job owns the PTY.
+    /// The mouse protocol lease must be issued through the same state machine
+    /// used by the real reader, never by mutating the VT parser in isolation.
+    fn child_output(term: &EmbeddedTerminal, owner: Option<i32>, data: &[u8]) {
+        let mut protocol = term.protocol.lock().unwrap();
+        let mut parser = term.parser.lock().unwrap();
+        protocol.output(&mut parser, owner, data);
+    }
+
     #[test]
     fn negotiated_bracketed_paste_is_single_write_with_delimiters() {
-        #[derive(Clone)]
-        struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
-        impl std::io::Write for Capture {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
-        }
         let cwd = std::env::current_dir().unwrap();
         let mut term = EmbeddedTerminal::start(&cwd,80,12,Arc::new(tokio::sync::Notify::new())).unwrap();
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         term.writer = Mutex::new(Box::new(Capture(output.clone())));
-        term.parser.lock().unwrap().process(b"\x1b[?2004h");
+        let fg = term.master.lock().unwrap().process_group_leader();
+        child_output(&term, fg, b"\x1b[?2004h");
         term.paste("echo alpha\necho beta").unwrap();
         assert_eq!(&*output.lock().unwrap(), b"\x1b[200~echo alpha\necho beta\x1b[201~");
         output.lock().unwrap().clear();
-        term.parser.lock().unwrap().process(b"\x1b[?2004l");
+        child_output(&term, fg, b"\x1b[?2004l");
         term.paste("hello").unwrap();
         assert_eq!(&*output.lock().unwrap(), b"hello");
+    }
+
+    #[test]
+    fn stale_sgr_mouse_mode_does_not_inject_events_into_shell() {
+
+        let cwd = std::env::current_dir().unwrap();
+        let mut term = EmbeddedTerminal::start(&cwd, 80, 20,
+            Arc::new(tokio::sync::Notify::new())).unwrap();
+        term.area = Rect::new(0, 0, 80, 20);
+        let shell_pid = term.child.process_id().unwrap() as i32;
+        for _ in 0..60 {
+            if term.master.lock().unwrap().process_group_leader() == Some(shell_pid) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(term.master.lock().unwrap().process_group_leader(), Some(shell_pid),
+            "the interactive child shell should own the foreground PTY");
+
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        term.writer = Mutex::new(Box::new(Capture(recorded.clone())));
+        let movement = MouseEvent {
+            kind: MouseEventKind::Moved, column: 12, row: 5,
+            modifiers: KeyModifiers::NONE,
+        };
+        // A TUI's mouse lease belongs to its foreground job, even if it
+        // crashes leaving 1003 and the alternate-screen enabled.
+        child_output(&term, Some(shell_pid + 1000),
+            b"\x1b[?1003h\x1b[?1006h\x1b[?1049h");
+        assert_eq!(term.parser.lock().unwrap().screen().mouse_protocol_mode(),
+            MouseProtocolMode::AnyMotion);
+        term.mouse(movement).unwrap();
+        assert!(recorded.lock().unwrap().is_empty(),
+            "a dead child must not keep sending mouse reports");
+        assert!(!term.parser.lock().unwrap().screen().alternate_screen());
+        assert_eq!(term.parser.lock().unwrap().screen().mouse_protocol_mode(),
+            MouseProtocolMode::None);
+        term.mouse(movement).unwrap();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left), ..movement
+        };
+        term.mouse(click).unwrap();
+        assert!(recorded.lock().unwrap().is_empty(),
+            "mouse escapes leaked into the idle shell");
+        assert!(term.selection.is_some(),
+            "a shell prompt should use host-side selection");
+        // The ordinary shell still gets local drag selection without mouse
+        // tracking, including a release beyond the viewport.
+        term.mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 17, ..click
+        }).unwrap();
+        assert_eq!(term.selection, Some(((12,5),(17,5))));
+        term.mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 99, row: 99, ..click
+        }).unwrap();
+        assert_eq!(term.selection, Some(((12,5),(79,19))));
+        assert!(!term.captures_left_drag());
+        assert!(recorded.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn foreground_child_program_still_receives_mouse_reports() {
+
+        let cwd = std::env::current_dir().unwrap();
+        let mut term = EmbeddedTerminal::start(
+            &cwd, 80, 20, Arc::new(tokio::sync::Notify::new())).unwrap();
+        term.area = Rect::new(0, 0, 80, 20);
+        let shell = term.child.process_id().unwrap() as i32;
+        // A child launched by the interactive shell owns a different
+        // foreground process group (the same check mouse() uses).
+        term.write_input(b"cat\n").unwrap();
+        let mut foreground = None;
+        for _ in 0..200 {
+            foreground = term.master.lock().unwrap().process_group_leader();
+            if foreground.is_some_and(|group| group != shell) { break; }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(foreground.is_some_and(|group| group != shell),
+            "shell did not hand the PTY to its foreground child");
+
+        // Capture forwarded bytes instead of writing synthetic mouse traffic
+        // into cat; the real child is only used to verify PTY ownership.
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let original_writer = std::mem::replace(&mut term.writer,
+            Mutex::new(Box::new(Capture(recorded.clone()))));
+        child_output(&term, foreground,
+            b"\x1b[?1003h\x1b[?1006h");
+        term.mouse(MouseEvent {
+            kind: MouseEventKind::Moved, column: 7, row: 4,
+            modifiers: KeyModifiers::NONE,
+        }).unwrap();
+        let encoded = recorded.lock().unwrap().clone();
+        assert_eq!(encoded, b"\x1b[<35;8;5M",
+            "mouse-aware foreground TUIs must keep receiving SGR motion");
+        recorded.lock().unwrap().clear();
+
+        // A negotiated child receives the press immediately, not at release.
+        // Holding it back breaks TUI-native drag interactions.
+        let down = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left), column: 7, row: 4,
+            modifiers: KeyModifiers::NONE,
+        };
+        term.mouse(down).unwrap();
+        assert!(term.captures_left_drag());
+        assert_eq!(&*recorded.lock().unwrap(), b"\x1b[<0;8;5M");
+        term.mouse(MouseEvent {kind: MouseEventKind::Up(MouseButton::Left), ..down}).unwrap();
+        assert!(!term.captures_left_drag());
+        assert_eq!(&*recorded.lock().unwrap(), b"\x1b[<0;8;5M\x1b[<3;8;5m");
+        recorded.lock().unwrap().clear();
+
+        // Normal drag is fully owned by the foreground TUI. Release remains
+        // forwarded even after crossing the terminal viewport.
+        term.mouse(down).unwrap();
+        term.mouse(MouseEvent {kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 12, row: 4, ..down}).unwrap();
+        assert!(term.captures_left_drag());
+        term.mouse(MouseEvent {kind: MouseEventKind::Up(MouseButton::Left),
+            column: 99, row: 21, ..down}).unwrap();
+        assert!(!term.captures_left_drag());
+        assert!(term.selection.is_none());
+        assert_eq!(&*recorded.lock().unwrap(),
+            b"\x1b[<0;8;5M\x1b[<32;13;5M\x1b[<3;80;20m");
+        recorded.lock().unwrap().clear();
+
+        // Shift+drag explicitly belongs to Forge's text selection. The
+        // modifier can be released during the gesture without leaking to TUI.
+        let select_down = MouseEvent {modifiers: KeyModifiers::SHIFT, ..down};
+        term.mouse(select_down).unwrap();
+        term.mouse(MouseEvent {kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 12, row: 4, ..down}).unwrap();
+        assert!(term.captures_left_drag());
+        assert_eq!(term.selection, Some(((7,4),(12,4))));
+        term.mouse(MouseEvent {kind: MouseEventKind::Up(MouseButton::Left),
+            column: 99, row: 21, ..down}).unwrap();
+        assert_eq!(term.selection, Some(((7,4),(79,19))));
+        assert!(!term.captures_left_drag());
+        assert!(recorded.lock().unwrap().is_empty(),
+            "Shift selection must not inject mouse events into the TUI");
+
+        // Ctrl remains a native mouse modifier, not a mandatory escape hatch.
+        let native_down = MouseEvent {modifiers: KeyModifiers::CONTROL, ..down};
+        term.mouse(native_down).unwrap();
+        term.mouse(MouseEvent {kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 8, ..native_down}).unwrap();
+        term.mouse(MouseEvent {kind: MouseEventKind::Up(MouseButton::Left),
+            column: 8, ..native_down}).unwrap();
+        assert_eq!(&*recorded.lock().unwrap(),
+            b"\x1b[<16;8;5M\x1b[<48;9;5M\x1b[<19;9;5m");
+        term.writer = original_writer;
+        term.write_input(b"\x03").unwrap(); // restore shell foreground
     }
 
     #[test]
@@ -451,6 +734,14 @@ mod tests {
         assert_eq!(encode_mouse(release,area,MouseProtocolMode::PressRelease,MouseProtocolEncoding::Sgr).unwrap(),
             b"\x1b[<3;4;4m");
         assert!(encode_mouse(release,area,MouseProtocolMode::Press,MouseProtocolEncoding::Sgr).is_none());
+        let drag = MouseEvent {kind: MouseEventKind::Drag(MouseButton::Left),..event};
+        assert!(encode_mouse(drag,area,MouseProtocolMode::PressRelease,MouseProtocolEncoding::Sgr).is_none());
+        assert_eq!(encode_mouse(drag,area,MouseProtocolMode::ButtonMotion,MouseProtocolEncoding::Sgr).unwrap(),
+            b"\x1b[<32;4;4M");
+        let moved = MouseEvent {kind: MouseEventKind::Moved,..event};
+        assert!(encode_mouse(moved,area,MouseProtocolMode::ButtonMotion,MouseProtocolEncoding::Sgr).is_none());
+        assert_eq!(encode_mouse(moved,area,MouseProtocolMode::AnyMotion,MouseProtocolEncoding::Sgr).unwrap(),
+            b"\x1b[<35;4;4M");
     }
 
     #[test]
