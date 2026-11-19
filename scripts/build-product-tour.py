@@ -11,10 +11,10 @@ from PIL import Image, ImageDraw, ImageFont
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs/assets/forge-tour.gif"
 SOURCES = [
-    ("forge-workspace-900.webp", "FILES + PREVIEW", "Navigate files and inspect Markdown", 4500),
-    ("forge-diff-900.webp", "GIT DIFF", "Review changes side by side", 4500),
-    ("forge-theme-900.webp", "CODE + THEMES", "Read highlighted code in your terminal", 4500),
-    ("forge-commit-900.webp", "COMMIT", "Finish the Git workflow in one place", 4500),
+    ("guide/files.webp", "FILES + PREVIEW", "Navigate real project files", 4500),
+    ("guide/git-diff.webp", "GIT DIFF", "Review staged and unstaged changes", 4500),
+    ("guide/search-global.webp", "CONTENT SEARCH", "Find matching source lines across files", 4500),
+    ("guide/commit.webp", "COMMIT", "Write a message for staged changes", 4500),
 ]
 WIDTH, TOP, BOTTOM = 900, 72, 42
 BG = (11, 13, 16)

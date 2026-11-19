@@ -1,17 +1,21 @@
 ---
 import { ArrowUpRight, ChevronDown } from '@lucide/astro';
+interface MarkdownHeading { depth: number; slug: string; text: string; }
 interface Props {
-  content: string;
+  content?: string;
+  headings?: MarkdownHeading[];
   english?: boolean;
 }
-const { content, english = false } = Astro.props;
-const navigation = content.match(/<nav\s+class="guide-toc"[^>]*>([\s\S]*?)<\/nav>/);
-if (!navigation) throw new Error('Guide content is missing its section navigation');
-const navigationHtml = navigation[1].replace(/<strong>[\s\S]*?<\/strong>/, '');
+const { content, headings = [], english = false } = Astro.props;
+// Older English guide stays HTML-backed. The Chinese guide renders native Astro Markdown.
+const navigation = content?.match(/<nav\s+class="guide-toc"[^>]*>([\s\S]*?)<\/nav>/);
+if (content && !navigation) throw new Error('Guide content is missing its section navigation');
+const navigationHtml = navigation?.[1].replace(/<strong>[\s\S]*?<\/strong>/, '') ?? '';
 const bodyHtml = content
-  .replace(navigation[0], '')
+  ?.replace(navigation![0], '')
   .replace(/^\s*<main\b[^>]*>/, '')
-  .replace(/<\/main>\s*$/, '');
+  .replace(/<\/main>\s*$/, '') ?? '';
+const sections = headings.filter((heading) => heading.depth === 2);
 const tocTitle = english ? 'On this page' : '文档目录';
 const menuTitle = english ? 'Browse sections' : '查看文档目录';
 ---
@@ -19,7 +23,11 @@ const menuTitle = english ? 'Browse sections' : '查看文档目录';
   <aside class="docs-sidebar" aria-label={tocTitle}>
     <div class="docs-sidebar-inner">
       <div class="docs-sidebar-title">{tocTitle}</div>
-      <nav class="docs-section-nav" aria-label={tocTitle} set:html={navigationHtml} />
+      <nav class="docs-section-nav" aria-label={tocTitle}>
+        {content ? <Fragment set:html={navigationHtml} /> : sections.map((heading) =>
+          <a href={`#${heading.slug}`}>{heading.text}</a>
+        )}
+      </nav>
       <div class="docs-sidebar-bottom">
         <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>{english ? 'Release notes' : '发布说明'} <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" /></a>
         <a href="https://github.com/creature-studio/forge">GitHub <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" /></a>
@@ -28,9 +36,15 @@ const menuTitle = english ? 'Browse sections' : '查看文档目录';
   </aside>
   <details class="docs-mobile-navigation">
     <summary>{menuTitle} <ChevronDown size={18} strokeWidth={1.8} aria-hidden="true" /></summary>
-    <nav class="docs-section-nav" aria-label={tocTitle} set:html={navigationHtml} />
+    <nav class="docs-section-nav" aria-label={tocTitle}>
+        {content ? <Fragment set:html={navigationHtml} /> : sections.map((heading) =>
+          <a href={`#${heading.slug}`}>{heading.text}</a>
+        )}
+      </nav>
   </details>
-  <div class="docs-main" set:html={bodyHtml} />
+  {content ? <div class="docs-main" set:html={bodyHtml} /> :
+    <div class="docs-main"><article class="guide-body guide-markdown"><slot /></article></div>}
+
 </main>
 <script>
   const navigation = document.querySelector('.docs-layout');

@@ -191,52 +191,31 @@ Files、Git Changes / Staged 以及 History 的树形列表默认启用 **Tree S
 
 设置为 `false` 可恢复普通滚动。配置重启后保留，不影响真实树结构、Git 操作或原本的“选中目录不更新右侧内容”行为。
 
-## 键位
+## 键位（Forge v0.3.3）
 
-| Key | Action |
-|-----|--------|
-| `:` | 搜索命令：文件操作、批量操作和 Git 管理 |
-| `Ctrl-P` / `Ctrl-F` | 模糊文件名搜索 / 全局内容搜索；内容搜索内 `Ctrl-R` 切换正则，Enter 跳转 |
-| `:` / `Ctrl-K` | 打开命令面板 |
-| `,` / `: Settings` | 独立设置界面：粘性滚动、紧凑文件夹、隐藏文件、F4 快捷键管理 |
-| `o` / Git 文件双击 | 在 Files 中打开 Git 变更文件（查看当前工作区内容）；Diff 右键可用 Open file |
-| `F4` | 快捷键管理；Tab 切换 Files/Git/Editor/Navigation 分组；Enter 重绑，Delete 恢复默认 |
-| `F1` / `F2` | 切换 Files / Git；也可点击顶部标签 |
-| `F3` | Markdown 文件切换 Preview / Code；也可点击内容区顶部标签 |
-| `鼠标拖动 / Ctrl+C` | 右侧预览拖拽选中并复制；支持 Markdown Preview、Code、普通文本、Git Diff，Esc 清除选区 |
-| `v` / `V` | 标记当前文件或目录 / 标记所有可见项；Esc 清空。Git 页按行记录路径与 staged/unstaged 侧，同一文件两侧可独立选中 |
-| `e` / `E` | 内置文本编辑器 / 使用 `$EDITOR` 打开文件 |
-| `F` | 文件过滤：修改、未跟踪、扩展名、隐藏文件、排除目录 |
-| `I` | 当前 Diff 的单行操作：选行后 `s/u` 暂存 / 取消暂存 |
-| `H` / `L` | 文件历史 / 仓库提交历史；Space 固定版本，`D` 对比，`[/]` 翻页 |
-| `G` | 切到 Git 侧栏并展开 HISTORY：lane 图、分支/标签徽标，Enter 展开提交文件树，选中文件在右侧看该提交的 Diff |
-| `B` / `Z` / `S` / `W` | 分支 / Stash / 远程同步 / Worktree 管理 |
-| `x` / `Delete` | 丢弃所选文件修改（右侧 Diff 为当前 Hunk）/ 删除文件或目录，均需确认 |
-| `j` / `↓`、`k` / `↑` | 当前焦点面板移动或滚动 |
-| `Enter` / `l` / `→` | 展开目录、打开文件或 diff |
-| `h` / `←` / `Backspace` | 上级目录、折叠目录或跳到父级 |
-| `Space` | Git 侧栏展开或折叠目录 |
-| `Tab` / `Shift-Tab` | 列表与预览之间切换焦点 |
-| `g` | 打开 Git 侧栏 |
-| `Esc` | 关闭弹窗/菜单，或从 Git 返回 Files |
-| `[` / `]` | 跳到 CHANGES / STAGED |
-| `s` / `u` | Git 页左侧列表暂存 / 取消暂存选中的文件或整个文件夹（包含子目录）；焦点在右侧 diff 时仅操作当前 hunk。批量时 `s` 只处理已标记的 CHANGES 侧，`u` 只处理 STAGED 侧 |
-| `d` | 在 Git 页显示选中文件的 diff |
-| `n` / `N` | 焦点在 diff 时跳到下一个 / 上一个 hunk |
-| `c` | 打开提交弹窗；Enter 提交，Esc 取消 |
-| `p` / `P` | Git 侧栏获得焦点时 pull / push；Files 和右侧 Preview 不触发 |
-| `r` | 刷新目录和 Git 状态 |
-| `q` | 退出；提交弹窗内 q 为输入字符；Ctrl-C 不直接退出 Forge |
-| `?` | 打开操作帮助；帮助内 `Esc` / `?` / `q` 关闭，`j/k`、翻页键或滚轮滚动 |
+以 [Astro 网站的 Markdown 图文指南](https://creature-studio.github.io/forge/guide/) 为主要操作说明（对应源码 `web/src/content/guide.zh.md`，配有 19 张真实界面截图）。以下是当前实际绑定的速查；用户自定义键位以 `F4` 列表为准。
 
-鼠标支持点选、双击目录、右键菜单和滚轮滚动。提交输入支持光标移动、编辑和中文。
+| 按键 | 操作 |
+|---|---|
+| `F1` / `F2` | Files / Git 工作区 |
+| `F3` | Markdown Preview / Code 切换 |
+| `F4` / `F5` / `F9` | 键位设置 / Help / Settings |
+| `Ctrl+P` | 模糊文件名查找 |
+| `Ctrl+F`（预览焦点） | 文件内搜索；全局内容搜索通过搜索图标或命令面板进入 |
+| `Ctrl+K` | Commands 命令面板 |
+| `Ctrl+E` | 内置文件编辑器 |
+| `Tab` / `Shift+Tab` | 切换焦点 |
+| `j/k`、`Enter`、`h/l` | 上下移动、展开、折叠 |
+| `Ctrl+B` | 收起或展开 Sidebar |
+| `F6` / `F7` | Blame 详情 / Git Change Peek |
+| `Alt+A` / `Alt+U` | Git 暂存 / 取消暂存；操作范围由当前焦点决定 |
+| `c` | Commit Composer；`Ctrl+S` 进入审查/确认 |
+| `Alt+G` / `Alt+H` | 仓库历史 / 文件历史 |
+| `Alt+B` / `Alt+W` | Branches / Worktrees |
+| `Alt+Z` / `Alt+S` | Stashes / Sync |
+| `Alt+P` / `Alt+R` | Git Push / Pull（受上下文约束） |
+| `F8` / `F11` | Terminal 显示/隐藏与最大化/恢复 |
+| `Shift+F8` / `Alt+1..8` | 新 Shell 标签 / 标签切换 |
+| `Esc` | 返回或关闭当前弹窗；Terminal 焦点下交给 Shell |
 
-Files 页右键提供 New file、New folder、Rename、Copy、Move 和 Delete。右键文件夹会在该目录内新建，右键文件会在同级目录新建，右键空白区域会在工作区根目录新建。删除文件和文件夹都需确认，文件夹删除包含子目录；右键操作只作用于点击项，批量操作通过 `:` 命令面板执行。
-
-选中文件按 `e` 或右键 Edit text，进入内置多行文本编辑器，支持中文、粘贴、鼠标定位和方向键。`Ctrl-S` 保存，`Ctrl-Z/Y` 撤销/重做；`Esc` 退出，有未保存内容时可 `Ctrl-S` 保存并关闭、`D` 明确放弃，Enter 或 Esc 继续编辑。支持 2 MiB 以内的 UTF-8 文本，保留 LF/CRLF、末尾换行和文件权限；文件被外部修改时拒绝覆盖并保留草稿。`E` 使用 `$EDITOR`（回退到 `$VISUAL`、`vi`），返回后恢复位置。
-
-Stage / Unstage 统一放在 Git 页。底栏和右键菜单随选中项显示 `Stage file`、`Stage folder` 或当前改动块操作。Git 树中选中 CHANGES 的文件夹按 `s`，暂存该目录及所有子目录的改动；选中 STAGED 的文件夹按 `u`，取消暂存。折叠目录也生效，包括新增、修改和删除的文件，不影响目录外的改动。分组标题仅用于导航。取消暂存保留工作区编辑；commit 提交仓库内所有已暂存文件，pull/push 也作用于整个仓库。
-
-Git 的多选标识由仓库内绝对路径和 `staged` / `unstaged` 侧共同组成，因此同一文件在 CHANGES 与 STAGED 的两行可分别选中，标题计数也分别计算。批量 `s` 只处理明确标记的 CHANGES 侧，批量 `u` 只处理明确标记的 STAGED 侧；目录标记递归匹配子项，但不会连带另一侧。Files 页选择仍是纯路径语义；Files 与 Git 切换会清空多选。
-
-Files 过滤器按选中对象的稳定路径恢复选择：过滤后仍可见则保持同一路径和位置；不可见则回退到最近可见父目录，而不是沿用旧列表索引。关闭过滤保留目录展开状态与当前焦点。
+**旧键位注意：** `?`、`,`、`s/u` 不再是目前的默认 Help、Settings 和 Stage/Unstage 入口。查看 `F4` 而非沿用旧文档或网络上的历史截图。更完整的键盘映射与兼容旧键的行为见 [keyboard-shortcuts.md](keyboard-shortcuts.md)。

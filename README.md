@@ -48,38 +48,42 @@ Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and 
 
 ## See it in action
 
-| Files & preview | Git review |
+Every image below was captured from a **running Forge TUI**, using an isolated demo Git repository. The [illustrated Chinese guide](https://creature-studio.github.io/forge/guide/) now includes 19 updated screenshots and step-by-step workflows.
+
+| Files & source preview | Full Git diff |
 | --- | --- |
-| ![Forge file tree with Git status and Markdown preview](web/public/assets/forge-workspace-900.webp) | ![Forge side-by-side diff](web/public/assets/forge-diff-900.webp) |
-| **Themes & code highlighting** | **Commit editor** |
-| ![Forge dark theme and highlighted source](web/public/assets/forge-theme-900.webp) | ![Forge commit editor](web/public/assets/forge-commit-900.webp) |
+| ![Files and source preview](web/public/assets/guide/files.webp) | ![Full Git diff](web/public/assets/guide/git-diff.webp) |
+| **Global content search** | **Commit composer** |
+| ![Search results with code context](web/public/assets/guide/search-global.webp) | ![Commit composer with staged files](web/public/assets/guide/commit.webp) |
+| **Embedded terminal** | **Settings** |
+| ![Shell tabs within Forge](web/public/assets/guide/terminal.webp) | ![Settings panel](web/public/assets/guide/settings.webp) |
 
-Screenshots were captured from Forge running in a real terminal. For a larger view, visit the [website](https://creature-studio.github.io/forge/).
+## Key capabilities in v0.3.3
 
-## What's new in v0.3.0
-
-- **Focus Overview**: optional three-column navigation ruler for search matches, staged/unstaged Git changes and viewport position; click markers to jump, including in paged files.
-- **Git Change Peek**: click a changed-line gutter marker or press `F7` to inspect additions/deletions in a compact overlay, including bounded long text files. It does not push source code down.
-- **Git Blame**: click code for adaptive inline attribution, with full metadata below and `F6` for details.
-- **Responsiveness**: reduced redundant background Git reads and whole-file scans.
+- **Files and Git in one workspace:** folder navigation, fuzzy file finding, Markdown/source previews, full-file diffs and staged/unstaged views.
+- **Integrated development controls:** lightweight text editor, real Shell tabs with persistent sessions when hidden, in-file and global search.
+- **Git review and management:** commit composer, history, blame, source change peek, branches, stashes and worktrees.
+- **TUI-first UI:** configurable themes, Focus Overview, scrollbars, collapsible Activity Bar, contextual footer and hover tooltips.
 
 ## Keyboard-first quick start
 
 | Key | Action |
 | --- | --- |
 | `F1` / `F2` | Files / Git |
-| `Ctrl-P` / `Ctrl-F` | Find files / search contents |
+| `Ctrl+P` | Find files by name |
+| `Ctrl+F` (preview focused) | Search inside the current file |
+| `Ctrl+K` | Command palette, including global content search |
 | `F3` | Toggle Markdown preview and source |
 | `F6` / `F7` | Blame details / Git Change Peek (source mode) |
-| `:` / `Ctrl-K` | Command palette |
-| `F4` | Shortcut manager |
-| `,` | Settings |
-| `s` / `u` (Git view) | Stage / unstage |
-| `c` (Git view) | Commit dialog |
-| `B` / `Z` | Branches / stash |
-| `?` | Help |
+| `Ctrl+E` | Edit selected file |
+| `F4` / `F5` | Shortcut manager / Help |
+| `F9` | Settings |
+| `Alt+A` / `Alt+U` (Git) | Stage / unstage |
+| `c` (Git) | Commit composer; `Ctrl+S` reviews the commit |
+| `Alt+B` / `Alt+Z` | Branches / Stashes |
+| `F8` / `Shift+F8` | Show Terminal / New Shell tab |
 
-Mouse support is available, including selection, scrolling, context menus, and copying preview text. Run `forge` from a repository or ordinary directory.
+The old `?` (Help), `,` (Settings) and single-letter `s/u` (stage/unstage) shortcuts are **not** the current defaults. Always use `F4` to see effective bindings; some keys depend on the focused panel. Mouse support includes hover tooltips, text selection, clickable controls and scrollbars.
 
 ## Build from source
 
