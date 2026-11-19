@@ -374,6 +374,94 @@
     }
 
     #[tokio::test]
+    async fn unwrapped_preview_renders_horizontal_scrollbar_only_when_needed() {
+        let dir = tempfile::tempdir().unwrap();
+        let render = |wrap, line: &str| {
+            let mut app = fixture(dir.path());
+            app.config.wrap_code = wrap;
+            app.session.focus = PaneFocus::Preview;
+            app.preview_state.preview.as_mut().unwrap().content = PreviewContent::Text {
+                lines: vec![line.to_owned()],
+                truncated: false,
+                bytes_read: line.len(),
+            };
+            let buffer = render_frames(
+                element!(Workspace(initial: Some(app))), 110, 30, 3,
+            );
+            text(&buffer)
+        };
+        let wide = render(false, &"very_long_column_".repeat(20));
+        assert!(wide.contains('━'), "unwrapped overflow must paint the thumb");
+        let wrapped = render(true, &"very_long_column_".repeat(20));
+        assert!(!wrapped.contains('━'), "wrapping must hide the horizontal bar");
+        let short = render(false, "short");
+        assert!(!short.contains('━'), "no overflow must not steal a content row");
+    }
+
+    #[tokio::test]
+    async fn file_preview_horizontal_scrollbar_click_drag_release_and_clamp() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path());
+        app.config.wrap_code = false;
+        app.session.layout.preview = Rect::new(30, 2, 70, 24);
+        app.session.layout.preview_inner = Rect::new(31, 3, 67, 19);
+        app.session.layout.preview_horizontal_scrollbar = Rect::new(36, 22, 62, 1);
+        app.session.layout.preview_horizontal_max = 180;
+        app.session.focus = PaneFocus::List;
+        let event = |kind, column, row| MouseEvent {
+            kind, column, row, modifiers: KeyModifiers::NONE,
+        };
+
+        // Track click centers the thumb and immediately moves the viewport.
+        app.handle_mouse_content(event(MouseEventKind::Down(MouseButton::Left), 97, 22));
+        assert_eq!(app.preview_state.preview_scroll_x, 180);
+        assert_eq!(app.session.focus, PaneFocus::Preview);
+        assert!(matches!(app.scrollbar_drag,
+            Some((ScrollbarTarget::PreviewHorizontal, _))));
+        assert!(!app.preview_state.selection.is_dragging());
+        // Capture stays alive far outside the lane, in either direction.
+        app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 0, 90));
+        assert_eq!(app.preview_state.preview_scroll_x, 0);
+        app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 999, 0));
+        assert_eq!(app.preview_state.preview_scroll_x, 180);
+        app.handle_mouse_content(event(MouseEventKind::Up(MouseButton::Left), 0, 90));
+        assert_eq!(app.preview_state.preview_scroll_x, 0);
+        assert!(app.scrollbar_drag.is_none());
+        app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 999, 0));
+        assert_eq!(app.preview_state.preview_scroll_x, 0);
+        assert!(!app.preview_state.selection.is_dragging());
+
+        // A hidden/disabled bar is not a mouse target.
+        app.session.layout.preview_horizontal_scrollbar = Rect::default();
+        app.session.layout.preview_horizontal_max = 0;
+        app.handle_mouse_content(event(MouseEventKind::Down(MouseButton::Left), 97, 22));
+        assert!(app.scrollbar_drag.is_none());
+    }
+
+    #[tokio::test]
+    async fn git_diff_horizontal_scrollbar_shares_preview_offset_and_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path());
+        app.session.activity = ActivityTab::Git;
+        app.preview_state.preview_mode = PreviewMode::Diff;
+        app.session.layout.preview = Rect::new(30, 2, 70, 24);
+        app.session.layout.preview_inner = Rect::new(31, 3, 67, 19);
+        app.session.layout.preview_horizontal_scrollbar = Rect::new(31, 22, 68, 1);
+        app.session.layout.preview_horizontal_max = 100;
+        let event = |kind, column| MouseEvent {
+            kind, column, row: 22, modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(event(MouseEventKind::Down(MouseButton::Left), 98));
+        assert_eq!(app.preview_state.preview_scroll_x, 100);
+        assert!(matches!(app.scrollbar_drag,
+            Some((ScrollbarTarget::PreviewHorizontal, _))));
+        app.handle_mouse(event(MouseEventKind::Drag(MouseButton::Left), 31));
+        assert_eq!(app.preview_state.preview_scroll_x, 0);
+        app.handle_mouse(event(MouseEventKind::Up(MouseButton::Left), 31));
+        assert!(app.scrollbar_drag.is_none());
+    }
+
+    #[tokio::test]
     async fn files_sidebar_scrollbar_captures_far_horizontal_drag() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = fixture(dir.path());
@@ -544,8 +632,8 @@
                     assert_eq!(screen.contains("# Markdown"), code, "{screen}");
                     assert_eq!(screen.contains("**bold**"), code, "{screen}");
                 }
-                if width >= 24 {
-                    let heading_y = if height >= 12 { 2 } else { 1 };
+                if width >= 28 { // Activity Bar reserves four columns
+                    let heading_y = 1; // compact single-row workspace header
                     let footer_height = if height >= 12 { 3 } else { 2 };
                     let pane_height = height - heading_y - footer_height;
                     let heading = (0..width)
@@ -638,7 +726,7 @@
         assert!(count > 0);
         let buffer = render_frames(element!(Workspace(initial: Some(app))), 120, 30, 3);
         let screen = text(&buffer);
-        assert!(screen.contains("F1  Files"), "{screen}");
+        assert!(screen.contains("EXPLORER"), "{screen}");
         assert!(!screen.contains(&format!("Files  {count}")), "{screen}");
         assert!(!screen.contains("Files  1 /"), "{screen}");
     }
@@ -655,7 +743,7 @@
             3,
         );
         let screen = text(&buffer);
-        assert!(screen.contains("Files"), "{screen}");
+        assert!(screen.contains("EXPLORER"), "{screen}");
         assert!(screen.contains("中文文件.rs"), "{screen}");
         assert!(screen.contains("fn main() {}"), "{screen}");
         assert!(
@@ -663,9 +751,10 @@
             "focused accents should use the configured palette {:?} (marker {:?})", palette.accent, buffer[(0, 2)].fg
         );
         assert_eq!(buffer[(1, 3)].bg, palette.bg);
-        assert_eq!(buffer[(30, 4)].symbol(), "│");
-        assert_eq!(buffer[(0, 2)].symbol(), "›");
-        assert_ne!(buffer[(29, 2)].bg, palette.bg, "selected row must have visible contrast");
+        assert_eq!(buffer[(35, 4)].symbol(), "│", "single Sidebar divider");
+        assert!(screen.contains('›'), "selected row should retain focus marker");
+        assert!(buffer.content().iter().any(|cell| cell.bg == palette.selection),
+            "selected row must have visible contrast");
         assert!(!screen.contains('┌') && !screen.contains('┐'), "{screen}");
         assert!(!buffer.content().iter().any(|cell| cell.bg == Color::Cyan));
     }
@@ -724,18 +813,18 @@
         let screen = text(&buffer);
         assert!(screen.contains("HISTORY"), "{screen}");
         // Subjects are truncated to the pane width, so match a prefix.
-        assert!(screen.contains("feat: sidebar hi"), "{screen}");
+        assert!(screen.contains("feat: sideb"), "{screen}");
         assert!(screen.contains("chore: base"), "{screen}");
         assert!(screen.contains("main"), "{screen}");
         assert!(
-            screen.contains("crates") && screen.contains("forge-ui") && screen.contains("graph.rs"),
+            screen.contains("crates") && screen.contains("graph.rs"),
             "{screen}"
         );
         assert!(screen.contains('●'), "{screen}");
     }
 
     #[tokio::test]
-    async fn footer_advertises_the_history_entry_in_both_tabs() {
+    async fn footer_shows_local_actions_instead_of_global_history_entry() {
         let dir = tempfile::tempdir().unwrap();
         for width in [100, 110, 130] {
             let app = fixture(dir.path());
@@ -746,10 +835,10 @@
                 3,
             ));
             let footer = screen.lines().find(|l| l.contains("Help")).unwrap_or("");
-            assert!(footer.contains("G History"), "files w={width}: {footer}");
+            assert!(footer.contains("Tab Preview") && !footer.contains("G History")
+                && !footer.contains("Ctrl-P"), "files w={width}: {footer}");
         }
-        // The Git footer is full of contextual hints; the history entry must not
-        // push them out.
+        // Git list advertises navigation in that list, not global commands.
         let mut app = fixture(dir.path());
         app.enter_git_sidebar();
         let screen = text(&render_frames(
@@ -759,10 +848,10 @@
             3,
         ));
         let footer = screen.lines().find(|l| l.contains("Help")).unwrap_or("");
-        assert!(footer.contains("Select a file"), "{footer}");
+        assert!(footer.contains("Tab Preview") && !footer.contains("G History"), "{footer}");
         let mut app = fixture(dir.path());
         assert!(app.history.expanded);
-        app.handle_key(KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE));
+        app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT));
         assert!(app.in_git_sidebar());
         assert!(app.history.expanded);
     }
@@ -826,8 +915,8 @@
         app.preview_state.find.input_active = false;
         assert!(!file_find_has_focus(&app));
         let unfocused = footer_shortcuts(&app, 120);
-        assert!(unfocused.iter().any(|key| key.key == "Ctrl-F"));
-        assert!(unfocused.iter().any(|key| key.key == "?"));
+        assert!(unfocused.iter().any(|key| key.key == "Esc"));
+        assert!(unfocused.iter().all(|key| key.key != "Ctrl-F"));
 
         app.preview_state.find.input_active = true;
         app.preview_state.find.open = false;
@@ -845,7 +934,7 @@
         let screen = text(&buffer);
         assert!(screen.contains("commit failed: rejected"), "{screen}");
         assert!(
-            screen.contains("Select a file") && screen.contains("? Help"),
+            screen.contains("Tab Preview") && screen.contains("F5 Help"),
             "{screen}"
         );
         assert!(!screen.contains("s/u"), "{screen}");
@@ -858,7 +947,7 @@
             screen.contains("j/k") && screen.contains("Scroll"),
             "{screen}"
         );
-        assert!(screen.contains("? Help"), "{screen}");
+        assert!(screen.contains("F5 Help"), "{screen}");
     }
 
     #[tokio::test]
@@ -886,6 +975,153 @@
         assert_eq!(app.preview_state.preview_scroll, 2);
         assert!(app.files.pending_lists.is_empty());
         assert!(app.preview_state.pending_preview.is_none());
+    }
+
+    #[tokio::test]
+    async fn shared_form_buttons_match_keyboard_submit_and_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("remove-me.txt"), "fixture").unwrap();
+        let mut app = fixture(dir.path());
+        let paint = |app: &mut App| {
+            let mut term = ratatui::Terminal::new(
+                ratatui::backend::TestBackend::new(90, 22)).unwrap();
+            term.draw(|frame| draw_tools(
+                frame, Rect::new(5, 5, 78, 12), app, workspace_palette()
+            )).unwrap();
+            term.backend().buffer().content().iter()
+                .map(|cell| cell.symbol()).collect::<String>()
+        };
+        let click = |app: &mut App, target: Rect| {
+            app.handle_tools_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: target.x + target.width / 2, row: target.y,
+                modifiers: KeyModifiers::NONE,
+            });
+        };
+        // Canceling a destructive confirmation must not invoke a job.
+        let path = dir.path().join("remove-me.txt");
+        app.tools.marks.files.insert(path.clone());
+        app.run_command(tools::Command::Delete);
+        let screen = paint(&mut app);
+        assert!(screen.contains("Delete items") && screen.contains("Enter delete"), "{screen}");
+        assert!(screen.contains("Esc cancel"));
+        let cancel = app.tools.panel.as_ref().unwrap().form_cancel;
+        let submit = app.tools.panel.as_ref().unwrap().form_submit;
+        assert!(cancel.width > 0 && submit.width > 0);
+        click(&mut app, cancel);
+        assert!(app.tools.pending_task.is_none());
+        assert!(path.exists());
+        assert!(app.tools.panel.is_none());
+
+        // Prompt mouse Submit calls exactly the same validation as Enter.
+        app.prompt(tools::PromptAction::OpenWorkspace, "Open workspace",
+            String::new(), "Enter a directory path");
+        let screen = paint(&mut app);
+        assert!(screen.contains("Path") && screen.contains("Enter open"));
+        let prompt_submit = app.tools.panel.as_ref().unwrap().form_submit;
+        click(&mut app, prompt_submit);
+        assert!(app.tools.panel.as_ref().unwrap().message.contains("required"));
+        let screen = paint(&mut app);
+        assert!(screen.contains("Directory path is required"));
+        let prompt_cancel = app.tools.panel.as_ref().unwrap().form_cancel;
+        click(&mut app, prompt_cancel);
+        assert!(app.tools.panel.is_none());
+
+        // The destructive action still requires an explicit confirmation,
+        // and mouse Confirm runs exactly the same queued write as Enter.
+        app.run_command(tools::Command::Delete);
+        paint(&mut app);
+        let confirmed = app.tools.panel.as_ref().unwrap().form_submit;
+        click(&mut app, confirmed);
+        assert!(app.tools.pending_task.is_some(),
+            "mouse confirmation must start the normal checked write");
+        for _ in 0..80 {
+            app.poll_tools();
+            if !path.exists() { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(!path.exists(), "the confirmed fixture deletion must finish");
+    }
+
+    #[test]
+    fn rename_form_is_compact_with_focused_field_and_semantic_actions() {
+        let file = std::path::PathBuf::from("old-name.rs");
+        let mut panel = tools::Panel::new(
+            tools::PanelKind::Prompt(tools::PromptAction::Rename(file)), "Rename");
+        panel.input = tui_input::Input::new("src/new-name.rs".into());
+        panel.detail = "New path relative to workspace · no overwrite".into();
+        let palette = workspace_palette();
+        let size = dialog::DialogSize::tools(&panel, (112, 30));
+        assert_eq!(size.width, 53);
+        assert_eq!(size.height, 7);
+        let area = Rect::new((112 - size.width) / 2, (30 - size.height) / 2,
+            size.width, size.height);
+        let mut term = ratatui::Terminal::new(
+            ratatui::backend::TestBackend::new(112, 30)).unwrap();
+        term.draw(|f| dialog::draw_form(f, area, &mut panel,
+            palette, dialog::FormMode::Prompt)).unwrap();
+        let display = term.backend().buffer().content().iter()
+            .map(|c| c.symbol()).collect::<String>();
+        for label in ["Rename", "New path", "src/new-name.rs",
+            "New path relative to workspace", "Esc cancel", "Enter rename"] {
+            assert!(display.contains(label), "missing {label}: {display}");
+        }
+        assert!(panel.form_cancel.width > 0 && panel.form_submit.width > 0);
+        assert!(area.contains(ratatui::layout::Position::new(
+            panel.form_submit.x, panel.form_submit.y)));
+        let buf = term.backend().buffer();
+        assert_eq!(buf[(panel.form_submit.x + 1, panel.form_submit.y)].fg, palette.accent);
+        assert_eq!(buf[(panel.form_cancel.x + 1, panel.form_cancel.y)].fg, palette.accent);
+        assert_eq!(buf[(area.x + 2, area.y + 3)].symbol(), "›",
+            "keyboard focus is a caret, not a second bordered text field");
+        assert_eq!(buf[(area.x + 4, area.y + 3)].bg, palette.bg,
+            "native TUI forms should not simulate filled web inputs");
+    }
+
+    #[test]
+    fn form_variants_share_layout_and_have_specific_primary_labels() {
+        for (kind, title, action) in [
+            (tools::PanelKind::Prompt(tools::PromptAction::NewFile),
+                "New file", "Enter create"),
+            (tools::PanelKind::Prompt(tools::PromptAction::OpenWorkspace),
+                "Open workspace", "Enter open"),
+        ] {
+            let mut panel = tools::Panel::new(kind, title);
+            panel.detail = "Path relative to workspace".into();
+            let size = dialog::DialogSize::tools(&panel, (72, 24));
+            let mut term = ratatui::Terminal::new(
+                ratatui::backend::TestBackend::new(72, 24)).unwrap();
+            term.draw(|f| dialog::draw_form(
+                f, Rect::new(3, 3, size.width, size.height),
+                &mut panel, workspace_palette(), dialog::FormMode::Prompt,
+            )).unwrap();
+            let display = term.backend().buffer().content().iter()
+                .map(|c| c.symbol()).collect::<String>();
+            assert!(display.contains(action));
+        }
+    }
+
+    #[test]
+    fn form_dialog_narrow_and_long_instructions_preserve_button_bounds() {
+        let mut panel = tools::Panel::new(
+            tools::PanelKind::Prompt(tools::PromptAction::OpenWorkspace), "Open workspace");
+        panel.detail = "长说明，输入路径后确认。".repeat(30);
+        for (w, h) in [(100, 30), (45, 15), (25, 8), (8, 3)] {
+            let size = dialog::DialogSize::tools(&panel, (w, h));
+            assert!(size.width <= w && size.height <= h);
+            let mut terminal = ratatui::Terminal::new(
+                ratatui::backend::TestBackend::new(w, h)).unwrap();
+            let area = Rect::new((w - size.width) / 2, (h - size.height) / 2,
+                size.width, size.height);
+            terminal.draw(|frame| dialog::draw_form(frame, area, &mut panel,
+                workspace_palette(), dialog::FormMode::Prompt)).unwrap();
+            if panel.form_submit.width > 0 {
+                assert!(area.contains(ratatui::layout::Position::new(
+                    panel.form_submit.x, panel.form_submit.y)));
+                assert!(area.contains(ratatui::layout::Position::new(
+                    panel.form_cancel.x, panel.form_cancel.y)));
+            }
+        }
     }
 
     #[tokio::test]
@@ -922,59 +1158,173 @@
     }
 
     #[tokio::test]
-    async fn files_and_git_tabs_show_active_state_and_accept_mouse_and_function_keys() {
+    async fn collapsing_sidebar_expands_preview_without_removing_activity_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let visible = fixture(dir.path());
+        let mut collapsed = fixture(dir.path());
+        collapsed.set_sidebar_visible(false);
+        let visible_buffer = render_frames(element!(Workspace(initial: Some(visible))), 120, 30, 3);
+        let collapsed_buffer = render_frames(element!(Workspace(initial: Some(collapsed))), 120, 30, 3);
+        let line = |buffer: &ratatui::buffer::Buffer| (0..120)
+            .map(|x| buffer[(x, 1)].symbol()).collect::<String>();
+        let before = line(&visible_buffer);
+        let after = line(&collapsed_buffer);
+        assert!(before.contains("EXPLORER"), "{before}");
+        assert!(!after.contains("EXPLORER"), "{after}");
+        assert!(before.contains("Preview") && after.contains("Preview"));
+        assert!(after.find("Preview").unwrap() + 20 < before.find("Preview").unwrap(),
+            "Preview should reclaim Sidebar columns: {before:?} => {after:?}");
+        assert_eq!(collapsed_buffer[(2, 2)].symbol(), forge_ui::Icons::activity(forge_ui::ActivityIcon::Files), "Activity Bar must remain");
+    }
+
+    #[tokio::test]
+    async fn sidebar_drag_and_toggle_preserve_files_and_git_scroll_state() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = fixture(dir.path());
-        let mut terminal =
-            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 20)).unwrap();
-        terminal
-            .draw(|frame| {
-                draw_workspace_header(frame, Rect::new(0, 0, 90, 2), &mut app, workspace_palette())
-            })
-            .unwrap();
-        let screen = text(terminal.backend().buffer());
-        assert!(screen.contains("F1  Files") && screen.contains("F2  Git"));
+        app.files.scroll = 7;
+        app.scm.scroll_scm = 4;
+        app.session.layout.activity = Rect::new(0, 1, 4, 23);
+        app.session.layout.sidebar_divider = Rect::new(34, 1, 1, 23);
+        app.session.layout.window = Rect::new(0, 0, 120, 30);
+        let mouse = |kind, column| MouseEvent { kind, column, row: 10, modifiers: KeyModifiers::NONE };
+        app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 34));
+        assert!(app.session.sidebar_resizing);
+        app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 44));
+        assert_eq!(app.session.sidebar_width, 40);
+        app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 44));
+        assert!(!app.session.sidebar_resizing);
+        app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL | KeyModifiers::ALT));
+        assert_eq!(app.session.sidebar_width, 38);
+        app.handle_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL | KeyModifiers::ALT));
+        assert_eq!(app.session.sidebar_width, 40);
+        app.set_sidebar_visible(false);
+        assert_eq!(app.session.focus, PaneFocus::Preview);
+        assert!(footer_shortcuts(&app, 120).iter().any(|s| s.key == "Ctrl+B"));
+        assert_eq!(app.files.scroll, 7);
+        assert_eq!(app.scm.scroll_scm, 4);
+        app.set_sidebar_visible(true);
+        assert_eq!(app.session.sidebar_width, 40);
+        assert_eq!(app.files.scroll, 7);
+        assert_eq!(app.scm.scroll_scm, 4);
+        // A collapsed panel must not capture Tab focus or keyboard scrolling.
+        app.set_sidebar_visible(false);
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.session.focus, PaneFocus::Preview);
+    }
+
+    #[tokio::test]
+    async fn sidebar_header_collapse_button_uses_the_same_hit_region_as_hover() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 22)).unwrap();
+        terminal.draw(|frame| {
+            activity_bar::draw_activity_bar(frame, Rect::new(0, 1, 5, 19), &mut app, workspace_palette());
+            activity_bar::draw_sidebar_heading(frame, Rect::new(5, 1, 30, 19), &mut app, workspace_palette());
+        }).unwrap();
+        let collapse = app.session.layout.sidebar_toggle;
+        assert_eq!(app.activity_hits.action_at(collapse.x, collapse.y), Some(ActivityAction::Collapse));
+        app.handle_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left),
+            column: collapse.x, row: collapse.y, modifiers: KeyModifiers::NONE });
+        assert!(app.session.sidebar_visible, "press alone does not navigate");
+        app.handle_mouse(MouseEvent { kind: MouseEventKind::Up(MouseButton::Left),
+            column: collapse.x, row: collapse.y, modifiers: KeyModifiers::NONE });
+        assert!(!app.session.sidebar_visible);
+        assert_eq!(app.session.focus, PaneFocus::Preview);
+    }
+
+    #[tokio::test]
+    async fn activity_bar_hover_and_search_settings_are_separate_from_terminal_pty() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 22)).unwrap();
+        let paint = |app: &mut App, term: &mut ratatui::Terminal<ratatui::backend::TestBackend>| {
+            term.draw(|frame| activity_bar::draw_activity_bar(
+                frame, Rect::new(0, 1, 5, 19), app, workspace_palette())).unwrap();
+        };
+        let moved = |app: &mut App, rect: Rect| app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Moved, column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE
+        });
+        let click = |app: &mut App, rect: Rect| {
+            app.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
+            });
+            app.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
+            });
+        };
+        paint(&mut app, &mut terminal);
+        let git = app.session.layout.git_tab;
+        let search = app.session.layout.search_tab;
+        let settings = app.session.layout.settings_tab;
+        let terminal_icon = app.session.layout.terminal_activity;
+        moved(&mut app, git);
+        paint(&mut app, &mut terminal);
+        assert_eq!(terminal.backend().buffer()[(git.x,git.y)].bg, workspace_palette().selection);
+        assert!(!app.in_git_sidebar(), "hover does not switch activity");
+        moved(&mut app, Rect::new(50,0,1,1));
+        paint(&mut app, &mut terminal);
+        assert_eq!(terminal.backend().buffer()[(git.x,git.y)].bg, workspace_palette().bg);
+        click(&mut app, search);
+        assert!(app.tools.panel.as_ref().is_some_and(|p| matches!(p.kind, tools::PanelKind::Content)));
+        app.tools.panel = None;
+        click(&mut app, settings);
+        assert!(app.tools.panel.as_ref().is_some_and(|p| matches!(p.kind, tools::PanelKind::Settings)));
+        app.tools.panel = None;
+        click(&mut app, terminal_icon);
+        let session_id = app.terminal.as_ref().expect("terminal opened").id;
+        assert!(app.terminal.as_ref().unwrap().visible);
+        click(&mut app, terminal_icon);
+        assert!(!app.terminal.as_ref().unwrap().visible);
+        assert_eq!(app.terminal.as_ref().unwrap().id, session_id, "terminal must not restart when hidden");
+    }
+
+    #[tokio::test]
+    async fn activity_bar_switches_and_collapses_sidebar_without_losing_shortcuts() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = fixture(dir.path());
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 20)).unwrap();
+        let draw = |app: &mut App, terminal: &mut ratatui::Terminal<ratatui::backend::TestBackend>| {
+            terminal.draw(|frame| {
+                activity_bar::draw_activity_bar(frame, Rect::new(0, 1, 5, 16), app, workspace_palette());
+            }).unwrap();
+        };
+        let click = |app: &mut App, rect: Rect| {
+            app.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
+            });
+            app.handle_mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
+            });
+        };
+        draw(&mut app, &mut terminal);
         let files = app.session.layout.files_tab;
         let git = app.session.layout.git_tab;
-        assert_eq!(
-            terminal.backend().buffer()[(files.x, files.y)].bg,
-            workspace_palette().selection
-        );
-        app.handle_mouse_content(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: git.x + 1,
-            row: git.y,
-            modifiers: KeyModifiers::NONE,
-        });
+        assert_eq!(terminal.backend().buffer()[(files.x, files.y)].bg, workspace_palette().selection);
+        click(&mut app, git);
         assert!(app.in_git_sidebar());
-        terminal
-            .draw(|frame| {
-                draw_workspace_header(frame, Rect::new(0, 0, 90, 2), &mut app, workspace_palette())
-            })
-            .unwrap();
-        assert_eq!(
-            terminal.backend().buffer()[(git.x, git.y)].bg,
-            workspace_palette().selection
-        );
-        assert_ne!(
-            terminal.backend().buffer()[(files.x, files.y)].bg,
-            workspace_palette().selection
-        );
-        app.handle_mouse_content(MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: files.x + 1,
-            row: files.y,
-            modifiers: KeyModifiers::NONE,
-        });
-        assert!(!app.in_git_sidebar());
+        assert!(app.session.sidebar_visible);
+        draw(&mut app, &mut terminal);
+        assert_eq!(terminal.backend().buffer()[(git.x, git.y)].bg, workspace_palette().selection);
+        click(&mut app, git); // clicking active entry collapses Sidebar
+        assert!(!app.session.sidebar_visible);
+        assert_eq!(app.session.focus, PaneFocus::Preview);
         app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+        assert!(app.session.sidebar_visible);
         assert!(app.in_git_sidebar());
         app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
         assert!(!app.in_git_sidebar());
-        assert!(app
-            .context_shortcuts()
-            .iter()
-            .all(|s| s.key != "s" && s.key != "u"));
+        assert!(app.session.sidebar_visible);
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert!(!app.session.sidebar_visible);
+        app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.session.focus, PaneFocus::Preview);
+        app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert!(app.session.sidebar_visible);
+        assert!(app.context_shortcuts().iter().all(|s| s.key != "s" && s.key != "u"));
     }
 
     #[tokio::test]
@@ -1065,14 +1415,10 @@
                         )
                         .unwrap()
                 } else {
-                    scm_jump_to_column(
-                        &app.scm_rows(),
-                        if side == DiffSide::Unstaged {
-                            StagingColumn::Unstaged
-                        } else {
-                            StagingColumn::Staged
-                        },
-                    )
+                    app.scm_rows()
+                        .iter()
+                        .position(|r| matches!(r, ScmRow::Change { column, .. } if column.side() == side))
+                        .expect("test must focus an actionable change row")
                 };
                 app.preview_state.preview_mode = PreviewMode::Diff;
                 app.preview_state.hunk_index = Some(0);
@@ -1086,10 +1432,19 @@
                         text: "@@ -1 +1 @@".into(),
                     }],
                 });
-                let buffer = render_frames(element!(Workspace(initial: Some(app))), width, 20, 3);
-                let footer: String = (0..width).map(|x| buffer[(x, 19)].symbol()).collect();
+                // Draw just the footer: running Workspace's async refresh
+                // would replace the synthetic Git snapshot before the assertion.
+                let mut terminal = ratatui::Terminal::new(
+                    ratatui::backend::TestBackend::new(width, 3)).unwrap();
+                terminal.draw(|frame| {
+                    footer::draw_workspace_footer(
+                        frame, Rect::new(0, 0, width, 3), &app, workspace_palette());
+                }).unwrap();
+                let footer: String = (0..width)
+                    .map(|x| terminal.backend().buffer()[(x, 2)].symbol())
+                    .collect();
                 assert!(
-                    footer.contains(expected) && footer.contains("? Help"),
+                    footer.contains(expected) && (width < 100 || footer.contains("F5 Help")),
                     "{width}: {footer}"
                 );
                 assert!(!footer.contains("s/u") && !footer.contains("sync"));

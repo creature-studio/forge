@@ -57,8 +57,8 @@ pub(super) fn quick_guide(p: Palette, width: usize) -> Vec<Line<'static>> {
         guide_section(&mut out, "01   QUICK START", p);
         for (step, title, hint) in [
             ("1", "Browse", "F1 · j/k · Enter"),
-            ("2", "Review Git", "F2 · Tab · n/N"),
-            ("3", "Stage", "s · u"),
+            ("2", "Review Git", "F2 · Tab · n/Alt+N"),
+            ("3", "Stage", "Alt+A · Alt+U"),
             ("4", "Commit", "c · Enter"),
         ] {
             out.push(Line::from(vec![Span::styled(format!("  {step}  "), Style::default().fg(p.info)),
@@ -68,21 +68,21 @@ pub(super) fn quick_guide(p: Palette, width: usize) -> Vec<Line<'static>> {
         }
         guide_section(&mut out, "02   LEARN MORE", p);
         out.push(Line::styled("  F3 Markdown · F6 Blame · F7 Peek", Style::default().fg(p.fg_dim)));
-        out.push(Line::styled("  F4 Shortcuts · : Commands", Style::default().fg(p.fg_dim)));
+        out.push(Line::styled("  F4 Shortcuts · Ctrl+K Commands", Style::default().fg(p.fg_dim)));
         out.push(Line::styled("  Tab → Full Reference", Style::default().fg(p.info)));
         return out;
     }
     guide_section(&mut out, "01   QUICK START", p);
     guide_step(&mut out, "1", "Browse files", "F1 · j/k · Enter · Ctrl-P", "Navigate, open, find files", p);
-    guide_step(&mut out, "2", "Review changes", "F2 · Tab · n/N", "Select a file and inspect its diff", p);
-    guide_step(&mut out, "3", "Stage / unstage", "s · u", "Stage the selected file or hunk", p);
+    guide_step(&mut out, "2", "Review changes", "F2 · Tab · n/Alt+N", "Select a file and inspect its diff", p);
+    guide_step(&mut out, "3", "Stage / unstage", "Alt+A · Alt+U", "Stage the selected file or hunk", p);
     guide_step(&mut out, "4", "Commit", "c · Enter", "Review staged changes and commit", p);
     guide_section(&mut out, "02   ESSENTIAL SHORTCUTS", p);
     for (name, keys, description) in [
         ("FILES", "Ctrl-F · Ctrl-E", "Find inside a file · Edit"),
         ("PREVIEW", "F3 · F6 · F7", "Markdown · Blame · Change Peek"),
-        ("GIT", "s/u · n/N · c", "Stage · Hunks · Commit"),
-        ("TOOLS", "F4 · : · ,", "Shortcuts · Commands · Settings"),
+        ("GIT", "Alt+A/U · n/Alt+N · c", "Stage · Hunks · Commit"),
+        ("TOOLS", "F4 · Ctrl+K · F9", "Shortcuts · Commands · Settings"),
     ] {
         out.push(Line::from(vec![
             Span::styled(format!("  {name:<10}"), Style::default().fg(p.info).add_modifier(Modifier::BOLD)),
@@ -93,9 +93,12 @@ pub(super) fn quick_guide(p: Palette, width: usize) -> Vec<Line<'static>> {
     guide_section(&mut out, "03   COMMON WORKFLOWS", p);
     for (task, route) in [
         ("Review a file", "Files → Select → Preview"),
-        ("Stage a change", "F2 → Changes → s"),
+        ("Stage a change", "F2 → Changes → Alt+A"),
         ("Inspect history", "Git → History → Enter"),
-        ("Explain a line", "Click source line → F6"),
+        ("Explain a line", "Navigate preview → F6"),
+        ("Copy preview text", "Tab → Shift+Arrows → Ctrl+C"),
+        ("Commit file link", "Git commit → Tab → Tab → Enter"),
+        ("Overview markers", "Preview → Alt+Up/Down (if enabled)"),
     ] {
         out.push(Line::from(vec![
             Span::styled(format!("  {task:<20}"), Style::default().fg(Color::White)),

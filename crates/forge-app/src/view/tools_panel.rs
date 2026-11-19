@@ -11,27 +11,41 @@ pub(super) fn draw_tools(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: 
         draw_settings(frame, area, model, p);
         return;
     }
+    let escape_label = model.tools_escape_label();
     let loading = model.tools.pending_read.is_some();
     let context = model.tools.content_context.as_ref();
     let context_path = model.tools.context_path.as_deref();
     let Some(panel) = &mut model.tools.panel else {
         return;
     };
+    if let Some(mode) = dialog::FormMode::from_panel(&panel.kind) {
+        dialog::draw_form(frame, area, panel, p, mode);
+        return;
+    }
+    if matches!(panel.kind, tools::PanelKind::Text) {
+        dialog::draw_result(frame, area, panel, p);
+        return;
+    }
     panel.area = area;
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" {} ", panel.title))
-        .title_bottom(" Esc Back · ↑/↓,PgUp/PgDn List · Ctrl+PgUp/PgDn Details ")
-        .style(Style::default().fg(p.fg).bg(p.bg));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    panel.form_cancel = Rect::default();
+    panel.form_submit = Rect::default();
+    let border_help = if matches!(panel.kind, tools::PanelKind::Content) {
+        format!(" Esc {escape_label} · ↑/↓ Results · Ctrl+PgUp/PgDn Context ")
+    } else if panel.rows.is_empty() {
+        format!(" Esc {escape_label} ")
+    } else {
+        format!(" ↑/↓ Select · Enter Open · Esc {escape_label} ")
+    };
+    let inner = dialog::draw_shell(frame, area, &panel.title, &border_help, p);
     let input_height = if panel.is_input() { 2 } else { 0 };
     let list_height = if panel.rows.is_empty() {
         0
-    } else if matches!(panel.kind, tools::PanelKind::Commands) {
-        // Command search favors visible matches, not a half-screen blank detail.
-        inner.height.saturating_sub(input_height + 2).max(1)
+    } else if matches!(panel.kind, tools::PanelKind::Commands | tools::PanelKind::Files |
+        tools::PanelKind::Workspaces | tools::PanelKind::Git(_)) {
+        // Compact dialogs devote space to the available choices rather than
+        // a large empty context/details region.
+        inner.height.saturating_sub(input_height + 3)
+            .min(panel.rows.len().min(u16::MAX as usize) as u16).max(1)
     } else {
         (inner.height.saturating_sub(input_height + 3) / 2).max(1)
     };
@@ -368,17 +382,12 @@ pub(super) fn draw_content_search(
 }
 
 pub(super) fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette) {
+    let escape_label = model.tools_escape_label();
     let Some(panel) = model.tools.panel.as_mut() else {
         return;
     };
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Settings ")
-        .title_bottom(" Up/Down Select · Enter/Space Toggle · Esc Close ")
-        .style(Style::default().fg(p.fg).bg(p.bg));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let border_help = format!(" Up/Down Select · Enter/Space Toggle · Esc {escape_label} ");
+    let inner = dialog::draw_shell(frame, area, "Settings", &border_help, p);
     panel.area = area;
     panel.list_area = Rect::default();
     if inner.height < 3 || inner.width < 10 {
