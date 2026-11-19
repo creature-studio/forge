@@ -22,7 +22,7 @@ use forge_ui::{
     expand_ancestors_for_path, file_list_items, find_parent_row, find_scm_parent_row, flatten_tree,
     init_icons_from_env, scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode,
     staging_items, sticky_index_at, ActivityTab, ContextAction, ContextMenu, ContextTarget,
-    ScrollbarDrag, VerticalScrollbar, HoverTargets,
+    HorizontalScrollbar, ScrollbarDrag, VerticalScrollbar, HoverTargets,
     MarkdownPreview, PaneFocus, PaneLayout, ScmRow, SplitRowsCache, StagingColumn, TextLang,
     TextRowsCache, TreeRow,
 };
@@ -34,6 +34,8 @@ mod inline_diff;
 mod preview_selection;
 mod pending_request;
 mod input;
+mod input_router;
+mod input_trace;
 use preview_selection::PreviewSelection;
 mod editor;
 mod git_sync_badge;
@@ -135,7 +137,6 @@ struct FilesState {
     selected: usize,
     scroll: usize,
     follow_selection: bool,
-    restore_select: Option<String>,
     external_anchor: Option<(PathBuf, usize)>,
     /// Keep a deliberately revealed path and its ancestors visible even
     /// through extension/status/exclusion filters.
@@ -173,6 +174,8 @@ struct PreviewState {
     markdown_code: bool,
     markdown: MarkdownPreview,
     selection: PreviewSelection,
+    /// Keyboard-focused commit-detail link (not a mouse hover target).
+    commit_link_focus: Option<usize>,
     text_rows: TextRowsCache,
     /// Source file line to seek once Code rows have been measured for width.
     pending_source_line: Option<usize>,
@@ -211,7 +214,15 @@ struct SessionState {
     help_overview_rect: ratatui::layout::Rect,
     help_reference_rect: ratatui::layout::Rect,
     activity: ActivityTab,
+    /// Activity Bar remains visible even when this panel is collapsed.
+    sidebar_visible: bool,
+    sidebar_width: u16,
+    sidebar_resizing: bool,
+    /// Activity Bar click capture: activation requires matching press and release.
+    activity_pressed: Option<ActivityAction>,
     commit_open: bool,
+    commit_confirming: bool,
+    commit_cancel_pending: bool,
     context_menu: Option<ContextMenu>,
     should_quit: bool,
     layout: PaneLayout,
@@ -219,7 +230,10 @@ struct SessionState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScrollbarTarget { Sidebar, Preview }
+enum ScrollbarTarget { Sidebar, Preview, PreviewHorizontal }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ActivityAction { Files, Git, Search, Terminal, Settings, Collapse }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TerminalTabAction {
@@ -255,6 +269,9 @@ struct App {
     /// Exact hit targets for controls painted in the Terminal header.
     terminal_tab_hits: HoverTargets<TerminalTabAction>,
     terminal_tab_bar: ratatui::layout::Rect,
+    activity_hits: HoverTargets<ActivityAction>,
+    /// Clickable paths in the historical commit details (visible rows only).
+    commit_file_links: HoverTargets<usize>,
     terminal_help_return: bool,
     terminal_notify: std::sync::Arc<tokio::sync::Notify>,
     terminal_frame_epoch: u64,
@@ -501,7 +518,6 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             selected: 0,
             scroll: 0,
             follow_selection: true,
-            restore_select: None,
             external_anchor: None,
             revealed_path: None,
             pending_lists: Vec::new(),
@@ -530,6 +546,7 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             markdown_code: false,
             markdown: MarkdownPreview::default(),
             selection: PreviewSelection::default(),
+            commit_link_focus: None,
             text_rows: TextRowsCache::default(),
             pending_source_line: None,
             pending_overview_line: None,
@@ -561,7 +578,13 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             help_overview_rect: ratatui::layout::Rect::default(),
             help_reference_rect: ratatui::layout::Rect::default(),
             activity: ActivityTab::Files,
+            sidebar_visible: true,
+            sidebar_width: 30,
+            sidebar_resizing: false,
+            activity_pressed: None,
             commit_open: false,
+            commit_confirming: false,
+            commit_cancel_pending: false,
             context_menu: None,
             should_quit: false,
             layout: PaneLayout::default(),
@@ -577,6 +600,8 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         terminal_tabs: Vec::new(),
         terminal_tab_hits: HoverTargets::default(),
         terminal_tab_bar: ratatui::layout::Rect::default(),
+        activity_hits: HoverTargets::default(),
+        commit_file_links: HoverTargets::default(),
         terminal_help_return: false,
         terminal_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         terminal_frame_epoch: 0,
@@ -820,10 +845,7 @@ impl App {
     /// `h` / Left: collapse expanded folder, else select parent, else leave Git.
     fn scm_tree_back(&mut self) {
         self.scm.follow_selection = true;
-        let Some(row) = self.selected_scm_row() else {
-            self.leave_git_sidebar();
-            return;
-        };
+        let Some(row) = self.selected_scm_row() else { return; };
         match row {
             ScmRow::Folder {
                 column,
@@ -854,11 +876,9 @@ impl App {
                         self.services.jobs.cancel_key("git:diff");
                         self.preview_state.pending_diff = None;
                     }
-                } else {
-                    self.leave_git_sidebar();
                 }
             }
-            ScmRow::Section { .. } => self.leave_git_sidebar(),
+            ScmRow::Section { .. } => {}
             ScmRow::HistorySection { .. } => self.history.expanded = false,
             ScmRow::Commit { .. } | ScmRow::CommitFolder { .. } | ScmRow::CommitFile { .. } => {
                 self.collapse_history_row(self.scm.scm_selected)
@@ -1637,6 +1657,57 @@ impl App {
     }
 
     /// Advance a focus-ruler jump, loading additional pages only as needed.
+    /// Jump between real Git or Find marker positions without a mouse.
+    /// Prefer Find hits when a Find session is active, matching the ruler's
+    /// search-over-Git priority. No marker means no navigation.
+    fn jump_overview_marker(&mut self, forward: bool) {
+        if !self.config.show_overview_ruler || !matches!(
+            self.preview_state.preview_mode, PreviewMode::File
+        ) {
+            return;
+        }
+        let mut positions = Vec::new();
+        if let Some((_, marks)) = self.overview_git_data() {
+            // An edited file may have thousands of consecutive staged lines.
+            // Jump once per contiguous marked range/color, not every line.
+            let mut sorted = marks.to_vec();
+            sorted.sort_by_key(|(line, _)| *line);
+            let mut previous_by_color: Vec<(ratatui::style::Color, usize)> = Vec::new();
+            for (line, color) in sorted {
+                if line == 0 { continue; }
+                if let Some((_, previous)) =
+                    previous_by_color.iter_mut().find(|(c, _)| *c == color)
+                {
+                    if line > previous.saturating_add(1) {
+                        positions.push(line);
+                    }
+                    *previous = line;
+                } else {
+                    positions.push(line);
+                    previous_by_color.push((color, line));
+                }
+            }
+        }
+        if self.preview_state.find.open && !self.preview_state.find.query.is_empty() {
+            positions.extend(self.preview_state.find.matches.iter().map(|hit| hit.line));
+        }
+        positions.retain(|line| *line > 0);
+        positions.sort_unstable();
+        positions.dedup();
+        let current = self.preview_source_line();
+        let target = if forward {
+            positions.into_iter().find(|&line| line > current)
+        } else {
+            positions.into_iter().rev().find(|&line| line < current)
+        };
+        if let Some(target) = target {
+            self.preview_state.pending_overview_line = Some(target);
+            self.advance_overview_jump();
+        } else {
+            self.session.status = "No further overview markers".into();
+        }
+    }
+
     fn advance_overview_jump(&mut self) {
         let Some(target) = self.preview_state.pending_overview_line else { return; };
         let Some(preview) = self.preview_state.preview.as_ref() else { return; };
@@ -1864,7 +1935,7 @@ impl App {
                         self.open_tools(tools::PanelKind::Text);
                         if let Some(panel) = &mut self.tools.panel {
                             panel.title = "Remote operation failed".into();
-                            panel.detail=format!("{message}\n\nUse : Commands → Conflicts to resolve conflicts. Pull uses --ff-only and refuses divergent histories.");
+                            panel.detail=format!("{message}\n\nUse Ctrl+K Commands → Conflicts to resolve conflicts. Pull uses --ff-only and refuses divergent histories.");
                         }
                         self.request_status();
                     }
@@ -1898,19 +1969,6 @@ impl App {
                         .position(|r| r.entry.path == target)
                     {
                         self.files.selected = index;
-                    }
-                }
-
-                if path == self.files.tree_root {
-                    if let Some(name) = self.files.restore_select.take() {
-                        if let Some(i) = self
-                            .files
-                            .visible
-                            .iter()
-                            .position(|r| r.depth == 0 && r.entry.name == name)
-                        {
-                            self.files.selected = i;
-                        }
                     }
                 }
 
@@ -2071,6 +2129,18 @@ impl App {
                     }
                 }
                 self.clamp_scm_selection();
+                // A staged file can move out from under an open diff. Do not
+                // leave keyboard focus in an empty preview whose selected
+                // row is now a group heading with no actionable file.
+                if self.in_git_sidebar()
+                    && self.session.focus == PaneFocus::Preview
+                    && matches!(self.preview_state.preview_mode, PreviewMode::Diff)
+                    && self.selected_scm_entry().is_none()
+                    && matches!(self.selected_scm_row(),
+                        Some(ScmRow::Section { .. } | ScmRow::Folder { .. }))
+                {
+                    self.session.focus = PaneFocus::List;
+                }
                 if self.in_git_sidebar() && self.selected_scm_entry().is_some() {
                     self.request_diff_for_scm_selection();
                 } else if self.in_git_sidebar() {
@@ -2178,15 +2248,12 @@ impl App {
         self.session.context_menu = None;
     }
 
-    fn toggle_scm_sidebar(&mut self) {
-        if self.in_git_sidebar() {
-            self.leave_git_sidebar();
-        } else {
-            self.enter_git_sidebar();
-        }
-    }
-
+    #[track_caller]
     fn enter_git_sidebar(&mut self) {
+        if !self.in_git_sidebar() {
+            let caller = std::panic::Location::caller();
+            input_trace::log(&format!("ENTER_GIT {}:{}", caller.file(), caller.line()));
+        }
         self.close_file_find();
         self.tools.marks.clear();
         if !self.in_git_sidebar() {
@@ -2754,7 +2821,7 @@ impl App {
         };
         let hunks = diff.hunks();
         let Some(idx) = target.hunk else {
-            self.session.status = "no hunk selected (n/N)".into();
+            self.session.status = "no hunk selected (n/Alt+N)".into();
             return;
         };
         let Some(hunk) = hunks.get(idx).cloned() else {

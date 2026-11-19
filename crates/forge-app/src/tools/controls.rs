@@ -15,7 +15,7 @@ impl App {
             self.back_tools();
             return;
         }
-        if key.code == KeyCode::F(4) {
+        if key.code == KeyCode::F(4) && key.modifiers.is_empty() {
             self.keys.open = true;
             return;
         }
@@ -123,6 +123,11 @@ impl App {
             if panel.input.value() != old && !matches!(kind, PanelKind::Prompt(_)) {
                 self.reload_tools();
             }
+            return;
+        }
+        // Do not reinterpret an unhandled Ctrl/Alt chord as a plain letter
+        // action (e.g. Ctrl+Shift+W must not trigger a Worktree action).
+        if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
             return;
         }
         self.tool_action_key(kind, selected, key.code);

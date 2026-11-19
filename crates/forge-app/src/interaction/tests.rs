@@ -82,7 +82,18 @@ async fn show_diff(app: &mut App, side: DiffSide) {
 }
 
 fn press(app: &mut App, key: char) {
-    app.handle_key(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+    // Exercise the physical default bindings instead of bypassing key remap.
+    let (code, mods) = match key {
+        's' => ('a', KeyModifiers::ALT), // Git add/stage
+        'u' => ('u', KeyModifiers::ALT), // Git unstage
+        '?' => ('?', KeyModifiers::NONE), // Help-local close remains supported
+        other => (other, KeyModifiers::NONE),
+    };
+    if key == '?' && !app.session.help_open {
+        app.handle_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+    } else {
+        app.handle_key(KeyEvent::new(KeyCode::Char(code), mods));
+    }
 }
 
 async fn finish_write(app: &mut App) {
@@ -318,7 +329,7 @@ async fn invalid_loading_stale_and_empty_targets_never_start_writes() {
         .unwrap();
     press(&mut app, 'u');
     assert!(app.scm.pending_write.is_none());
-    assert!(app.context_description().contains("s Stage"));
+    assert!(app.context_description().contains("Stage"));
 }
 
 #[tokio::test]

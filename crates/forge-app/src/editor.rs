@@ -29,6 +29,12 @@ impl EditingState {
     pub fn saving(&self) -> bool {
         self.pending_save.is_some()
     }
+    pub fn exit_confirmation(&self) -> bool {
+        self.view.as_ref().is_some_and(|v| v.confirm_close)
+    }
+    pub fn has_selection(&self) -> bool {
+        self.view.as_ref().is_some_and(|v| v.selection().is_some())
+    }
 }
 
 /// Bounded syntax cache: cursor and selection changes do not reparse code.
@@ -357,6 +363,16 @@ impl App {
         self.close_tools();
         self.dismiss_menu();
         self.session.write_status = None;
+
+        // Editing a worktree file from Git is navigation into Files, not an
+        // editor modal layered over a Git Diff. Otherwise Esc closes the
+        // editor and unexpectedly reveals the Git Activity underneath.
+        // Preserve Git selection/history for an explicit F2 return.
+        if self.in_git_sidebar() && path.is_file() {
+            self.leave_git_sidebar();
+            self.tools.return_focus = Some(PaneFocus::List);
+            self.reveal_file(path.clone(), line);
+        }
         self.editing.return_focus = Some(self.session.focus);
         let root = self.files.tree_root.clone();
         self.editing.pending_load = Some(self.services.jobs.spawn(
@@ -477,7 +493,7 @@ impl App {
         }
     }
     pub(super) fn handle_editor_key(&mut self, mut key: KeyEvent) {
-        if key.code == KeyCode::F(4) {
+        if key.code == KeyCode::F(4) && key.modifiers.is_empty() {
             self.keys.open = true;
             return;
         }
@@ -519,6 +535,12 @@ impl App {
                 KeyCode::Enter | KeyCode::Esc => view.confirm_close = false,
                 _ => {}
             }
+            return;
+        }
+        if key.code == KeyCode::Esc && view.selection().is_some() {
+            view.anchor = None;
+            view.dragging = false;
+            view.message = "Selection cleared".into();
             return;
         }
         if key.code == KeyCode::Esc || (ctrl && matches!(key.code, KeyCode::Char('q'))) {
@@ -929,6 +951,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn editor_opened_from_git_is_in_files_and_esc_never_reveals_git() {
+        let (_dir, mut app, path) = fixture("original");
+        app.session.activity = ActivityTab::Git;
+        app.session.focus = PaneFocus::Preview;
+        app.open_text_editor(path.clone(), 1);
+        assert_eq!(app.session.activity, ActivityTab::Files,
+            "Editor must not sit on top of the Git Diff Activity");
+        assert!(app.editing.active());
+        finish(&mut app).await;
+        assert!(app.editing.view.is_some());
+
+        // Normal Esc closes the clean editor, without changing Activity.
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.editing.active());
+        assert_eq!(app.session.activity, ActivityTab::Files);
+        assert_eq!(app.session.focus, PaneFocus::List);
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(app.session.activity, ActivityTab::Files);
+        assert_eq!(app.session.focus, PaneFocus::List);
+
+        // A dirty draft retains the normal confirmation behavior.
+        app.session.activity = ActivityTab::Git;
+        app.session.focus = PaneFocus::Preview;
+        app.open_text_editor(path, 1);
+        finish(&mut app).await;
+        key(&mut app, KeyCode::Char('x'), KeyModifiers::NONE);
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.editing.exit_confirmation());
+        assert_eq!(app.session.activity, ActivityTab::Files);
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.editing.active(), "Esc on dirty confirmation keeps editing");
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        key(&mut app, KeyCode::Char('D'), KeyModifiers::NONE);
+        assert!(!app.editing.active());
+        assert_eq!(app.session.activity, ActivityTab::Files);
+    }
+
+    #[tokio::test]
     async fn multiline_unicode_paste_save_and_editor_shortcuts_are_isolated() {
         let (_dir, mut app, path) = fixture("尾行");
         app.open_text_editor(path.clone(), 1);
@@ -982,6 +1042,21 @@ mod tests {
         finish(&mut app).await;
         assert!(!app.editing.active());
         assert_eq!(std::fs::read_to_string(path).unwrap(), "saved original");
+    }
+
+    #[tokio::test]
+    async fn esc_clears_editor_selection_before_exiting() {
+        let (_dir, mut app, path) = fixture("hello");
+        app.open_text_editor(path, 1);
+        finish(&mut app).await;
+        key(&mut app, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert!(app.editing.has_selection());
+
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.editing.active());
+        assert!(!app.editing.has_selection());
+        key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert!(!app.editing.active());
     }
 
     #[tokio::test]

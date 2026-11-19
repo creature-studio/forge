@@ -32,8 +32,12 @@ Git help
 \nStage: add changes to the staging area for the next commit.
 Unstage: remove changes from the next commit; keep your edits.
 Commit: save ALL staged changes in this repository, including files outside the selected folder.
-\nFiles / Git tabs
-Click the visible tabs or press F1 for Files, F2 for Git.
+\nActivity Bar / Sidebar
+Click F or G in the left Activity Bar, or press F1 for Files / F2 for Git.
+Click the selected icon again to collapse the Sidebar; Ctrl+B toggles it.
+Drag the Sidebar divider to resize, or use Ctrl+Alt+Left/Right.
+The Search icon opens content search; the Terminal icon toggles Terminal; the gear opens Settings.
+Each Sidebar mode retains its own tree selection and scroll position.
 Files: browse, search, create, rename, copy, move, delete and edit text.
 Markdown (.md / .markdown): click Preview / Code above the file, or press F3.
 Preview formats Markdown; Code shows the source with line numbers.
@@ -48,44 +52,49 @@ Right-click operations target that item. Commands use marked items for batches.
 Stage / Unstage are available only in Git.
 \nGit file list (left)
 j/k or arrows: select a file. Its diff loads automatically in Git.
-s: stage the selected file, or all changes under the selected folder.
-u: unstage the selected file or folder; keep working-tree edits.
+Alt+A: stage the selected file, or all changes under the selected folder.
+Alt+U: unstage the selected file or folder; keep working-tree edits.
 v: select the exact row side. The same file can be selected in CHANGES and
 STAGED independently; the header count includes each side once.
-s uses only marked CHANGES rows; u uses only marked STAGED rows. Folder
+Alt+A uses only marked CHANGES rows; Alt+U uses only marked STAGED rows. Folder
 marks are recursive. The other side is never staged or unstaged by mistake.
 Enter or d: focus the selected Git file's diff.
-[ / ]: jump to Changes / Staged.
+Use the Git list arrows/Home/End to navigate Changes and Staged.
 \nDiff (right)
 Tab: switch focus between the list and preview.
-s: stage only the current unstaged hunk (change block).
-u: unstage only the current staged hunk.
-n / N: next / previous hunk. j/k: scroll.
+Alt+A: stage only the current unstaged hunk (change block).
+Alt+U: unstage only the current staged hunk.
+n / Alt+N: next / previous hunk. j/k: scroll.
 No editable hunks: Tab back to the list for whole-file actions.
 \nFolders and group headings
 Enter or Space: expand/collapse a folder. h or Left: parent.
-s on a Changes folder: stage its changes, including subfolders.
-u on a Staged folder: unstage its changes, including subfolders.
+Alt+A on a Changes folder: stage its changes, including subfolders.
+Alt+U on a Staged folder: unstage its changes, including subfolders.
 Folder actions include collapsed children, additions and deletions.
 Only the selected folder is affected; group headings are navigation only.
 Select a file inside the folder to review its diff.
 o or double-click a changed file: open its current worktree version in Files.
 Right-click a changed file or Diff: Open file in Files.
+Shift+arrows in Preview: select displayed text; Ctrl+C copies the selection.
+Esc clears selection; keyboard selection also works for Markdown and Diff.
+In a Git commit detail Preview: Tab focuses file links and moves to the next,
+Shift+Tab selects the previous link (or returns to Git list); Enter opens it.
+If Focus Overview is enabled, Alt+Down / Alt+Up jumps between Git/Find marks.
 x on CHANGES directory: discard only tracked unstaged changes underneath, after confirmation.
 Untracked files, conflicts and staged contents are preserved.
 \nRepository actions
 c: open commit editor. Enter submits; Esc cancels.
-p: pull repository changes. P: push repository commits.
+Alt+R: pull repository changes. Alt+P: push repository commits.
 Pull and push always affect the repository, not just the selection.
-r: refresh files and Git status. g: open Git from Files.
-Esc: return from diff to the list, then from Git to Files.
+r: refresh files and Git status. F1: Files; F2: Git.
+Esc: dismiss transient views; Tab switches Files/Git list and preview focus.
 q: quit from the main workspace. Ctrl-C: never exits; closes help or a context menu.
-,: independent Settings window (Tree Sticky Scroll, Show hidden files, F4 shortcuts).
+F9: Settings (Tree Sticky Scroll, Show hidden files, F4 shortcuts).
 F4: searchable shortcuts grouped by Files/Git/Editor/Navigation; Tab switches groups.
-: or Ctrl-K: command palette. Rebind Ctrl/Alt chords or F5-F12 in the shortcuts view.
+Ctrl+K or Ctrl+Shift+P: command palette. Rebind Ctrl/Alt chords or F6-F12 in the shortcuts view.
 F1/F2, Tab, F3/F4, Esc, navigation, and q are fixed for safe recovery.
 \nHistory (Git sidebar)
-G: open the Git tab with HISTORY expanded and the newest commit selected.
+Alt+G: open Git with HISTORY expanded and the newest commit selected.
 Enter or Space on HISTORY: collapse or expand the whole section.
 Enter on a commit: list its changed files, grouped by folder.
 Enter on a file: show how that commit changed it in the preview (read-only).
@@ -96,9 +105,9 @@ History diffs never touch the staging area; select a file under CHANGES or
 STAGED to stage it.
 \nHelp
 F4: searchable keyboard shortcuts, rebind commands and restore defaults.
-? opens help outside editors. Esc, ? or q closes help.
+F5 opens help outside editors. Esc or q closes help.
 j/k, arrows, PageUp/PageDown or mouse wheel: scroll help.
-Typing ?, q, s or other shortcuts in the commit editor inserts text.
+Typing letters in the commit editor inserts text without triggering workspace shortcuts.
 \nSearch and workspace commands
 : opens searchable Commands; type a command name, Enter runs it.
 Ctrl-P: fuzzy filename search. Ctrl-F: in-file find if a file is open,
@@ -124,8 +133,8 @@ The TUI releases the terminal and restores selection/scroll after editing.
 v: toggle selected file/folder. V: select all visible items.
 Esc: clear selection. Marked paths stay selected across directory expansion.
 Files marks are path-only. Switching Files <-> Git clears multi-selection.
-s/u in the Git list: Stage/Unstage marked items on the matching side only.
-: Commands includes New file/directory, Rename, Copy, Move and Delete.
+Alt+A / Alt+U in the Git list: Stage/Unstage marked items on the matching side only.
+Ctrl+K Commands includes New file/directory, Rename, Copy, Move and Delete.
 Paths are relative to the workspace. Copy/Move needs an existing directory.
 No operation overwrites an existing destination. Delete requires confirmation.
 \nIndividual diff lines and discard
@@ -425,6 +434,12 @@ impl App {
                     key: "j/k",
                     label: "Scroll",
                 });
+                if matches!(self.preview_state.preview_mode, PreviewMode::Diff)
+                    && self.preview_state.hunk_index.is_some()
+                    && !self.preview_state.preview_loading
+                {
+                    keys.push(Shortcut { key: "n/Alt+n", label: "Next/prev hunk" });
+                }
             }
             keys.push(if self.session.focus == PaneFocus::Preview {
                 Shortcut {
@@ -447,7 +462,7 @@ impl App {
             });
             keys.extend([
                 Shortcut {
-                    key: ":",
+                    key: "Ctrl+k",
                     label: "Commands",
                 },
                 Shortcut {
@@ -459,7 +474,7 @@ impl App {
                     label: "Find",
                 },
                 Shortcut {
-                    key: "G",
+                    key: "Alt+g",
                     label: "History",
                 },
                 Shortcut {
@@ -504,7 +519,7 @@ impl App {
         }
         let preview = self.session.focus == PaneFocus::Preview;
         keys.push(Shortcut {
-            key: ":",
+            key: "Ctrl+k",
             label: "Commands",
         });
         keys.push(Shortcut {
@@ -531,7 +546,7 @@ impl App {
                 && !self.preview_state.preview_loading
             {
                 keys.push(Shortcut {
-                    key: "n/N",
+                    key: "n/Alt+n",
                     label: "Next/prev hunk",
                 });
             }
@@ -640,11 +655,10 @@ impl App {
                 ]);
             }
         }
-        if preview || self.in_git_sidebar() {
-            keys.push(Shortcut {
-                key: "Esc",
-                label: if preview { "Back to list" } else { "Files" },
-            });
+        // Esc only dismisses a transient interaction. It is not a pane or
+        // Activity shortcut; the command list must not promise otherwise.
+        if let Some(label) = self.workspace_escape().label() {
+            keys.push(Shortcut { key: "Esc", label });
         }
         keys.extend([
             Shortcut {
@@ -661,11 +675,16 @@ impl App {
 
     pub(super) fn context_description(&self) -> String {
         if !self.in_git_sidebar() {
-            if !self.tools.marks.is_empty() {
-                return format!(
-                    "{} selected · : Copy / Move / Delete · Esc Clear",
-                    self.tools.marks.len()
-                );
+            if !self.tools.marks.files.is_empty() {
+                return if self.session.focus != PaneFocus::Preview {
+                    format!(
+                        "{} selected · Ctrl+K Copy / Move / Delete · Esc Clear",
+                        self.tools.marks.files.len()
+                    )
+                } else {
+                    format!("{} files selected · Tab to manage selection",
+                        self.tools.marks.files.len())
+                };
             }
             return self
                 .selected_entry()
@@ -714,9 +733,9 @@ impl App {
                 }) => format!(
                     "{path}/ · {file_count} changed files · {} folder including subfolders",
                     if column == StagingColumn::Unstaged {
-                        "s Stage"
+                        "Alt+A Stage"
                     } else {
-                        "u Unstage"
+                        "Alt+U Unstage"
                     }
                 ),
                 Some(ScmRow::Section {
@@ -734,7 +753,7 @@ impl App {
                 Some(ScmRow::HistorySection {
                     count, expanded, ..
                 }) => format!(
-                    "History · {count} commits · {} · G focuses it",
+                    "History · {count} commits · {} · Alt+G focuses it",
                     if expanded {
                         "Enter collapses"
                     } else {
@@ -794,11 +813,11 @@ impl App {
                         } else if u {
                             "staged · whole file"
                         } else {
-                            "Press g to review Git changes"
+                            "Press F2 to review Git changes"
                         }
                     )
                 })
-                .unwrap_or_else(|| "No files · r Refresh · ? Help".into())
+                .unwrap_or_else(|| "No files · r Refresh · F5 Help".into())
         }
     }
 
@@ -850,6 +869,8 @@ impl App {
         if self.repo_root().is_none() {
             self.session.status = "not a git repository".into();
         } else {
+            self.session.commit_confirming = false;
+            self.session.commit_cancel_pending = false;
             self.session.commit_open = true;
             self.session.status = "commit message...".into();
         }

@@ -85,11 +85,10 @@ impl Marks {
     }
 }
 
-/// Per-workspace search drafts: closing a picker does not discard the last
-/// useful query or its regex mode, and switching worktrees cannot leak it.
+/// Per-workspace content-search draft and regex mode. Filename pickers open
+/// empty so a new target is never appended to an old query.
 #[derive(Default, Clone)]
 struct SearchSession {
-    files: String,
     content: String,
     regex: bool,
 }
@@ -381,6 +380,9 @@ pub(super) struct Panel {
     pub regex: bool,
     pub area: ratatui::layout::Rect,
     pub list_area: ratatui::layout::Rect,
+    /// Form button hit regions are updated only by the shared renderer.
+    pub form_cancel: ratatui::layout::Rect,
+    pub form_submit: ratatui::layout::Rect,
 }
 
 #[derive(Clone, Copy)]
@@ -591,7 +593,7 @@ impl Panel {
         self.list_offset = self.list_offset.saturating_add_signed(delta).min(max);
     }
 
-    fn new(kind: PanelKind, title: &str) -> Self {
+    pub(super) fn new(kind: PanelKind, title: &str) -> Self {
         Self {
             kind,
             history_has_older: false,
@@ -609,6 +611,8 @@ impl Panel {
             regex: false,
             area: Default::default(),
             list_area: Default::default(),
+            form_cancel: Default::default(),
+            form_submit: Default::default(),
         }
     }
     pub fn is_input(&self) -> bool {
@@ -922,7 +926,7 @@ impl App {
         let Some(panel) = self.tools.panel.as_ref() else {
             return;
         };
-        if !matches!(panel.kind, PanelKind::Files | PanelKind::Content) {
+        if !matches!(panel.kind, PanelKind::Content) {
             return;
         }
         let session = self
@@ -930,9 +934,7 @@ impl App {
             .search_sessions
             .entry(self.files.tree_root.clone())
             .or_default();
-        if matches!(panel.kind, PanelKind::Files) {
-            session.files = panel.input.value().to_owned();
-        } else {
+        if matches!(panel.kind, PanelKind::Content) {
             session.content = panel.input.value().to_owned();
             session.regex = panel.regex;
         }
@@ -955,6 +957,19 @@ impl App {
         }
         self.open_tools(kind);
         self.tools.history_parents = parents;
+    }
+
+    pub(super) fn tools_has_parent(&self) -> bool {
+        !self.tools.history_parents.is_empty()
+    }
+    /// Single source for the Escape action advertised by panel borders
+    /// and the workspace footer. The actual behavior is back_tools().
+    pub(super) fn tools_escape_label(&self) -> &'static str {
+        match self.tools.panel.as_ref().map(|p| &p.kind) {
+            Some(PanelKind::Prompt(_) | PanelKind::Confirm(_)) => "Cancel",
+            Some(_) if self.tools_has_parent() => "Back",
+            _ => "Close",
+        }
     }
 
     fn back_tools(&mut self) {
@@ -1010,9 +1025,7 @@ impl App {
         };
         let mut panel = Panel::new(kind, title);
         if let Some(previous) = self.tools.search_sessions.get(&self.files.tree_root) {
-            if matches!(panel.kind, PanelKind::Files) {
-                panel.input = tui_input::Input::new(previous.files.clone());
-            } else if matches!(panel.kind, PanelKind::Content) {
+            if matches!(panel.kind, PanelKind::Content) {
                 panel.input = tui_input::Input::new(previous.content.clone());
                 panel.regex = previous.regex;
                 panel.title = format!(
@@ -1043,8 +1056,14 @@ impl App {
             panel.last_click = None;
             panel.scroll = 0;
         } else {
-            // A new query gets a new default selection. While results are
-            // pending, the old rows can still remain visible.
+            // Never allow Enter to activate a hit from a previous query.
+            // Search results belong to a single generation; clear the old
+            // list immediately while the debounced request is in flight.
+            panel.rows.clear();
+            panel.selected = 0;
+            panel.list_offset = 0;
+            panel.last_click = None;
+            panel.scroll = 0;
             panel.search_selection_touched = false;
         }
         let kind = panel.kind.clone();
@@ -1065,7 +1084,7 @@ impl App {
             panel.message = if panel.rows.is_empty() {
                 "No matching recent directories · press O to open a folder".into()
             } else { String::new() };
-            panel.detail = "Enter switch · O open any directory · type to filter · Esc close
+            panel.detail = "Enter switch · O open any directory · type to filter
 Git Worktrees are managed separately with W.".into();
             return;
         }
@@ -1217,7 +1236,7 @@ Git Worktrees are managed separately with W.".into();
                 String::new()
             };
             panel.detail = format!(
-                "{} selected · filters: status={} extension={} hidden={} · Enter run · Esc close",
+                "{} selected · filters: status={} extension={} hidden={} · Enter run",
                 self.tools.marks.len(),
                 self.tools.filter.status,
                 self.tools.filter.extension,
@@ -1338,7 +1357,13 @@ Git Worktrees are managed separately with W.".into();
                     })
                 }).await??;
                 let count = hits.len();
-                Ok(ReadReply { generation: Some(generation), history_has_older: false, rows: hits.into_iter().map(|h| search_row(&root, h)).collect(), detail: format!("{count} results · Enter jump · Ctrl-R toggle regex for contents · Esc close · limit 2,000 / 2 MiB per file{index_detail}") })
+                let detail = if matches!(kind, PanelKind::Files) {
+                    format!("{count} matching files · Enter open · max 2,000 results{index_detail}")
+                } else {
+                    format!("{count} matches · Enter jump · Ctrl-R regex · max 2,000 results / 2 MiB per file{index_detail}")
+                };
+                Ok(ReadReply { generation: Some(generation), history_has_older: false,
+                    rows: hits.into_iter().map(|h| search_row(&root, h)).collect(), detail })
             } else if let PanelKind::Git(q) = kind {
                 let history = match &q {
                     GitQuery::History(path) => Some((path.clone(), 0)),
@@ -1373,29 +1398,10 @@ Git Worktrees are managed separately with W.".into();
         value: String,
         detail: &str,
     ) {
-        let is_child =
-            self.tools
-                .panel
-                .as_ref()
-                .is_some_and(|panel| match (&action, &panel.kind) {
-                    (
-                        PromptAction::Stash | PromptAction::StashUnstaged,
-                        PanelKind::Git(GitQuery::Stashes),
-                    )
-                    | (
-                        PromptAction::Branch | PromptAction::RenameBranch(_),
-                        PanelKind::Git(GitQuery::Branches),
-                    )
-                    | (PromptAction::Worktree, PanelKind::Git(GitQuery::Worktrees)) => true,
-                    _ => false,
-                });
-        let kind = PanelKind::Prompt(action);
-        if is_child {
-            // Esc restores the exact parent list, including row selection.
-            self.open_history_child(kind);
-        } else {
-            self.open_tools(kind);
-        }
+        // Any panel opening a child prompt must be preserved. Explicitly
+        // enumerating parent kinds used to drop navigation history for
+        // Workspaces and new workflows, making Esc close every dialog.
+        self.open_history_child(PanelKind::Prompt(action));
         if let Some(panel) = &mut self.tools.panel {
             panel.title = title.into();
             panel.input = tui_input::Input::new(value);
@@ -1404,47 +1410,19 @@ Git Worktrees are managed separately with W.".into();
     }
 
     fn confirm(&mut self, operation: Operation, detail: String, after: Option<PanelKind>) {
-        let is_child =
-            self.tools
-                .panel
-                .as_ref()
-                .is_some_and(|panel| match (&operation, &panel.kind) {
-                    (
-                        Operation::Git(
-                            GitAction::SaveStash(_)
-                            | GitAction::SaveStashUnstaged(_)
-                            | GitAction::ApplyStash(_)
-                            | GitAction::ApplyStashIndexed(_)
-                            | GitAction::PopStash(_)
-                            | GitAction::DropStash(_),
-                        ),
-                        PanelKind::Git(GitQuery::Stashes)
-                        | PanelKind::Prompt(PromptAction::Stash | PromptAction::StashUnstaged),
-                    )
-                    | (
-                        Operation::Git(GitAction::SwitchBranch(_) | GitAction::DeleteBranch(_)),
-                        PanelKind::Git(GitQuery::Branches),
-                    )
-                    | (
-                        Operation::Git(GitAction::RemoveWorktree(_)),
-                        PanelKind::Git(GitQuery::Worktrees),
-                    )
-                    | (
-                        Operation::Git(GitAction::PublishBranch { .. }),
-                        PanelKind::Git(GitQuery::PublishRemotes(_)),
-                    ) => true,
-                    _ => false,
-                });
-        let kind = PanelKind::Confirm(operation);
-        if is_child {
-            self.open_history_child(kind);
+        // Confirmation is always a child of the page (or prompt) that
+        // requested it. On Esc, restore that exact page and its draft.
+        let title = if matches!(&operation, Operation::Files(FileOperation::Delete(_))) {
+            "Delete items"
         } else {
-            self.open_tools(kind);
-        }
+            "Confirm"
+        };
+        self.open_history_child(PanelKind::Confirm(operation));
         self.tools.after = after;
         if let Some(panel) = &mut self.tools.panel {
+            panel.title = title.into();
             panel.detail = detail;
-            panel.message = "Enter confirm · Esc cancel".into();
+            panel.message.clear(); // Shared dialog renders both actions.
         }
     }
 
@@ -1633,7 +1611,7 @@ Git Worktrees are managed separately with W.".into();
                     self.session.write_status = Some(message.clone());
                     self.tools.panel = Some(Panel::new(PanelKind::Text, "Operation failed"));
                     if let Some(p) = &mut self.tools.panel {
-                        p.detail=format!("{message}\n\nUse Conflicts for conflicts; recovery commands are in : Commands.\nEsc closes this view.");
+                        p.detail=format!("{message}\n\nUse Conflicts for conflicts; recovery commands are in Ctrl+K Commands.\nEsc closes this view.");
                     }
                     self.request_status();
                 }
@@ -1682,7 +1660,7 @@ Git Worktrees are managed separately with W.".into();
         }
     }
 
-    fn reveal_file(&mut self, path: PathBuf, line: usize) {
+    pub(super) fn reveal_file(&mut self, path: PathBuf, line: usize) {
         // Git may discover a repository above the current Files root. The
         // target cannot appear in that narrower tree until it is rooted at
         // the repository, so switch only when the target is actually outside.
@@ -1764,6 +1742,21 @@ Git Worktrees are managed separately with W.".into();
             return;
         };
         let location = ratatui::layout::Position::new(mouse.column, mouse.row);
+        // Form buttons share the exact keyboard confirmation/cancellation
+        // path, including history return and deferred-operation cleanup.
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && matches!(panel.kind, PanelKind::Prompt(_) | PanelKind::Confirm(_))
+        {
+            let action = if panel.form_submit.contains(location) {
+                Some(KeyCode::Enter)
+            } else if panel.form_cancel.contains(location) {
+                Some(KeyCode::Esc)
+            } else { None };
+            if let Some(key) = action {
+                self.handle_tools_key(KeyEvent::new(key, KeyModifiers::NONE));
+            }
+            return;
+        }
         let in_list = panel.list_area.contains(location);
         let previous_selected = panel.selected;
         let mut activate: Option<(PanelKind, RowValue)> = None;

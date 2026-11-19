@@ -31,10 +31,9 @@ static BINDINGS: &[Binding] = &[
     binding!("edit", "Edit file", false, "Ctrl+e", "e"),
     binding!("open_file", "Open file in Files", false, "o", "o"),
     binding!("settings", "Settings", false, "F9", "F9"),
-    binding!("settings_alt", "Settings (alternative)", false, "Alt+,", "Alt+,"),
     binding!("find_file", "Find file", false, "Ctrl+p", "Ctrl+p"),
     binding!("find_content", "Search contents", false, "Ctrl+f", "Ctrl+f"),
-    binding!("commands", "Command palette", false, ":", ":"),
+    binding!("commands_vscode", "Command palette (VS Code)", false, "Ctrl+Shift+p", "Ctrl+k"),
     binding!(
         "commands_alt",
         "Command palette (alternative)",
@@ -59,13 +58,10 @@ static BINDINGS: &[Binding] = &[
     binding!("pan_right", "Pan code right", false, "Alt+Right", "Alt+Right"),
     binding!("pan_start", "Pan to left edge", false, "Alt+Home", "Alt+Home"),
     binding!("pan_end", "Pan to right edge", false, "Alt+End", "Alt+End"),
-    binding!("move_parent", "Go to parent", false, "h", "h"),
+    binding!("move_parent", "Collapse / parent folder (h / Left)", false, "h", "h"),
     binding!("move_child", "Open child", false, "l", "l"),
     binding!("preview_mode", "Markdown Preview / Code", false, "F3", "F3"),
-    binding!("unstaged_group", "Jump to changes", false, "[", "["),
-    binding!("staged_group", "Jump to staged", false, "]", "]"),
-    binding!("toggle_git", "Toggle Files / Git", false, "g", "g"),
-    binding!("help", "Help", false, "?", "?"),
+    binding!("help", "Help", false, "F5", "F5"),
     binding!("quit", "Quit workspace", false, "q", "q"),
     binding!(
         "ctrl_c_guard",
@@ -77,11 +73,11 @@ static BINDINGS: &[Binding] = &[
     binding!("selection", "Toggle selection", false, "v", "v"),
     binding!("selection_all", "Select visible files", false, "Alt+v", "V"),
     binding!("commit", "Commit staged changes", false, "c", "c"),
-    binding!("stage", "Stage selection / hunk", false, "s", "s"),
-    binding!("unstage", "Unstage selection / hunk", false, "u", "u"),
+    binding!("stage", "Stage selection / hunk", false, "Alt+a", "s"),
+    binding!("unstage", "Unstage selection / hunk", false, "Alt+u", "u"),
     binding!("discard", "Discard changes", false, "x", "x"),
     binding!("diff", "View selected diff", false, "d", "d"),
-    binding!("pull", "Pull repository", false, "p", "p"),
+    binding!("pull", "Pull repository", false, "Alt+r", "p"),
     binding!("push", "Push repository", false, "Alt+p", "P"),
     binding!("history", "Show commit history", false, "Alt+g", "G"),
     binding!(
@@ -123,8 +119,8 @@ fn category(b: &Binding) -> &'static str {
         | "selection_all" | "preview_mode" | "open_file" | "inline_peek" => "Files",
         "history" | "line_commit" | "file_history" | "commit_history" | "branches" | "stashes"
         | "sync" | "worktrees" | "lines" | "commit" | "stage" | "unstage" | "discard" | "diff"
-        | "pull" | "push" | "previous_hunk" | "unstaged_group" | "staged_group" => "Git",
-        "files_tab" | "git_tab" | "focus_pane" | "toggle_git" | "help" | "quit" | "shortcuts"
+        | "pull" | "push" | "previous_hunk" => "Git",
+        "files_tab" | "git_tab" | "focus_pane" | "help" | "quit" | "shortcuts"
         | "open_item" | "back" | "move_up" | "move_down" | "move_parent" | "move_child" => {
             "Navigation"
         }
@@ -158,8 +154,6 @@ fn fixed(b: &Binding) -> bool {
             | "move_parent"
             | "move_child"
             | "preview_mode"
-            | "unstaged_group"
-            | "staged_group"
             | "ctrl_c_guard"
             | "settings"
     )
@@ -278,7 +272,14 @@ fn parse(chord: &str) -> Option<KeyEvent> {
 fn same(a: KeyEvent, b: KeyEvent) -> bool {
     let normalized = |mut k: KeyEvent| {
         if let KeyCode::Char(c) = k.code {
-            if c.is_ascii_uppercase() || c.is_ascii_punctuation() {
+            if c.is_ascii_uppercase()
+                && k.modifiers.contains(KeyModifiers::SHIFT)
+                && k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            {
+                // Terminals disagree whether Ctrl+Shift+P is reported as
+                // uppercase P or lowercase p with the Shift modifier.
+                k.code = KeyCode::Char(c.to_ascii_lowercase());
+            } else if c.is_ascii_uppercase() || c.is_ascii_punctuation() {
                 k.modifiers.remove(KeyModifiers::SHIFT);
             }
         }
@@ -329,7 +330,7 @@ fn allowed(k: KeyEvent) -> bool {
 }
 // New defaults preserve older explicit assignments to those chords.
 fn shadowed_alias(b: &Binding, map: &BTreeMap<String, String>) -> bool {
-    matches!(b.id, "commands_alt" | "line_commit" | "inline_peek")
+    matches!(b.id, "commands_alt" | "commands_vscode" | "line_commit" | "inline_peek")
         && !map.contains_key(b.id)
         && BINDINGS.iter().any(|other| {
             other.id != b.id
@@ -351,7 +352,7 @@ fn validate(map: &BTreeMap<String, String>) -> Result<(), String> {
             }
             if !allowed(key) || same(key, parse("Ctrl+c").unwrap()) {
                 return Err(
-                    "Use Ctrl/Alt + letter or F5–F12; Ctrl-C, navigation, Esc and F4 are reserved"
+                    "Use Ctrl/Alt + letter or F6–F12; Ctrl-C, navigation, Esc and F4/F5 are reserved"
                         .into(),
                 );
             }
@@ -368,6 +369,8 @@ fn validate(map: &BTreeMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 impl Keybindings {
+    pub fn recording(&self) -> bool { self.recording }
+
     pub fn remap(&self, key: KeyEvent, editor: bool) -> Option<KeyEvent> {
         let configured = BINDINGS.iter().find(|b| {
             b.editor == editor
@@ -384,21 +387,9 @@ impl Keybindings {
         if let Some(b) = active {
             return parse(b.canonical);
         }
-        // Legacy uppercase shortcuts remain accepted unless explicitly rebound.
-        if !editor && same(key, parse(",").unwrap())
-            && !self.overrides.contains_key("settings")
-        {
-            return parse("F9");
-        }
-        if !editor {
-            if let Some(binding) = BINDINGS.iter().find(|b| {
-                b.canonical.len() == 1
-                    && b.canonical.chars().next().is_some_and(|c| c.is_ascii_uppercase())
-                    && b.default.starts_with("Alt+")
-                    && !self.overrides.contains_key(b.id)
-                    && same(key, parse(b.canonical).unwrap())
-            }) { return parse(binding.canonical); }
-        }
+        // No implicit plain-uppercase aliases: CSI/SS3 terminal reports may
+        // leak a trailing B/F/H/P/S/Z when the escape prefix is lost.
+        // Alt+letter still maps to its canonical action via BINDINGS.
         if BINDINGS.iter().any(|b| {
             b.editor == editor
                 && (same(key, parse(b.canonical).unwrap()) || same(key, parse(b.default).unwrap()))
@@ -501,7 +492,7 @@ impl Keybindings {
                 return;
             };
             let Some(value) = chord(key) else {
-                self.message = "Use Ctrl/Alt + letter or F5–F12".into();
+                self.message = "Use Ctrl/Alt + letter or F6–F12".into();
                 return;
             };
             let id = BINDINGS[idx].id;
@@ -577,7 +568,11 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, keys: &Keybindings, p: Pal
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Keyboard shortcuts · F4 ")
-        .title_bottom(" Tab Group · ↑/↓ Select · Enter Rebind · Del Reset · Esc Close ")
+        .title_bottom(if keys.recording {
+            " Press shortcut · Esc Cancel recording "
+        } else {
+            " Tab Group · ↑/↓ Select · Enter Rebind · Del Reset · Esc Close "
+        })
         .style(Style::default().fg(p.fg).bg(p.bg));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -661,22 +656,27 @@ pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, keys: &Keybindings, p: Pal
 mod tests {
     use super::*;
     #[test]
-    fn settings_have_visible_function_key_and_legacy_aliases() {
+    fn settings_and_help_use_safe_function_keys_without_bare_punctuation() {
         let mut keys = Keybindings::default();
         assert_eq!(keys.action_key("settings"), "F9");
-        for source in ["F9", "Alt+,", ","] {
+        assert_eq!(keys.action_key("help"), "F5");
+        for source in ["F5", "F9"] {
             let actual = keys.remap(parse(source).unwrap(), false).unwrap();
-            assert!(same(actual, parse(if source == "Alt+," { "Alt+," } else { "F9" }).unwrap()), "{source}");
+            assert!(same(actual, parse(source).unwrap()), "{source}");
+        }
+        for source in [",", "?", ":", "[", "]", "g"] {
+            // Unbound characters may still be passed to the workspace;
+            // the dispatcher has no corresponding navigation action.
+            assert!(keys.remap(parse(source).unwrap(), false).is_some(), "{source}");
         }
         let folder = tempfile::tempdir().unwrap();
         keys.path = Some(folder.path().join("keys.conf"));
-        assert!(keys.update("settings", Some("F10".into())).is_err(),
-            "Settings is a fixed navigation key so the recovery entry remains reachable");
-        assert!(same(keys.remap(parse(",").unwrap(), false).unwrap(), parse("F9").unwrap()));
+        assert!(keys.update("settings", Some("F10".into())).is_err());
+        assert!(keys.update("help", Some("F10".into())).is_err());
     }
 
     #[test]
-    fn uppercase_actions_use_explicit_alt_chords_without_breaking_legacy() {
+    fn uppercase_actions_require_explicit_alt_chords() {
         let mut keys = Keybindings::default();
         for (id, alt, canonical) in [
             ("push", "Alt+p", "P"), ("history", "Alt+g", "G"),
@@ -687,12 +687,22 @@ mod tests {
             assert_eq!(keys.action_key(id), alt);
             assert!(same(keys.remap(parse(alt).unwrap(), false).unwrap(),
                 parse(canonical).unwrap()), "{id}");
-            assert!(same(keys.remap(parse(canonical).unwrap(), false).unwrap(),
-                parse(canonical).unwrap()), "legacy {id}");
+            assert!(keys.remap(parse(canonical).unwrap(), false).is_none(),
+                "bare uppercase {canonical} must never trigger {id}");
+        }
+        for (id, physical, action) in [
+            ("stage", "Alt+a", "s"), ("unstage", "Alt+u", "u"),
+            ("pull", "Alt+r", "p"),
+        ] {
+            assert_eq!(keys.action_key(id), physical);
+            assert!(same(keys.remap(parse(physical).unwrap(), false).unwrap(),
+                parse(action).unwrap()));
+            assert!(keys.remap(parse(action).unwrap(), false).is_none());
         }
         assert_eq!(keys.label("P"), "Alt-P");
-        assert!(same(keys.remap(parse("p").unwrap(), false).unwrap(), parse("p").unwrap()));
-        assert!(same(keys.remap(parse("g").unwrap(), false).unwrap(), parse("g").unwrap()));
+        assert_eq!(keys.label("s"), "Alt-A");
+        assert_eq!(keys.label("u"), "Alt-U");
+        assert!(keys.remap(parse("p").unwrap(), false).is_none());
         let directory = tempfile::tempdir().unwrap();
         keys.path = Some(directory.path().join("bindings.conf"));
         keys.update("push", Some("F8".into())).unwrap();
@@ -767,6 +777,24 @@ mod tests {
         ));
         let config = std::fs::read_to_string(keys.path.as_ref().unwrap()).unwrap();
         assert!(config.contains("stage=F6") && config.contains("commands_alt=F7"));
+    }
+
+    #[test]
+    fn vscode_command_palette_alias_accepts_both_terminal_shift_forms() {
+        let keys = Keybindings::default();
+        for input in [
+            parse("Ctrl+Shift+p").unwrap(),
+            parse("Ctrl+Shift+P").unwrap(),
+        ] {
+            assert!(same(
+                keys.remap(input, false).unwrap(),
+                parse("Ctrl+k").unwrap()
+            ));
+        }
+        assert!(same(
+            keys.remap(parse("Ctrl+k").unwrap(),false).unwrap(),
+            parse("Ctrl+k").unwrap()
+        ));
     }
 
     #[test]

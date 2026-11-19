@@ -332,6 +332,46 @@ async fn finish(app: &mut App) {
     );
 }
 
+#[tokio::test]
+async fn nested_prompt_and_confirmation_esc_return_one_level_at_a_time() {
+    let (_dir, mut app) = fixture();
+    finish(&mut app).await;
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    // Previously the workspace directory prompt lost its Workspaces parent.
+    app.open_tools(PanelKind::Workspaces);
+    finish(&mut app).await;
+    app.prompt(PromptAction::OpenWorkspace, "Open workspace", String::new(), "Path");
+    assert!(app.tools_has_parent());
+    app.handle_tools_key(esc);
+    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind), Some(PanelKind::Workspaces)));
+    app.handle_tools_key(esc);
+    assert!(app.tools.panel.is_none());
+
+    // A confirmation opened from an input form is also a genuine child.
+    app.open_tools(PanelKind::Git(GitQuery::Branches));
+    finish(&mut app).await;
+    app.prompt(PromptAction::Branch, "New branch", String::new(), "Name");
+    app.tools.panel.as_mut().unwrap().input =
+        tui_input::Input::new("feature/preserve-draft".into());
+    app.confirm(
+        Operation::Git(GitAction::SwitchBranch("feature/preserve-draft".into())),
+        "Do not execute".into(),
+        None,
+    );
+    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind), Some(PanelKind::Confirm(_))));
+    app.handle_tools_key(esc);
+    let prompt = app.tools.panel.as_ref().unwrap();
+    assert!(matches!(prompt.kind, PanelKind::Prompt(PromptAction::Branch)));
+    assert_eq!(prompt.input.value(), "feature/preserve-draft");
+    app.handle_tools_key(esc);
+    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Git(GitQuery::Branches))));
+    app.handle_tools_key(esc);
+    assert!(app.tools.panel.is_none());
+    assert!(!app.tools_has_parent());
+}
+
 /// Branch/Worktree dialogs are navigation children, not workspace exits.
 /// These use a real temporary Git repository; Esc must never mutate refs or
 /// remove worktree files.
@@ -801,7 +841,7 @@ async fn filename_queries_reuse_index_and_refresh_on_filesystem_changes() {
 }
 
 #[tokio::test]
-async fn filename_debounce_coalesces_rapid_input_and_keeps_previous_results() {
+async fn filename_debounce_coalesces_rapid_input_without_stale_results() {
     let (_dir, mut app) = fixture();
     finish(&mut app).await;
     app.open_tools(PanelKind::Files);
@@ -818,7 +858,7 @@ async fn filename_debounce_coalesces_rapid_input_and_keeps_previous_results() {
         app.tools.pending_read.is_some(),
         "filename query ran before debounce"
     );
-    assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), 3);
+    assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), 0);
 
     // A second query within the debounce window cancels the first one.
     app.tools.panel.as_mut().unwrap().input = tui_input::Input::new("b".into());
@@ -828,7 +868,7 @@ async fn filename_debounce_coalesces_rapid_input_and_keeps_previous_results() {
     tokio::time::sleep(Duration::from_millis(75)).await;
     app.poll_tools();
     assert_eq!(app.tools.pending_read.as_ref().unwrap().id, final_job);
-    assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), 3);
+    assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), 0);
     assert!(app
         .tools
         .panel
@@ -883,8 +923,9 @@ async fn content_debounce_retains_rows_then_latest_query_wins_and_regex_errors_s
         app.tools.pending_read.is_some(),
         "real debounce has not elapsed"
     );
-    assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), 3);
-    assert_eq!(app.tools.panel.as_ref().unwrap().selected, 1);
+    assert!(app.tools.panel.as_ref().unwrap().rows.is_empty(),
+        "stale hits must never be actionable during debounce");
+    assert_eq!(app.tools.panel.as_ref().unwrap().selected, 0);
     assert!(app
         .tools
         .panel
@@ -1850,6 +1891,22 @@ async fn open_changed_file_switches_from_git_diff_to_files_view() {
     );
     assert!(matches!(app.preview_state.preview_mode, PreviewMode::File));
 
+    // Open File is an explicit navigation to Files, not a hidden back-stack
+    // entry. Esc must never take the user back to Git or change pane focus.
+    let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    app.handle_key(esc);
+    assert_eq!(app.session.activity, ActivityTab::Files);
+    assert_eq!(app.session.focus, PaneFocus::List);
+    app.session.focus = PaneFocus::Preview;
+    app.handle_key(esc);
+    app.handle_key(esc);
+    assert_eq!(app.session.activity, ActivityTab::Files);
+    assert_eq!(app.session.focus, PaneFocus::Preview);
+    assert_eq!(app.files.visible[app.files.selected].entry.path, dir.path().join(target));
+    // Tab, rather than Esc, deliberately changes between the two panes.
+    app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    assert_eq!(app.session.focus, PaneFocus::List);
+
     // Reopening the same loaded file must consume the reveal and focus
     // handoff instead of leaking it into an unrelated later preview.
     app.enter_git_sidebar();
@@ -2541,6 +2598,29 @@ async fn tool_branch_default_and_doubleclick_share_safe_confirmation() {
         app.tools.panel.as_ref().map(|p| &p.kind),
         Some(PanelKind::Git(GitQuery::Branches))
     ));
+}
+
+#[tokio::test]
+async fn reopening_filename_search_starts_fresh_and_old_hits_cannot_be_activated() {
+    let (_dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.open_tools(PanelKind::Files);
+    finish(&mut app).await;
+    app.tools.panel.as_mut().unwrap().input = tui_input::Input::new("a.rs".into());
+    app.reload_tools();
+    finish(&mut app).await;
+    app.close_tools();
+    app.open_tools(PanelKind::Files);
+    assert_eq!(app.tools.panel.as_ref().unwrap().input.value(), "");
+
+    finish(&mut app).await;
+    assert!(!app.tools.panel.as_ref().unwrap().rows.is_empty());
+    app.tools.panel.as_mut().unwrap().input = tui_input::Input::new("missing-name".into());
+    app.reload_tools();
+    assert!(app.tools.panel.as_ref().unwrap().rows.is_empty());
+    app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind), Some(PanelKind::Files)),
+        "Enter must not open a previous query's file while the new query loads");
 }
 
 #[tokio::test]
