@@ -1,34 +1,64 @@
 ---
 import Preview from './Preview.astro';
+import '../styles/home-proof.css';
 import faqZh from '../legacy/faq-zh.html?raw';
-import { Download, BookOpen, FolderOpen, GitBranch, Search, CodeXml, Zap, ArrowUpRight, ChevronRight, ArrowRight, Monitor, Apple, Terminal, Keyboard, FileCode, CircleCheck, Clock, GitCompareArrows } from '@lucide/astro';
+import { Download, BookOpen, FolderOpen, GitBranch, Search, CodeXml, Zap, ArrowUpRight, ChevronRight, ArrowRight, Monitor, Apple, Terminal, Keyboard, FileCode, CircleCheck, Clock, GitCompareArrows, HardDrive, PanelLeft, MousePointer2, Layers3, Cpu } from '@lucide/astro';
 const { english = false } = Astro.props;
 const base = english ? '/forge/en/' : '/forge/';
 const data = english ? {
-  eyebrow:'OPEN SOURCE · RUST TUI',headline:'A refined terminal workspace',
-  description:'Browse files, edit source, review changes and manage Git in one focused terminal interface. Fast, lightweight and designed for developers.',
+  eyebrow:'OPEN SOURCE · RUST TUI',headline:'Files. Git. One terminal workspace.',
+  description:'Not a full IDE squeezed into a terminal. A focused, native Rust workspace for browsing files, searching code and reviewing Git—at home over SSH, in WSL or at your desk.',
   download:'Get Forge v0.3.3',guide:'Explore docs',
   features:[['File management','Browse, preview and edit with ease'],['Git workflow','Diff · Commit · Stash · History'],['Smart search','Find files and source instantly'],['Code insights','Git Blame · Change Peek · Focus'],['Lightweight','Native Rust, fast to launch']],
   start:'Quick start',startDesc:'From installation to your first review in three steps.',
   steps:[['Install Forge','Download and add to your PATH'],['Open your project','Run forge /path/to/project'],['Start working','Browse, edit, search and review Git changes']],
   docs:'Documentation',docsDesc:'A practical guide to the tools and shortcuts.',
-  docRows:[['Quick start','Install, launch and basic usage','what-is-forge'],['Core features','File tree, editing, search and Git','workflow'],['Git workflow','Review changes, stage and commit','workflow'],['Shortcuts & settings','Keyboard reference and preferences','questions']],
+  docRows:[['Quick start','Install, launch and basic usage','1-install-and-launch'],['Core features','File tree, editing, search and Git','2-workspace-layout-and-navigation'],['Git workflow','Review changes, stage and commit','6-git-changes-and-full-file-diff'],['Shortcuts & settings','Keyboard reference and preferences','12-commands-help-and-settings']],
   full:'Browse all docs',release:'What’s new in v0.3.3',releaseDesc:'Clickable terminal tabs, focus-aware shortcuts and clearer Git history.',releaseLink:'Read release notes',
+  signals:['Native Rust','No browser runtime','Keyboard + mouse'],
+  proofEyebrow:'WHY FORGE / BUILT FOR THE TERMINAL',
+  proofTitle:'Less overhead. More flow.',
+  proofDescription:'Start fast, stay lightweight, and keep file and Git workflows in the same place. These measurements are a reproducible local sample, not a performance guarantee.',
+  benchmarkEyebrow:'MEASURED · LINUX x86_64',
+  benchmarkNote:'Local v0.3.3 Release build · warm file cache · 1,200 tracked source files in a collapsed folder · median of 3 runs. Startup = tmux launch to root listing; RSS sampled after 0.5 s. Hardware and workloads will vary.',
+  benchmarkLink:'Benchmark method',
+  benchmarkStats:[['≈39','ms','Root view ready'],['≈14.3','MiB','Idle memory (RSS)'],['≈17.2','MB','Release binary']],
+  values:[
+    ['Native, not Electron','Single compiled executable, without a browser engine or bundled web UI.'],
+    ['Load what you need','Background tasks, shallow folder watching and lazy previews keep large workspaces navigable.'],
+    ['TUI that feels considered','Contextual shortcuts, mouse hover, drag-to-resize panes and code navigation.'],
+    ['Made for the workflow','File tree, diffs, staging, history and an embedded shell. Not a replacement for an IDE.'],
+  ],
   faq:'Frequently asked questions',faqIntro:'Answers to common questions about Forge.',
 } : {
-  eyebrow:'OPEN SOURCE · RUST TUI',headline:'高效、专注的终端开发工具',
-  description:'现代化的 TUI 文件与 Git 工作台。集文件浏览、代码编辑、Git 全流程、搜索与变更预览于一体，让终端开发同样高效、优雅、可控。',
+  eyebrow:'OPEN SOURCE · RUST TUI',headline:'文件与 Git，回到终端本身。',
+  description:'不是又一个塞进终端的重型 IDE。Forge 用原生 Rust 把文件浏览、代码搜索、Diff 和 Git 串成一个轻巧的工作台，让 SSH、WSL 和日常终端操作更顺手。',
   download:'立即下载 v0.3.3',guide:'查看文档',
   features:[['文件管理','快速浏览与定位项目文件'],['Git 全流程','Diff · Commit · Stash · History'],['智能搜索','项目搜索与文件内搜索'],['代码洞察','Git Blame · 变更预览 · 关注点'],['轻量高效','Rust 构建，启动快，资源占用低']],
   start:'快速上手',startDesc:'从安装到上手，只需要三个步骤。',
   steps:[['安装 Forge','下载并添加到 PATH'],['打开项目','forge /path/to/project'],['开始使用','浏览文件、编辑代码、查看 Git 变更']],
   docs:'文档导航',docsDesc:'快速找到对应功能的使用说明。',
-  docRows:[['快速开始','安装、启动与基本使用','install'],['核心功能','文件管理、编辑、搜索、Git 工作流','files'],['Git 工作流','变更预览、暂存与提交','git'],['快捷键与设置','完整快捷键与操作说明','settings']],
+  docRows:[['快速开始','安装、启动与基本使用','1-安装更新与启动'],['核心功能','文件管理、编辑、搜索、Git 工作流','3-文件浏览目录与预览'],['Git 工作流','变更预览、暂存与提交','7-git-changes-与完整文件-diff'],['快捷键与设置','完整快捷键与操作说明','16-settings主题与快捷键']],
   full:'查看完整文档',release:'v0.3.3 更新说明',releaseDesc:'可点击的终端标签、焦点快捷键提示及更清晰的 Git 提交详情。',releaseLink:'查看发布说明',
+  signals:['原生 Rust','无需浏览器内核','键盘与鼠标皆可'],
+  proofEyebrow:'WHY FORGE / 为终端而设计',
+  proofTitle:'把精力留给代码，把负担留在外面。',
+  proofDescription:'不追求把 IDE 的所有功能搬进 TUI，而是把文件与 Git 的高频操作做到足够快、足够轻、足够顺手。性能数据来自可复核的本地样例测试。',
+  benchmarkEyebrow:'实测样例 · LINUX x86_64',
+  benchmarkNote:'本地 v0.3.3 Release 构建；文件系统缓存已预热；1,200 个被 Git 跟踪的源码文件位于未展开目录；3 次运行中位数。启动指 tmux 启动到根目录可见；RSS 在启动后约 0.5 秒采样。不同硬件和负载结果会变化。',
+  benchmarkLink:'查看测试方法',
+  benchmarkStats:[['≈39','ms','根目录首次可见'],['≈14.3','MiB','空闲内存 RSS'],['≈17.2','MB','Release 可执行文件']],
+  values:[
+    ['原生运行，无需 Electron','单个编译后的可执行文件，无需附带浏览器引擎或 Web UI 服务。'],
+    ['按需加载，减少等待','后台任务、浅层目录监听与按需预览，避免启动时无差别扫描整棵项目树。'],
+    ['终端也有精致交互','焦点感知快捷键、鼠标悬停提示、拖动调整布局和代码快速导航。'],
+    ['聚焦文件与 Git 工作流','文件树、Diff、暂存、历史和内嵌 Shell 紧密衔接，不取代 IDE。'],
+  ],
   faq:'常见问题',faqIntro:'关于安装、Git 工作流、字体与配置。',
 };
 const featureIcons = [FolderOpen, GitBranch, Search, CodeXml, Zap];
 const docsIcons = [BookOpen, FileCode, GitCompareArrows, Keyboard];
+const valueIcons = [Cpu, Layers3, MousePointer2, PanelLeft];
 ---
 <main id="main" class="landing-green">
   <section class="hero shell" aria-labelledby="hero-title">
@@ -38,18 +68,50 @@ const docsIcons = [BookOpen, FileCode, GitCompareArrows, Keyboard];
         <h1 id="hero-title">Forge</h1>
         <h2>{data.headline}</h2>
         <p class="summary">{data.description}</p>
+        <div class="hero-signals" aria-label={english ? 'Design principles' : '产品特点'}>
+          {data.signals.map((signal) => <span><CircleCheck size={14} strokeWidth={1.9} aria-hidden="true" />{signal}</span>)}
+        </div>
         <div class="actions">
           <a class="btn btn-primary hero-download" href="https://github.com/creature-studio/forge/releases/latest"><Download size={19} strokeWidth={2} aria-hidden="true" />{data.download}</a>
           <a class="btn btn-secondary hero-docs" href={`${base}guide/`}><BookOpen size={19} strokeWidth={1.9} aria-hidden="true" />{data.guide}</a>
         </div>
         <div class="hero-meta" aria-label={english ? 'Supported platforms' : '支持的平台'}>
-          <span><Monitor size={15} aria-hidden="true" />Windows · WSL</span>
+          <span><Monitor size={15} aria-hidden="true" />WSL</span>
           <span><Apple size={15} aria-hidden="true" />macOS</span>
           <span><Terminal size={15} aria-hidden="true" />Linux</span>
           <i aria-hidden="true"></i><span><CircleCheck size={15} aria-hidden="true" />Rust · MIT</span>
         </div>
       </div>
       <Preview />
+    </div>
+  </section>
+  <section class="proof" id="why-forge" aria-labelledby="proof-title">
+    <div class="shell">
+      <header class="proof-intro">
+        <div>
+          <span class="proof-kicker"><span class="proof-kicker-rule" aria-hidden="true"></span>{data.proofEyebrow}</span>
+          <h2 id="proof-title">{data.proofTitle}</h2>
+        </div>
+        <p>{data.proofDescription}</p>
+      </header>
+      <div class="proof-grid">
+        <article class="benchmark-panel" aria-label={english ? 'Local performance measurements' : '本地性能实测'}>
+          <div class="benchmark-header"><span class="benchmark-live-dot" aria-hidden="true"></span>{data.benchmarkEyebrow}</div>
+          <div class="benchmark-values">
+            {data.benchmarkStats.map(([value, unit, label]) =>
+              <div class="benchmark-item"><div class="benchmark-number">{value}<span>{unit}</span></div><p>{label}</p></div>
+            )}
+          </div>
+          <p class="benchmark-disclaimer">{data.benchmarkNote}</p>
+          <a class="benchmark-link" href="https://github.com/creature-studio/forge/blob/master/docs/performance.md">{data.benchmarkLink}<ArrowUpRight size={15} aria-hidden="true" /></a>
+        </article>
+        <div class="value-grid" aria-label={english ? 'Product advantages' : '产品设计原则'}>
+          {data.values.map(([title, description], i) => {
+            const Icon = valueIcons[i];
+            return <article class="value-card"><span class="value-icon"><Icon size={21} strokeWidth={1.8} aria-hidden="true" /></span><span class="value-index">0{i+1}</span><h3>{title}</h3><p>{description}</p></article>
+          })}
+        </div>
+      </div>
     </div>
   </section>
   <section class="highlights" aria-label={english ? 'Core features' : '核心功能'}>
@@ -68,7 +130,7 @@ const docsIcons = [BookOpen, FileCode, GitCompareArrows, Keyboard];
         <ol class="quick-steps">
           {data.steps.map(([title, description],i) => <li><span class="step-number">{i+1}</span><strong>{title}</strong><span class="step-description">{description}</span></li>)}
         </ol>
-        <a class="card-bottom-link" href={`${base}guide/#${english?'what-is-forge':'install'}`}>{data.full}<ArrowRight size={16} aria-hidden="true" /></a>
+        <a class="card-bottom-link" href={`${base}guide/#${english?'1-install-and-launch':'1-安装更新与启动'}`}>{data.full}<ArrowRight size={16} aria-hidden="true" /></a>
       </article>
       <article class="resource resource-card doc-card">
         <div class="resource-heading"><div><span class="card-overline">02 / DOCUMENTATION</span><h2>{data.docs}</h2></div><BookOpen size={23} strokeWidth={1.9} class="card-heading-icon" aria-hidden="true" /></div>
