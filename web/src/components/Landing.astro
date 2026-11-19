@@ -7,7 +7,7 @@ const { english = false } = Astro.props;
 const base = english ? '/forge/en/' : '/forge/';
 const data = english ? {
   eyebrow:'OPEN SOURCE · RUST TUI',headline:'Files. Git. One terminal workspace.',
-  description:'Not a full IDE squeezed into a terminal. A focused, native Rust workspace for browsing files, searching code and reviewing Git—at home over SSH, in WSL or at your desk.',
+  description:'Not a full IDE squeezed into a terminal. A native Rust workspace for files, code and Git—with complete mouse interactions alongside keyboard shortcuts, over SSH, in WSL or at your desk.',
   download:'Get Forge v0.3.3',guide:'Explore docs',
   features:[['File management','Browse, preview and edit with ease'],['Git workflow','Diff · Commit · Stash · History'],['Smart search','Find files and source instantly'],['Code insights','Git Blame · Change Peek · Focus'],['Lightweight','Native Rust, fast to launch']],
   start:'Quick start',startDesc:'From installation to your first review in three steps.',
@@ -15,7 +15,7 @@ const data = english ? {
   docs:'Documentation',docsDesc:'A practical guide to the tools and shortcuts.',
   docRows:[['Quick start','Install, launch and basic usage','1-install-and-launch'],['Core features','File tree, editing, search and Git','2-workspace-layout-and-navigation'],['Git workflow','Review changes, stage and commit','6-git-changes-and-full-file-diff'],['Shortcuts & settings','Keyboard reference and preferences','12-commands-help-and-settings']],
   full:'Browse all docs',release:'What’s new in v0.3.3',releaseDesc:'Clickable terminal tabs, focus-aware shortcuts and clearer Git history.',releaseLink:'Read release notes',
-  signals:['Native Rust','No browser runtime','Keyboard + mouse'],
+  signals:['Native Rust','Full mouse support','Keyboard-first, not keyboard-only'],
   proofEyebrow:'WHY FORGE / BUILT FOR THE TERMINAL',
   proofTitle:'Less overhead. More flow.',
   proofDescription:'Start fast, stay lightweight, and keep file and Git workflows in the same place. These measurements are a reproducible local sample, not a performance guarantee.',
@@ -26,13 +26,19 @@ const data = english ? {
   values:[
     ['Native, not Electron','Single compiled executable, without a browser engine or bundled web UI.'],
     ['Load what you need','Background tasks, shallow folder watching and lazy previews keep large workspaces navigable.'],
-    ['TUI that feels considered','Contextual shortcuts, mouse hover, drag-to-resize panes and code navigation.'],
+    ['Full mouse interaction','Click, double-click, right-click, drag, scroll, select and copy—not just keyboard shortcuts.'],
     ['Made for the workflow','File tree, diffs, staging, history and an embedded shell. Not a replacement for an IDE.'],
   ],
+  mouseEyebrow:'TUI / MOUSE INTERACTION',
+  mouseTitle:'A terminal app you can actually use with a mouse.',
+  mouseDescription:'Keyboard-first does not mean keyboard-only. Navigate and manage a real workspace with familiar pointer interactions, while keeping every shortcut close at hand.',
+  mousePoints:['Click & double-click to navigate','Right-click file actions','Drag panels & scrollbars','Wheel scrolling throughout','Select & copy source text','Hover hints & terminal tabs'],
+  mouseCaption:'Real Forge Activity Bar hover tooltip · click to inspect the full screenshot',
+  mouseLink:'Explore mouse interactions',
   faq:'Frequently asked questions',faqIntro:'Answers to common questions about Forge.',
 } : {
   eyebrow:'OPEN SOURCE · RUST TUI',headline:'文件与 Git，回到终端本身。',
-  description:'不是又一个塞进终端的重型 IDE。Forge 用原生 Rust 把文件浏览、代码搜索、Diff 和 Git 串成一个轻巧的工作台，让 SSH、WSL 和日常终端操作更顺手。',
+  description:'不是又一个塞进终端的重型 IDE。Forge 用原生 Rust 把文件、搜索和 Git 串成轻巧工作台，除了键盘快捷键，还支持完整的鼠标操作，让 TUI 也能直观地点击、拖动与选择。',
   download:'立即下载 v0.3.3',guide:'查看文档',
   features:[['文件管理','快速浏览与定位项目文件'],['Git 全流程','Diff · Commit · Stash · History'],['智能搜索','项目搜索与文件内搜索'],['代码洞察','Git Blame · 变更预览 · 关注点'],['轻量高效','Rust 构建，启动快，资源占用低']],
   start:'快速上手',startDesc:'从安装到上手，只需要三个步骤。',
@@ -40,7 +46,7 @@ const data = english ? {
   docs:'文档导航',docsDesc:'快速找到对应功能的使用说明。',
   docRows:[['快速开始','安装、启动与基本使用','1-安装更新与启动'],['核心功能','文件管理、编辑、搜索、Git 工作流','3-文件浏览目录与预览'],['Git 工作流','变更预览、暂存与提交','7-git-changes-与完整文件-diff'],['快捷键与设置','完整快捷键与操作说明','16-settings主题与快捷键']],
   full:'查看完整文档',release:'v0.3.3 更新说明',releaseDesc:'可点击的终端标签、焦点快捷键提示及更清晰的 Git 提交详情。',releaseLink:'查看发布说明',
-  signals:['原生 Rust','无需浏览器内核','键盘与鼠标皆可'],
+  signals:['原生 Rust','完整鼠标交互','键盘优先，但不限键盘'],
   proofEyebrow:'WHY FORGE / 为终端而设计',
   proofTitle:'把精力留给代码，把负担留在外面。',
   proofDescription:'不追求把 IDE 的所有功能搬进 TUI，而是把文件与 Git 的高频操作做到足够快、足够轻、足够顺手。性能数据来自可复核的本地样例测试。',
@@ -51,9 +57,15 @@ const data = english ? {
   values:[
     ['原生运行，无需 Electron','单个编译后的可执行文件，无需附带浏览器引擎或 Web UI 服务。'],
     ['按需加载，减少等待','后台任务、浅层目录监听与按需预览，避免启动时无差别扫描整棵项目树。'],
-    ['终端也有精致交互','焦点感知快捷键、鼠标悬停提示、拖动调整布局和代码快速导航。'],
+    ['全面的鼠标操作','点击、双击、右键菜单、拖动、滚轮、文字选择复制，配合焦点感知快捷键。'],
     ['聚焦文件与 Git 工作流','文件树、Diff、暂存、历史和内嵌 Shell 紧密衔接，不取代 IDE。'],
   ],
+  mouseEyebrow:'TUI / MOUSE INTERACTION',
+  mouseTitle:'不只是能点，而是完整的鼠标交互。',
+  mouseDescription:'键盘优先，不代表只能靠键盘。Forge 为常见开发操作提供完整的鼠标交互路径，用熟悉的点击、拖动和选择方式操作终端工作台。',
+  mousePoints:['点击 / 双击浏览文件','右键菜单与文件操作','拖动面板与滚动条','滚轮浏览文件和 Diff','选择代码并复制','悬停说明与终端标签操作'],
+  mouseCaption:'真实 Forge 界面 · Activity Bar 鼠标悬停说明，点击查看高清截图',
+  mouseLink:'查看鼠标交互说明',
   faq:'常见问题',faqIntro:'关于安装、Git 工作流、字体与配置。',
 };
 const featureIcons = [FolderOpen, GitBranch, Search, CodeXml, Zap];
@@ -113,6 +125,25 @@ const valueIcons = [Cpu, Layers3, MousePointer2, PanelLeft];
         </div>
       </div>
     </div>
+  </section>
+  <section class="mouse-spotlight shell" aria-labelledby="mouse-spotlight-title">
+    <div class="mouse-spotlight-copy">
+      <span class="mouse-spotlight-kicker"><MousePointer2 size={16} strokeWidth={1.8} aria-hidden="true" />{data.mouseEyebrow}</span>
+      <h2 id="mouse-spotlight-title">{data.mouseTitle}</h2>
+      <p>{data.mouseDescription}</p>
+      <ul class="mouse-capabilities">
+        {data.mousePoints.map((point) => <li><CircleCheck size={15} strokeWidth={2} aria-hidden="true" />{point}</li>)}
+      </ul>
+      <a class="mouse-spotlight-link" href={`${base}guide/#${english?'13-mouse-hover-and-compact-layout':'17-鼠标hover-与窄屏布局'}`}>
+        {data.mouseLink}<ArrowRight size={16} strokeWidth={1.8} aria-hidden="true" />
+      </a>
+    </div>
+    <figure class="mouse-spotlight-visual">
+      <a href="/forge/assets/guide/hover.webp" aria-label={data.mouseCaption}>
+        <img src="/forge/assets/guide/hover.webp" width="1366" height="837" loading="lazy" decoding="async" alt={data.mouseCaption} />
+      </a>
+      <figcaption><span class="mouse-preview-dot" aria-hidden="true"></span>{data.mouseCaption}</figcaption>
+    </figure>
   </section>
   <section class="highlights" aria-label={english ? 'Core features' : '核心功能'}>
     <div class="shell highlight-grid">

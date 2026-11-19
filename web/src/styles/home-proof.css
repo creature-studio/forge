@@ -64,3 +64,39 @@
   .landing-green .value-card h3 { margin-top: 12px; }
 }
 @media(prefers-reduced-motion:reduce) { .landing-green .value-card { transition: none; } }
+/* Pointer-capable TUI, presented as a first-class product advantage. */
+.landing-green .mouse-spotlight { display: grid; grid-template-columns: minmax(0,.88fr) minmax(0,1.12fr); gap: clamp(30px,4.7vw,65px); align-items: center; padding-top: 74px; padding-bottom: 76px; }
+.landing-green .mouse-spotlight-copy { min-width: 0; }
+.landing-green .mouse-spotlight-kicker { display: inline-flex; align-items: center; gap: 10px; color: #138450; font-size: 11px; font-weight: 770; letter-spacing: .12em; }
+.landing-green .mouse-spotlight h2 { font-size: clamp(29px,3vw,43px); color: #1a3024; letter-spacing: -.052em; line-height: 1.25; font-weight: 765; margin: 18px 0 15px; }
+.landing-green .mouse-spotlight-copy>p { color: #65766d; font-size: 14px; line-height: 1.95; margin: 0 0 22px; }
+.landing-green .mouse-capabilities { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); column-gap: 14px; row-gap: 11px; padding: 0; margin: 0 0 26px; list-style: none; }
+.landing-green .mouse-capabilities li { display: flex; align-items: flex-start; gap: 8px; color: #2f4938; font-size: 12px; font-weight: 580; line-height: 1.65; }
+.landing-green .mouse-capabilities svg { flex-shrink: 0; color: #14884f; margin-top: 2px; }
+.landing-green .mouse-spotlight-link { display: inline-flex; align-items: center; gap: 7px; color: #087847; font-size: 13px; font-weight: 680; border-bottom: 1px solid #add5bb; padding-bottom: 5px; }
+.landing-green .mouse-spotlight-link:hover { border-color: #087847; }
+.landing-green .mouse-spotlight-link svg { transition: transform .18s; }
+.landing-green .mouse-spotlight-link:hover svg { transform: translateX(3px); }
+.landing-green .mouse-spotlight-visual { margin: 0; min-width: 0; border: 1px solid #dce8e0; background: #f5faf6; border-radius: 14px; padding: 14px 14px 10px; box-shadow: 0 18px 35px rgb(30 70 38 / 7%); }
+.landing-green .mouse-spotlight-visual>a { display: block; border-radius: 9px; overflow: hidden; background: #0b0d10; border: 1px solid #27362e; }
+.landing-green .mouse-spotlight-visual img { display: block; width: 100%; height: auto; aspect-ratio: 1366/837; object-fit: contain; transition: transform .25s; }
+.landing-green .mouse-spotlight-visual a:hover img { transform: scale(1.015); }
+.landing-green .mouse-spotlight-visual figcaption { display: flex; align-items: center; gap: 7px; padding-top: 10px; color: #728b7a; font-size: 10.5px; line-height: 1.65; }
+.landing-green .mouse-preview-dot { flex-shrink: 0; width: 6px; height: 6px; background: #16a367; border-radius: 50%; }
+@media(max-width:950px){
+  .landing-green .mouse-spotlight { grid-template-columns: 1fr; gap: 24px; padding-top: 51px; padding-bottom: 56px; }
+  .landing-green .mouse-spotlight h2 { max-width: 740px; }
+  .landing-green .mouse-spotlight-copy>p { max-width: 730px; }
+  .landing-green .mouse-capabilities { max-width: 670px; }
+}
+@media(max-width:760px){
+  .landing-green .mouse-spotlight { padding-top: 46px; padding-bottom: 46px; }
+  .landing-green .mouse-spotlight h2 { font-size: clamp(28px,6.8vw,34px); }
+  .landing-green .mouse-spotlight-copy>p { font-size: 13px; }
+  .landing-green .mouse-spotlight-visual { padding: 8px 8px 7px; border-radius: 10px; }
+}
+@media(max-width:420px){
+  .landing-green .mouse-capabilities { column-gap: 8px; }
+  .landing-green .mouse-capabilities li { font-size: 11px; gap: 5px; }
+}
+@media(prefers-reduced-motion:reduce){ .landing-green .mouse-spotlight-link svg,.landing-green .mouse-spotlight-visual img { transition: none; } }
