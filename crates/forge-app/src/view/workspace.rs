@@ -50,56 +50,7 @@ pub(super) fn draw_workspace_header(frame: &mut Frame<'_>, area: Rect, model: &m
         branch,
         p,
     );
-    let tabs = if area.height > 1 { rows[1] } else { rows[0] };
-    let widths = if area.width >= 32 {
-        (14, 12)
-    } else {
-        (area.width.min(9), area.width.saturating_sub(9).min(7))
-    };
-    let files = Rect::new(tabs.x, tabs.y, widths.0, tabs.height.min(1));
-    let git = Rect::new(files.right(), tabs.y, widths.1, tabs.height.min(1));
-    for (rect, label, active) in [
-        (
-            files,
-            if area.width >= 32 {
-                " F1  Files "
-            } else {
-                " Files "
-            },
-            !model.in_git_sidebar(),
-        ),
-        (
-            git,
-            if area.width >= 32 {
-                " F2  Git "
-            } else {
-                " Git "
-            },
-            model.in_git_sidebar(),
-        ),
-    ] {
-        let style = if active {
-            Style::default()
-                .fg(p.on_accent)
-                .bg(p.selection)
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-        } else {
-            Style::default().fg(p.fg_dim).bg(p.bg)
-        };
-        frame.render_widget(Paragraph::new(label).style(style), rect);
-    }
-    // Keep Settings visible in the persistent tab strip rather than taking
-    // space away from contextual footer hints (stage/unstage, history, etc.).
-    if tabs.width >= 44 {
-        frame.render_widget(
-            Paragraph::new(" F9 Settings ").style(
-                Style::default().fg(p.accent).bg(p.bg).add_modifier(Modifier::BOLD),
-            ),
-            Rect::new(git.right() + 1, tabs.y, 14, tabs.height.min(1)),
-        );
-    }
-    model.session.layout.files_tab = files;
-    model.session.layout.git_tab = git;
+
 }
 
 pub(super) fn draw_pane_heading(
@@ -190,10 +141,12 @@ pub(super) fn draw_preview_heading(frame: &mut Frame<'_>, area: Rect, model: &mu
     );
     if open_file_chip > 0 {
         let rect = Rect::new(area.right() - open_file_chip, area.y, open_file_chip, 1);
+        let hovered = model.activity_hits.is_hovered(rect);
         frame.render_widget(
             Paragraph::new(" [Open file] ").style(
                 Style::default()
-                    .fg(p.accent)
+                    .fg(if hovered { p.on_accent } else { p.accent })
+                    .bg(if hovered { p.accent } else { p.bg })
                     .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             ),
             rect,
@@ -322,14 +275,12 @@ pub(super) fn git_status_chip(model: &App, p: Palette, max_width: usize) -> Opti
 }
 
 /// The bottom row is a context-sensitive key guide, not a static key legend.
+#[cfg(test)]
 pub(super) fn file_find_has_focus(model: &App) -> bool {
-    model.preview_state.find.open
-        && model.preview_state.find.input_active
-        && model.tools.panel.is_none()
-        && !model.editing.active()
-        && !model.session.help_open
-        && !model.session.commit_open
-        && model.session.context_menu.is_none()
+    matches!(
+        model.key_owner(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE)),
+        input_router::KeyOwner::Find
+    )
 }
 
 /// Keep the navigation and exit keys visible even in a narrow terminal.

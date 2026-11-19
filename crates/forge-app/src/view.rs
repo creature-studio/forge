@@ -3,7 +3,8 @@
 use super::*;
 use crossterm::event::{Event, KeyEventKind};
 use forge_ui::{
-    draw_file_list, draw_preview, draw_scm_sidebar, FileListState, PreviewView, StagingState,
+    draw_file_list, draw_preview, draw_scm_sidebar, FileListState, HorizontalScrollbar,
+    PreviewView, StagingState,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -15,6 +16,8 @@ use ratatui::{
 use ratatui_kit::{Component, ComponentDrawer, ComponentUpdater, Context};
 use tui_input::backend::crossterm::EventHandler;
 mod terminal_tabs;
+mod activity_bar;
+mod dialog;
 pub(crate) mod commit_detail;
 
 // Keep the terminal's own foreground and background. Accent belongs to small
@@ -315,6 +318,8 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     let editor_handoff = props.editor_handoff.clone();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
         let mut model = app.write();
+        let nav_before = input_trace::nav_state(&model);
+        let input_event = event.clone();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
@@ -328,6 +333,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             },
             _ => return EventResult::Ignored,
         }
+        input_trace::event(&input_event, nav_before, input_trace::nav_state(&model));
         if let Some(handoff) = &editor_handoff {
             if let Some(resume) = tools::EditorResume::capture(&mut model) {
                 *handoff.lock().expect("editor handoff") = Some(resume);
@@ -347,6 +353,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         }
     }
     let model = app.read();
+    input_trace::render(&model);
     let commit_open = model.session.commit_open;
     let menu_open = model.session.context_menu.is_some();
     let help_open = model.session.help_open;
@@ -373,25 +380,24 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         (height / 3).clamp(5, 16)
     } else { 0 };
     let dual = width >= 80;
-    let show_list = dual || focus != PaneFocus::Preview;
-    let show_preview = dual || focus == PaneFocus::Preview;
-    // A command search with just a few matches should not consume the screen.
-    let tools_modal_height = if let Some(panel) = model.tools.panel.as_ref() {
-        if matches!(panel.kind, tools::PanelKind::Commands) {
-            let rows = panel.rows.len().min(12) as u16;
-            Constraint::Length((rows + 7).max(8).min(height.saturating_sub(2).max(4)))
-        } else if matches!(panel.kind, tools::PanelKind::Settings) {
-            Constraint::Length(height.saturating_sub(2).min(21).max(8))
-        } else {
-            Constraint::Percentage(90)
-        }
-    } else {
-        Constraint::Percentage(90)
-    };
+    let sidebar_visible = model.session.sidebar_visible;
+    let sidebar_width = if dual {
+        model.session.sidebar_width.clamp(20, width.saturating_sub(29).max(20))
+    } else { width.saturating_sub(activity_bar::activity_bar_width()) };
+    let show_list = sidebar_visible && (dual || focus != PaneFocus::Preview);
+    let show_preview = !sidebar_visible || dual || focus == PaneFocus::Preview;
+    let screen = (width, height);
+    let tools_size = model.tools.panel.as_ref()
+        .map(|panel| dialog::DialogSize::tools(panel, screen));
+    let commit_size = dialog::DialogSize::commit(screen);
     drop(model);
     {
         let mut model = app.write_no_update();
         model.session.layout = PaneLayout::default();
+        // Maximized Terminal and hidden panes must not retain hit regions from
+        // a previously painted Activity Bar or Sidebar collapse button.
+        model.activity_hits.clear();
+        model.commit_file_links.clear();
     }
     element!(PaletteProvider(palette: palette) {
         ContextProvider(value: Context::owned(app)) {
@@ -401,16 +407,19 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                         NativePane(kind: PaneKind::Terminal)
                     }
                 } else {
-                View(height: Constraint::Length(if height >= 12 { 2 } else { 1 })) {
+                View(height: Constraint::Length(1)) {
                     NativePane(kind: PaneKind::Header)
                 }
                 View(flex_direction: Direction::Horizontal, height: Constraint::Min(0)) {
+                    View(width: Constraint::Length(activity_bar::activity_bar_width().min(width))) {
+                        NativePane(kind: PaneKind::ActivityBar)
+                    }
                     if show_list {
-                        View(width: if dual { Constraint::Length((width / 4).clamp(24, 40)) } else { Constraint::Percentage(100) }) {
+                        View(width: if dual { Constraint::Length(sidebar_width) } else { Constraint::Percentage(100) }) {
                             NativePane(kind: PaneKind::Sidebar)
                         }
                     }
-                    if dual {
+                    if dual && show_list {
                         View(width: Constraint::Length(1)) { NativePane(kind: PaneKind::Divider) }
                     }
                     if show_preview {
@@ -435,7 +444,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                 }
             }
             if commit_open {
-                Modal(open: true, width: Constraint::Percentage(80), height: Constraint::Length(height.saturating_sub(2).min(20).max(7))) {
+                Modal(open: true, width: Constraint::Length(commit_size.width), height: Constraint::Length(commit_size.height)) {
                     CommitEditor()
                 }
             }
@@ -445,7 +454,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                 }
             }
             if tools_open {
-                Modal(open: true, width: if app.read().tools.panel.as_ref().is_some_and(|p| matches!(p.kind, tools::PanelKind::Settings)) { Constraint::Percentage(74) } else { Constraint::Percentage(92) }, height: tools_modal_height) {
+                Modal(open: true, width: Constraint::Length(tools_size.map_or(80, |s| s.width)), height: Constraint::Length(tools_size.map_or(15, |s| s.height))) {
                     Tools()
                 }
             }
@@ -563,6 +572,7 @@ fn Help(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 #[derive(Default, Clone, Copy)]
 enum PaneKind {
     Header,
+    ActivityBar,
     #[default]
     Sidebar,
     Preview,
@@ -583,23 +593,6 @@ struct NativePaneProps {
 
 /// Native bridges own no event loop or application lifetime. Kit computes their
 /// area; drawing only updates viewport caches without scheduling another frame.
-/// One-row horizontal position indicator; only shown for actual overflow.
-fn draw_horizontal_position(frame: &mut Frame<'_>, area: Rect, offset: usize, full: usize, p: Palette) {
-    if area.height == 0 || area.width < 6 { return; }
-    let width = area.width as usize;
-    let max_offset = full.saturating_sub(width);
-    if max_offset == 0 { return; }
-    let thumb = ((width * width + full / 2) / full).clamp(1, width);
-    let left = (offset.min(max_offset) * (width - thumb) + max_offset / 2) / max_offset;
-    for x in 0..width {
-        let selected = x >= left && x < left + thumb;
-        frame.buffer_mut()[(area.x + x as u16, area.y)]
-            .set_symbol(if selected { "━" } else { "─" })
-            .set_style(Style::default().bg(p.bg)
-                .fg(if selected { p.accent } else { p.border }));
-    }
-}
-
 /// A compact 2-column file overview: markers next to the existing position thumb.
 /// Only project known rows; no I/O or scanning occurs during drawing.
 fn overview_marker_y(row: usize, total: usize, height: usize) -> usize {
@@ -698,7 +691,11 @@ impl Component for NativePane {
                 draw_workspace_header(drawer.frame, area, &mut model, self.palette);
                 model.session.layout.header = area;
             }
+            PaneKind::ActivityBar => {
+                activity_bar::draw_activity_bar(drawer.frame, area, &mut model, self.palette);
+            }
             PaneKind::Sidebar => {
+                area = activity_bar::draw_sidebar_heading(drawer.frame, area, &mut model, self.palette);
                 model.session.layout.list = area;
                 if model.in_git_sidebar() {
                     let mut scroll = model.scm.scroll_scm;
@@ -764,7 +761,12 @@ impl Component for NativePane {
                 bar.draw(drawer.frame, self.palette.bg, self.palette.fg_dim, self.palette.accent);
             }
             PaneKind::Preview => {
+                model.commit_file_links.clear();
                 model.session.layout.preview = area;
+                // This region belongs to the last painted preview, not to the
+                // previous file, diff, or wrap setting.
+                model.session.layout.preview_horizontal_scrollbar = Rect::default();
+                model.session.layout.preview_horizontal_max = 0;
                 area = draw_preview_heading(drawer.frame, area, &mut model, self.palette);
                 if commit_detail::draw(drawer.frame,area,&mut model,self.palette) {
                     model.session.layout.overview_ruler = Rect::default();
@@ -887,7 +889,7 @@ impl Component for NativePane {
                             horizontal_x = horizontal_x.min(max_x);
                             if max_x > 0 {
                                 horizontal_bar = Some((Rect::new(area.x + 5, area.bottom() - 1,
-                                    area.width.saturating_sub(6), 1), text_cache.max_code_columns().saturating_sub(1)));
+                                    area.width.saturating_sub(6), 1), max_x));
                                 area.height -= 1;
                             }
                         } else { horizontal_x = 0; }
@@ -917,8 +919,7 @@ impl Component for NativePane {
                         horizontal_x = horizontal_x.min(max_x);
                         if max_x > 0 && area.height > 2 {
                             horizontal_bar = Some((Rect::new(area.x, area.bottom() - 1,
-                                area.width.saturating_sub(1), 1),
-                                cache.max_code_columns(lines).saturating_add(area.width.saturating_sub(1) as usize).saturating_sub(half_content)));
+                                area.width.saturating_sub(1), 1), max_x));
                             area.height -= 1;
                         }
                         draw_preview(drawer.frame, area, &theme,
@@ -1013,12 +1014,25 @@ impl Component for NativePane {
                         model.session.layout.preview_scrollbar = Rect::default();
                     }
                 }
-                if let Some((bar, total)) = horizontal_bar {
-                    draw_horizontal_position(drawer.frame, bar, model.preview_state.preview_scroll_x, total, self.palette);
+                if let Some((bar, max_x)) = horizontal_bar {
+                    let scrollbar = HorizontalScrollbar::new(
+                        bar,
+                        model.preview_state.preview_scroll_x,
+                        (bar.width as usize).saturating_add(max_x),
+                    );
+                    if scrollbar.geometry().is_some() {
+                        model.session.layout.preview_horizontal_scrollbar = bar;
+                        model.session.layout.preview_horizontal_max = max_x;
+                        scrollbar.draw(
+                            drawer.frame, self.palette.bg,
+                            self.palette.border, self.palette.accent,
+                        );
+                    }
                 }
                 }
             }
             PaneKind::Divider => {
+                model.session.layout.sidebar_divider = area;
                 drawer.frame.render_widget(
                     Block::default()
                         .borders(Borders::LEFT)
@@ -1031,6 +1045,7 @@ impl Component for NativePane {
                 if let Some(term) = &mut model.terminal {
                     term.render(drawer.frame, inner, self.palette.bg, self.palette.fg);
                 }
+                terminal_tabs::draw_tab_tooltip(drawer.frame, area, &model, self.palette);
             }
             PaneKind::Footer => {
                 model.session.layout.git_sync_status =
@@ -1042,6 +1057,7 @@ impl Component for NativePane {
                     area.width,
                     area.height.min(1),
                 );
+                activity_bar::draw_workspace_tooltip(drawer.frame, &model, self.palette);
             }
             PaneKind::Menu => {
                 if let Some(menu) = &mut model.session.context_menu {

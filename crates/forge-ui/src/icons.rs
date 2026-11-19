@@ -88,6 +88,32 @@ pub fn init_from_env() {
     set_icon_mode(mode);
 }
 
+/// Icons used by the persistent left-side Activity Bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityIcon { Files, Git, Search, Terminal, Settings }
+
+// Keep width to one terminal cell in each icon mode so hover targets and
+// mouse hit regions stay identical, including on terminals without Nerd Font.
+fn activity_glyph(mode: IconMode, icon: ActivityIcon) -> &'static str {
+    match (mode, icon) {
+        (IconMode::Nerd, ActivityIcon::Files) => "\u{f07b}",  // nf-fa-folder
+        (IconMode::Nerd, ActivityIcon::Git) => "\u{f126}",    // nf-fa-code-fork
+        (IconMode::Nerd, ActivityIcon::Search) => "\u{f002}", // nf-fa-search
+        (IconMode::Nerd, ActivityIcon::Terminal) => "\u{f120}", // nf-fa-terminal
+        (IconMode::Nerd, ActivityIcon::Settings) => "\u{f013}", // nf-fa-cog
+        (IconMode::Builtin, ActivityIcon::Files) => "▤",
+        (IconMode::Builtin, ActivityIcon::Git) => "⎇",
+        (IconMode::Builtin, ActivityIcon::Search) => "⌕",
+        (IconMode::Builtin, ActivityIcon::Terminal) => "›",
+        (IconMode::Builtin, ActivityIcon::Settings) => "⚙",
+        (IconMode::Ascii, ActivityIcon::Files) => "F",
+        (IconMode::Ascii, ActivityIcon::Git) => "G",
+        (IconMode::Ascii, ActivityIcon::Search) => "?",
+        (IconMode::Ascii, ActivityIcon::Terminal) => ">",
+        (IconMode::Ascii, ActivityIcon::Settings) => "*",
+    }
+}
+
 /// Compact API used by widgets.
 #[derive(Debug, Clone, Copy)]
 pub struct Icons;
@@ -95,6 +121,11 @@ pub struct Icons;
 impl Icons {
     pub fn mode() -> IconMode {
         icon_mode()
+    }
+
+    /// One-cell Activity Bar symbol in the user's configured icon mode.
+    pub fn activity(icon: ActivityIcon) -> &'static str {
+        activity_glyph(icon_mode(), icon)
     }
 
     /// Collapsed directory chevron.
@@ -260,6 +291,20 @@ pub fn contains_private_use(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activity_icons_are_one_cell_in_every_mode() {
+        use unicode_width::UnicodeWidthStr;
+        for mode in [IconMode::Builtin, IconMode::Nerd, IconMode::Ascii] {
+            let mut distinct = std::collections::HashSet::new();
+            for icon in [ActivityIcon::Files, ActivityIcon::Git, ActivityIcon::Search,
+                         ActivityIcon::Terminal, ActivityIcon::Settings] {
+                let glyph = activity_glyph(mode, icon);
+                assert_eq!(glyph.width(), 1, "{mode:?}: {icon:?}: {glyph}");
+                assert!(distinct.insert(glyph), "duplicate icon for {mode:?}: {icon:?}");
+            }
+        }
+    }
 
     #[test]
     fn parse_icon_mode() {

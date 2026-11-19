@@ -111,6 +111,50 @@ pub(super) fn draw_tab_strip(frame: &mut Frame<'_>, area: Rect, model: &mut App,
     Rect::new(area.x,area.y.saturating_add(1),area.width,area.height.saturating_sub(1))
 }
 
+
+/// Draw after the PTY so the hint sits above terminal output, not inside it.
+/// Reuse HoverTargets' painted hitbox rather than a second set of coordinates.
+pub(super) fn draw_tab_tooltip(frame: &mut Frame<'_>, area: Rect, model: &App, palette: Palette) {
+    let Some((anchor, action)) = model.terminal_tab_hits.hovered() else { return };
+    if !model.terminal.as_ref().is_some_and(|t| t.visible)
+        || model.keys.open || model.session.help_open || model.editing.active()
+        || model.tools.panel.is_some() || model.session.commit_open
+        || model.blame.popup.is_some() || model.session.context_menu.is_some()
+    {
+        return;
+    }
+    let (description, shortcut) = tab_action_hint(model, action);
+    forge_ui::Tooltip::new(&description).shortcut(shortcut.as_deref()).draw(
+        frame, anchor, area,
+        Style::default().fg(palette.fg).bg(palette.bg),
+        Style::default().fg(palette.accent),
+    );
+}
+
+fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<String>) {
+    let mut tabs: Vec<_> = model.terminal_tabs.iter().chain(model.terminal.iter()).collect();
+    tabs.sort_by_key(|tab| tab.id);
+    match action {
+        TerminalTabAction::Activate(id) => {
+            let position = tabs.iter().position(|tab| tab.id == id);
+            let label = tabs.iter().find(|tab| tab.id == id).map(|tab| tab.name.as_str()).unwrap_or("Terminal");
+            let number = position.map(|p| p + 1).unwrap_or(1);
+            (format!("Terminal {number}: {label}"), (number <= 8).then(|| format!("Alt+{number}")))
+        }
+        TerminalTabAction::Close(id) => {
+            let label = tabs.iter().find(|tab| tab.id == id).map(|tab| tab.name.as_str()).unwrap_or("Terminal");
+            let active = model.terminal.as_ref().is_some_and(|tab| tab.id == id);
+            (format!("Close terminal: {label}"), active.then(|| "Ctrl+Shift+W".into()))
+        }
+        TerminalTabAction::New => ("New terminal".into(), Some("Shift+F8".into())),
+        TerminalTabAction::Previous => ("Previous terminal".into(), None),
+        TerminalTabAction::Next => ("Next terminal".into(), Some("F12".into())),
+        TerminalTabAction::Maximize => ("Toggle terminal maximize".into(), Some("F11".into())),
+        TerminalTabAction::Help => ("Terminal help".into(), Some("F4".into())),
+        TerminalTabAction::Hide => ("Hide terminal".into(), Some("F8".into())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,6 +174,70 @@ mod tests {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: rect.x, row: rect.y, modifiers: KeyModifiers::NONE,
         });
+    }
+
+    #[tokio::test]
+    async fn terminal_tooltip_appears_on_hover_and_clears_on_leave() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        paint(&mut app, 95);
+        let new_button = app.terminal_tab_hits.iter().find(|(_, action)|
+            *action == TerminalTabAction::New).unwrap().0;
+        let render = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(95, 15)).unwrap();
+            terminal.draw(|frame| {
+                let area = Rect::new(0, 4, 95, 10);
+                draw_tab_strip(frame, area, app, workspace_palette());
+                // The tooltip is painted on top of the terminal's PTY output.
+                frame.render_widget(Paragraph::new("PTY OUTPUT"), Rect::new(0, 5, 95, 1));
+                draw_tab_tooltip(frame, area, app, workspace_palette());
+            }).unwrap();
+            (4..14).map(|y| {
+                (0..95).map(|x| terminal.backend().buffer()[(x,y)].symbol()).collect::<String>()
+            }).collect::<Vec<_>>().join("\n")
+        };
+        assert!(!render(&mut app).contains("New terminal"));
+        let before = app.terminal.as_ref().unwrap().id;
+        app.handle_mouse(MouseEvent { kind: MouseEventKind::Moved,
+            column: new_button.x, row: new_button.y, modifiers: KeyModifiers::NONE });
+        let hovered = render(&mut app);
+        assert!(hovered.contains("New terminal"), "{hovered}");
+        assert!(hovered.contains("Shift+F8"), "{hovered}");
+        assert_eq!(app.terminal.as_ref().unwrap().id, before);
+        app.handle_mouse(MouseEvent { kind: MouseEventKind::Moved,
+            column: 40, row: 9, modifiers: KeyModifiers::NONE });
+        assert!(!render(&mut app).contains("New terminal"));
+    }
+
+    #[tokio::test]
+    async fn terminal_tooltip_uses_full_tab_name_and_does_not_cover_modals() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        app.terminal.as_mut().unwrap().name = "very-long-terminal-label".into();
+        let id = app.terminal.as_ref().unwrap().id;
+        let (hint, key) = tab_action_hint(&app, TerminalTabAction::Activate(id));
+        assert!(hint.contains("very-long-terminal-label"));
+        assert_eq!(key.as_deref(), Some("Alt+1"));
+        let (hint, key) = tab_action_hint(&app, TerminalTabAction::Hide);
+        assert_eq!(hint, "Hide terminal");
+        assert_eq!(key.as_deref(), Some("F8"));
+        paint(&mut app, 80);
+        let new_button = app.terminal_tab_hits.iter().find(|(_, action)|
+            *action == TerminalTabAction::New).unwrap().0;
+        app.handle_mouse(MouseEvent { kind: MouseEventKind::Moved,
+            column: new_button.x, row: new_button.y, modifiers: KeyModifiers::NONE });
+        app.keys.open = true;
+        let mut terminal = Terminal::new(TestBackend::new(80, 15)).unwrap();
+        terminal.draw(|frame| {
+            let area = Rect::new(0, 4, 80, 10);
+            draw_tab_strip(frame, area, &mut app, workspace_palette());
+            draw_tab_tooltip(frame, area, &app, workspace_palette());
+        }).unwrap();
+        let rows = (4..14).map(|y| (0..80).map(|x| terminal.backend().buffer()[(x,y)].symbol())
+            .collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(!rows.contains("New terminal"));
     }
 
     #[tokio::test]

@@ -5,7 +5,9 @@
 #![forbid(unsafe_code)]
 
 pub mod interactive;
-pub use interactive::HoverTargets;
+pub use interactive::{HoverTargets, Link};
+mod tooltip;
+pub use tooltip::{Tooltip, TooltipPlacement};
 mod context_menu;
 mod file_list;
 mod graph;
@@ -32,7 +34,7 @@ pub use graph::{
     change_color, dir_key, flatten_changes, lane_color, layout_graph, ChangeRow, GraphCell,
     GraphLayout, GraphRow, LANE_WIDTH,
 };
-pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, IconMode, Icons};
+pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, ActivityIcon, IconMode, Icons};
 pub use markdown::{wrap_line as wrap_text_line, MarkdownPreview};
 pub use list_viewport::ListViewport;
 pub use preview_pane::{
@@ -45,7 +47,7 @@ pub use staging::{
     scm_jump_to_column, staging_index_at, HistoryView, ScmRow, StagingColumn, StagingLayout,
     StagingState,
 };
-pub use scrollbar::{ScrollbarDrag, VerticalScrollbar};
+pub use scrollbar::{HorizontalScrollbar, ScrollbarDrag, VerticalScrollbar};
 pub use sticky::index_at as sticky_index_at;
 pub use style::rgb as to_color;
 pub use style::{color_mode, set_color_mode};
@@ -90,6 +92,10 @@ pub struct PaneLayout {
     pub overview_ruler: Rect,
     /// Dedicated one-cell vertical scrollbar lane for file and Git Diff previews.
     pub preview_scrollbar: Rect,
+    /// One-row draggable horizontal scrollbar; empty when code wraps or fits.
+    pub preview_horizontal_scrollbar: Rect,
+    /// Maximum horizontal code offset associated with this scrollbar's geometry.
+    pub preview_horizontal_max: usize,
     /// Floating in-file find widget, empty when closed.
     pub file_find_rect: Rect,
     pub markdown_preview_tab: Rect,
@@ -102,10 +108,16 @@ pub struct PaneLayout {
     /// Clickable Git branch / ahead / behind / sync status chip.
     pub git_sync_status: Rect,
     pub hotkeys: Rect,
-    /// Visible Files/Git tab strip.
+    /// Left Activity Bar, independent of Sidebar visibility.
     pub activity: Rect,
     pub files_tab: Rect,
     pub git_tab: Rect,
+    pub search_tab: Rect,
+    pub terminal_activity: Rect,
+    pub settings_tab: Rect,
+    /// Sidebar header collapse button and draggable boundary.
+    pub sidebar_toggle: Rect,
+    pub sidebar_divider: Rect,
     pub window: Rect,
     /// False when terminal width &lt; 80 (single-pane Tab switch).
     pub dual_pane: bool,
