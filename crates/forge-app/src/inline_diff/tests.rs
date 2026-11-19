@@ -153,7 +153,7 @@ async fn staged_and_unstaged_marks_are_both_visible_and_mapped() {
         .any(|(n, c)| *n == 1 && *c == Change::Added));
     let mut app = app(dir.path(), &path).await;
     let index = app.inline_active().unwrap().hunks.len();
-    app.toggle_inline_hunk(index);
+    app.toggle_inline_hunk(index, None);
     assert_eq!(app.inline_diff.open, Some(index));
     assert!(matches!(App::selected_hunk(app.inline_active().unwrap(), index), Some((_, DiffSide::Staged))));
     app.close_inline_peek();
@@ -259,7 +259,13 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
     assert_eq!(app.preview_state.text_rows.source_to_row(2), second);
     let popup = app.inline_diff.popup;
     assert!(app.inline_mouse(MouseEvent {
-        column: popup.right() - 1,
+        column: popup.x + 3,
+        row: popup.y,
+        ..click(2)
+    }));
+    assert!(app.inline_diff.open.is_some(), "heading is not a dismiss button");
+    assert!(app.inline_mouse(MouseEvent {
+        column: popup.right() - 2,
         row: popup.y,
         ..click(2)
     }));
@@ -385,7 +391,114 @@ async fn overview_git_marks_cover_paged_files() {
     let y = (550 - 1) * (30 - 1) / (lines - 1);
     assert_eq!(app.overview_click_target(y, 30), Some(550));
     assert_eq!(app.overview_click_target(0, 30), Some(1));
+    // Keyboard navigation reaches the same mark as mouse ruler clicks,
+    // including a source line that has not yet been loaded in Preview.
+    app.config.show_overview_ruler = true;
+    app.session.focus = PaneFocus::Preview;
+    app.handle_key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Down, crossterm::event::KeyModifiers::ALT,
+    ));
+    assert!(
+        app.preview_state.pending_source_line == Some(550)
+            || app.preview_state.pending_overview_line == Some(550),
+        "keyboard mark jump must retain source line 550",
+    );
     // A focus jump can target an unloaded line without losing its identity.
     app.preview_state.pending_overview_line = Some(550);
     assert!(app.preview_state.pending_source_line.is_none());
+}
+
+#[tokio::test]
+async fn long_hunk_peek_aligns_with_selected_blame_line_and_clicked_gutter() {
+    let original = (1..=110)
+        .map(|n| format!("source {n:03}\n"))
+        .collect::<String>();
+    let (dir, path) = fixture(&original);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "base",
+        ],
+    );
+    let changed = (1..=110)
+        .map(|n| {
+            if (44..=70).contains(&n) {
+                format!("changed {n:03}\n")
+            } else {
+                format!("source {n:03}\n")
+            }
+        })
+        .collect::<String>();
+    std::fs::write(&path, changed).unwrap();
+    let mut app = app(dir.path(), &path).await;
+    let region = Rect::new(10, 3, 77, 30);
+    app.session.layout.preview_inner = region;
+    let source_row = |app: &App, line| app.preview_state.text_rows.source_to_row(line);
+    app.preview_state.preview_scroll = source_row(&app, 40);
+    let target = 64;
+    let scroll = app.preview_state.preview_scroll;
+    app.blame.cursor = Some((path.clone(), source_row(&app, target), scroll));
+
+    app.toggle_inline_peek();
+    assert_eq!(app.inline_diff.open, Some(0));
+    assert_eq!(app.inline_diff.anchor_line, Some(target));
+    let offset = app.inline_diff.offset;
+    let hunk = &app.inline_active().unwrap().hunks[0];
+    assert!(offset > 5, "long hunk must not show its first diff lines");
+    assert!(hunk
+        .row_lines
+        .iter()
+        .skip(offset)
+        .take(10)
+        .any(|line| *line == Some(target)));
+
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 40)).unwrap();
+    terminal.draw(|f| app.draw_inline_diff(f, region)).unwrap();
+    let popup = app.inline_diff.popup;
+    assert!(
+        popup.y > region.y + 6,
+        "Peek must anchor near selected line, not line 44: {popup:?}"
+    );
+    let text = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect::<String>();
+    assert!(
+        text.contains("changed 064"),
+        "Peek omitted selected source line"
+    );
+    assert!(
+        text.contains("Hunk 1/1"),
+        "header must distinguish hunk from row offset"
+    );
+
+    app.close_inline_peek();
+    app.blame.cursor = None;
+    let click_row = region.y + (source_row(&app, 66) - scroll) as u16;
+    assert!(app.inline_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: region.x + 2,
+        row: click_row,
+        modifiers: KeyModifiers::NONE,
+    }));
+    assert_eq!(app.inline_diff.anchor_line, Some(66));
+    let offset = app.inline_diff.offset;
+    let hunk = &app.inline_active().unwrap().hunks[0];
+    assert!(hunk
+        .row_lines
+        .iter()
+        .skip(offset)
+        .take(10)
+        .any(|line| *line == Some(66)));
+    terminal.draw(|f| app.draw_inline_diff(f, region)).unwrap();
+    assert!(app.inline_diff.popup.y > region.y + 6);
 }

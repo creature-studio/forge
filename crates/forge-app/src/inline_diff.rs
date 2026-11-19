@@ -4,11 +4,12 @@ use forge_model::DiffLineKind;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 use std::hash::{Hash, Hasher};
+
+mod peek_ui;
 
 #[cfg(test)]
 mod tests;
@@ -33,6 +34,8 @@ impl Change {
 struct Hunk {
     header: String,
     lines: Vec<(DiffLineKind, String)>,
+    // Worktree source-line coordinate of each displayed diff row.
+    row_lines: Vec<Option<usize>>,
     marks: Vec<(usize, Change)>,
 }
 
@@ -62,6 +65,7 @@ fn hunks(diff: &FileDiff, count: usize) -> Vec<Hunk> {
         let mut hunk = Hunk {
             header: range.header,
             lines: Vec::new(),
+            row_lines: Vec::new(),
             marks: Vec::new(),
         };
         let body = &diff.lines[range.start + 1..range.end];
@@ -71,6 +75,7 @@ fn hunks(diff: &FileDiff, count: usize) -> Vec<Hunk> {
                 DiffLineKind::Context => {
                     hunk.lines
                         .push((DiffLineKind::Context, body[i].text.clone()));
+                    hunk.row_lines.push(Some(line.max(1)));
                     line = line.saturating_add(1);
                     i += 1;
                 }
@@ -85,10 +90,14 @@ fn hunks(diff: &FileDiff, count: usize) -> Vec<Hunk> {
                     {
                         match body[i].kind {
                             DiffLineKind::Add => {
+                                hunk.row_lines.push(Some(line.max(1)));
                                 added += 1;
                                 line = line.saturating_add(1);
                             }
-                            DiffLineKind::Delete => deleted += 1,
+                            DiffLineKind::Delete => {
+                                hunk.row_lines.push(Some(start.max(1)));
+                                deleted += 1;
+                            },
                             _ => {
                                 i += 1;
                                 continue;
@@ -163,8 +172,10 @@ struct Read {
 /// single ordered pass. Avoid O(staged_marks * unstaged_diff_lines) on big files.
 /// Removed Index lines anchor to the next surviving worktree line.
 fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
-    let mut targets = staged.iter().flat_map(|h| h.marks.iter().map(|(n, _)| *n))
-        .collect::<Vec<_>>();
+    let mut targets = staged.iter().flat_map(|h|
+        h.marks.iter().map(|(n, _)| *n)
+            .chain(h.row_lines.iter().flatten().copied())
+    ).collect::<Vec<_>>();
     targets.sort_unstable();
     targets.dedup();
     let mut resolved = std::collections::HashMap::with_capacity(targets.len());
@@ -213,6 +224,9 @@ fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
     }
     for hunk in staged {
         for (line, _) in &mut hunk.marks {
+            if let Some(mapped) = resolved.get(line) { *line = *mapped; }
+        }
+        for line in hunk.row_lines.iter_mut().flatten() {
             if let Some(mapped) = resolved.get(line) { *line = *mapped; }
         }
     }
@@ -306,6 +320,8 @@ pub(super) struct InlineDiff {
     pending: Option<(PathBuf, u64, JobHandle<Result<Read>>)>,
     checked: Option<Instant>,
     open: Option<usize>,
+    // The selected source row used to position and scroll the peek.
+    anchor_line: Option<usize>,
     popup: Rect,
     offset: usize,
 }
@@ -489,6 +505,7 @@ impl App {
                 }
                 if self.inline_diff.active.as_ref().map(|r| &r.key) != Some(&read.key) {
                     self.inline_diff.open = None;
+                    self.inline_diff.anchor_line = None;
                     self.inline_diff.popup = Rect::default();
                 }
                 self.inline_diff.active = Some(read);
@@ -496,6 +513,7 @@ impl App {
             _ => {
                 self.inline_diff.active = None;
                 self.inline_diff.open = None;
+                self.inline_diff.anchor_line = None;
                 self.inline_diff.popup = Rect::default();
             }
         }
@@ -526,33 +544,96 @@ impl App {
         else { read.staged_hunks.get(index - read.hunks.len()).map(|h| (h, DiffSide::Staged)) }
     }
 
-    fn toggle_inline_hunk(&mut self, index: usize) {
-        self.inline_diff.open = if self.inline_diff.open == Some(index) {
-            None
+    /// Map the chosen source line into this hunk's diff rows. Scrolling a
+    /// large hunk must start near the clicked line, not at its first context.
+    fn peek_offset(hunk: &Hunk, target: usize) -> usize {
+        let match_row = hunk
+            .row_lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| **line == Some(target))
+            .find(|(i, _)| matches!(hunk.lines[*i].0, DiffLineKind::Add))
+            .or_else(|| {
+                hunk.row_lines
+                    .iter()
+                    .enumerate()
+                    .find(|(_, line)| **line == Some(target))
+            })
+            .map(|(i, _)| i);
+        match_row.unwrap_or(0).saturating_sub(2)
+    }
+
+    fn toggle_inline_hunk(&mut self, index: usize, source_line: Option<usize>) {
+        if self.inline_diff.open == Some(index) {
+            self.inline_diff.open = None;
+            self.inline_diff.anchor_line = None;
+            self.inline_diff.offset = 0;
         } else {
-            Some(index)
-        };
-        self.inline_diff.offset = 0;
+            self.inline_diff.offset = self
+                .inline_active()
+                .and_then(|r| Self::selected_hunk(r, index))
+                .and_then(|(h, _)| source_line.map(|source| Self::peek_offset(h, source)))
+                .unwrap_or(0);
+            self.inline_diff.open = Some(index);
+            self.inline_diff.anchor_line = source_line;
+        }
         self.inline_diff.popup = Rect::default();
         self.session.focus = PaneFocus::Preview;
     }
 
     pub(super) fn toggle_inline_peek(&mut self) {
-        if self.inline_path().is_none() { return; }
+        let Some(path) = self.inline_path() else {
+            return;
+        };
         let top = self.preview_state.preview_scroll;
-        let index = self.inline_active().and_then(|read| {
-            (0..Self::visible_hunk_count(read))
-                .filter_map(|index| Self::selected_hunk(read, index)
-                    .and_then(|(hunk, side)| self.layer_enabled(side).then_some((index, hunk))))
-                .find(|(_, hunk)| hunk.marks.iter().any(|(line, _)|
-                    self.preview_state.text_rows.source_to_row(*line) >= top))
-                .map(|(index, _)| index)
-                .or_else(|| (0..Self::visible_hunk_count(read)).find(|index| {
-                    Self::selected_hunk(read, *index).is_some_and(|(_, side)| self.layer_enabled(side))
-                }))
+        // Render tests and first-frame input may run before the viewport gets
+        // measured. In that case use the remainder of the file as a fallback.
+        let bottom = if self.session.layout.preview_inner.height == 0 {
+            usize::MAX
+        } else {
+            top.saturating_add(self.session.layout.preview_inner.height as usize)
+        };
+        // The same source row that owns inline blame must own the F7 Peek.
+        // Falling back to the viewport top is appropriate only when the user
+        // has not clicked a particular line.
+        let cursor = self
+            .blame
+            .cursor
+            .as_ref()
+            .filter(|(p, row, scroll)| p == &path && *scroll == top && *row >= top && *row < bottom)
+            .and_then(|(_, row, _)| self.preview_state.text_rows.source_line_at(*row));
+        let target_row = cursor
+            .map(|line| self.preview_state.text_rows.source_to_row(line))
+            .unwrap_or(top);
+        let index_and_line = self.inline_active().and_then(|read| {
+            let visible_marks = (0..Self::visible_hunk_count(read))
+                .filter_map(|index| {
+                    Self::selected_hunk(read, index)
+                        .and_then(|(hunk, side)| self.layer_enabled(side).then_some((index, hunk)))
+                })
+                .flat_map(|(index, hunk)| hunk.marks.iter().map(move |(line, _)| (index, *line)))
+                .filter(|(_, line)| {
+                    let row = self.preview_state.text_rows.source_to_row(*line);
+                    row >= top && row < bottom
+                });
+            visible_marks.min_by_key(|(index, line)| {
+                let row = self.preview_state.text_rows.source_to_row(*line);
+                let distance = row.abs_diff(target_row);
+                let side = usize::from(*index >= read.hunks.len());
+                // F7 without a selected source line keeps WORKTREE priority.
+                // With a selected line, the exact row matters more than side.
+                if cursor.is_some() {
+                    (distance, side, *index)
+                } else {
+                    (side, distance, *index)
+                }
+            })
         });
-        if let Some(index) = index { self.toggle_inline_hunk(index); }
-        else { self.session.status = "No source changes to peek".into(); }
+        if let Some((index, line)) = index_and_line {
+            self.toggle_inline_hunk(index, Some(line));
+        } else {
+            self.session.status = "No visible source changes to peek".into();
+        }
     }
 
     pub(super) fn inline_diff_hint(&self) -> bool {
@@ -577,9 +658,11 @@ impl App {
         if self.inline_diff.open.is_some() && self.inline_diff.popup.contains(point) {
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left)
-                    if mouse.row == self.inline_diff.popup.y =>
+                    if mouse.row == self.inline_diff.popup.y
+                        && mouse.column >= self.inline_diff.popup.right().saturating_sub(3) =>
                 {
                     self.inline_diff.open = None;
+                    self.inline_diff.anchor_line = None;
                     self.inline_diff.popup = Rect::default();
                 }
                 MouseEventKind::ScrollDown => {
@@ -610,15 +693,21 @@ impl App {
                 else { unstaged().or_else(staged) }
             });
             if let Some(index) = index {
-                self.toggle_inline_hunk(index);
+                let source = self.preview_state.text_rows.source_line_at(row);
+                self.toggle_inline_hunk(index, source);
                 return true;
             }
         }
         false
     }
 
+    pub(super) fn inline_peek_open(&self) -> bool {
+        self.inline_diff.open.is_some()
+    }
+
     pub(super) fn close_inline_peek(&mut self) -> bool {
         if self.inline_diff.open.take().is_some() {
+            self.inline_diff.anchor_line = None;
             self.inline_diff.popup = Rect::default();
             true
         } else {
@@ -680,92 +769,27 @@ impl App {
             return;
         };
         if !self.layer_enabled(side) { return; }
-        let anchor = hunk
-            .marks
-            .iter()
-            .map(|(n, _)| self.preview_state.text_rows.source_to_row(*n))
-            .find(|r| *r >= scroll && *r < scroll + area.height as usize);
-        let Some(anchor) = anchor else { return };
-        if area.width < 20 || area.height < 4 {
-            return;
-        }
-        let height = (hunk.lines.len().saturating_add(2))
-            .min((area.height as usize / 2).max(3))
-            .min(12) as u16;
-        let y = (area.y + (anchor - scroll) as u16 + 1).min(area.bottom() - height);
-        let popup = Rect::new(area.x + 5, y, area.width - 5, height);
-        let offset = self.inline_diff.offset.min(
-            hunk.lines
-                .len()
-                .saturating_sub(height.saturating_sub(2) as usize),
-        );
-        // VS Code-inspired change peek: narrow accent, restrained heading and
-        // full-width added/deleted row backgrounds. Do not cover source outside
-        // the existing peek rectangle or alter its mouse hit-testing.
-        let surface = Color::Rgb(24, 27, 34);
-        let rule = Color::Rgb(65, 75, 91);
-        let accent = if matches!(side, DiffSide::Staged) {
-            Color::Rgb(94, 157, 226)
-        } else {
-            Color::Rgb(77, 181, 147)
+        let visible = |n: usize| {
+            let row = self.preview_state.text_rows.source_to_row(n);
+            (row >= scroll && row < scroll + area.height as usize).then_some(row)
         };
-        frame.render_widget(Clear, popup);
-        for row in popup.y..popup.bottom() {
-            for column in popup.x..popup.right() {
-                frame.buffer_mut()[(column, row)]
-                    .set_symbol(" ")
-                    .set_style(Style::default().bg(surface).fg(Color::Gray));
-            }
-        }
-        // One-cell side accent and quiet horizontal header divider.
-        for row in popup.y..popup.bottom() {
-            frame.buffer_mut()[(popup.x, row)]
-                .set_symbol("▏")
-                .set_style(Style::default().fg(accent).bg(surface));
-        }
-        for column in popup.x + 1..popup.right() {
-            frame.buffer_mut()[(column, popup.y + 1)]
-                .set_symbol("─")
-                .set_style(Style::default().fg(rule).bg(surface));
-        }
-        let side_label = if matches!(side, DiffSide::Staged) { "STAGED" } else { "WORKTREE" };
-        let heading = Line::from(vec![
-            Span::styled("  ◇ ", Style::default().fg(accent)),
-            Span::styled("Changes", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  {side_label}  ·  {}/{}  ·  {}", offset + 1,
-                hunk.lines.len(), hunk.header), Style::default().fg(Color::Gray)),
-        ]);
-        frame.render_widget(Paragraph::new(heading).style(Style::default().bg(surface)),
-            Rect::new(popup.x + 1, popup.y, popup.width.saturating_sub(3), 1));
-        frame.render_widget(Paragraph::new("×").style(Style::default().fg(Color::Gray).bg(surface)),
-            Rect::new(popup.right() - 2, popup.y, 1, 1));
-        // Keep rows clipped to this pane and use a full-width tinted line,
-        // rather than highlighting only the changed characters.
-        for (index, (kind, content)) in hunk.lines.iter().skip(offset)
-            .take(height.saturating_sub(2) as usize).enumerate()
-        {
-            let y = popup.y + 2 + index as u16;
-            let (color, background, glyph) = match kind {
-                DiffLineKind::Delete => (Color::Rgb(232, 130, 138), Color::Rgb(52, 31, 39), "−"),
-                DiffLineKind::Add => (Color::Rgb(131, 215, 161), Color::Rgb(28, 52, 42), "+"),
-                _ => (Color::Rgb(173, 184, 198), surface, " "),
-            };
-            for x in popup.x + 1..popup.right() {
-                frame.buffer_mut()[(x, y)].set_symbol(" ")
-                    .set_style(Style::default().fg(color).bg(background));
-            }
-            frame.render_widget(Paragraph::new(glyph)
-                .style(Style::default().fg(color).bg(background)),
-                Rect::new(popup.x + 2, y, 1, 1));
-            // Source strings retain their original diff prefix, so strip it
-            // only where a dedicated gutter symbol now represents it.
-            let shown = if matches!(kind, DiffLineKind::Add | DiffLineKind::Delete) {
-                content.get(1..).unwrap_or(content)
-            } else { content.as_str() };
-            frame.render_widget(Paragraph::new(shown)
-                .style(Style::default().fg(color).bg(background)),
-                Rect::new(popup.x + 4, y, popup.width.saturating_sub(5), 1));
-        }
+        // Clicking a gutter mark must anchor the peek to that mark. The old
+        // first-visible-mark rule made line 864 open over line 840 in a long
+        // hunk, even though the selected blame/source line was 864.
+        let anchor = self
+            .inline_diff
+            .anchor_line
+            .filter(|line| hunk.marks.iter().any(|(n, _)| n == line))
+            .and_then(visible)
+            .or_else(|| hunk.marks.iter().find_map(|(n, _)| visible(*n)));
+        let Some(anchor) = anchor else { return };
+        let Some((popup, offset)) = peek_ui::draw(
+            frame, area, anchor, scroll, hunk, side,
+            self.inline_diff.open.unwrap_or(0) + 1,
+            Self::visible_hunk_count(active),
+            self.inline_diff.offset,
+            self.inline_diff.anchor_line,
+        ) else { return; };
         self.inline_diff.offset = offset;
         self.inline_diff.popup = popup;
     }

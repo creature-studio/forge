@@ -13,6 +13,7 @@ struct Draft {
     cursor_line: usize,
     field: Field,
     confirming: bool,
+    cancel_pending: bool,
     error: String,
 }
 impl Default for Draft {
@@ -23,11 +24,20 @@ impl Default for Draft {
             cursor_line: 0,
             field: Field::Subject,
             confirming: false,
+            cancel_pending: false,
             error: String::new(),
         }
     }
 }
 impl Draft {
+    /// A draft with any typed text or extra empty lines must not disappear on
+    /// the first Esc. It is intentionally not validated as a Git message here.
+    fn has_edits(&self) -> bool {
+        !self.subject.value().is_empty()
+            || self.body.len() > 1
+            || self.body.iter().any(|line| !line.value().is_empty())
+    }
+
     fn message(&self) -> Option<String> {
         let subject = self.subject.value().trim();
         if subject.is_empty() || subject.contains(['\n', '\r']) {
@@ -138,9 +148,28 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 let mut d = draft.write();
-                if d.confirming {
+                if d.cancel_pending {
                     match key.code {
-                        KeyCode::Esc => d.confirming = false,
+                        KeyCode::Char('d' | 'D') => {
+                            let mut model = app.write();
+                            model.session.commit_open = false;
+                            model.session.commit_confirming = false;
+                            model.session.commit_cancel_pending = false;
+                            model.session.status = "commit draft discarded".into();
+                            d.cancel_pending = false;
+                        }
+                        KeyCode::Esc | KeyCode::Enter => {
+                            d.cancel_pending = false;
+                            app.write().session.commit_cancel_pending = false;
+                        }
+                        _ => {}
+                    }
+                } else if d.confirming {
+                    match key.code {
+                        KeyCode::Esc => {
+                            d.confirming = false;
+                            app.write().session.commit_confirming = false;
+                        },
                         KeyCode::Enter => {
                             if let Some(message) = d.message() {
                                 let mut model = app.write();
@@ -152,13 +181,17 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                                 {
                                     d.error = "No staged changes".into();
                                     d.confirming = false;
+                                    model.session.commit_confirming = false;
                                 } else {
                                     model.request_commit(message);
                                     if model.scm.pending_write.is_some() {
                                         model.session.commit_open = false;
+                                        model.session.commit_confirming = false;
+                                        model.session.commit_cancel_pending = false;
                                     } else {
                                         d.error = model.session.status.clone();
                                         d.confirming = false;
+                                        model.session.commit_confirming = false;
                                     }
                                 }
                             }
@@ -168,9 +201,16 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                 } else {
                     match key.code {
                         KeyCode::Esc => {
-                            let mut model = app.write();
-                            model.session.commit_open = false;
-                            model.session.status = "commit cancelled".into();
+                            if d.has_edits() {
+                                d.cancel_pending = true;
+                                app.write().session.commit_cancel_pending = true;
+                            } else {
+                                let mut model = app.write();
+                                model.session.commit_open = false;
+                                model.session.commit_confirming = false;
+                                model.session.commit_cancel_pending = false;
+                                model.session.status = "commit cancelled".into();
+                            }
                         }
                         KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             if d.message().is_none() {
@@ -185,6 +225,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                                 d.error = "No staged changes".into();
                             } else {
                                 d.confirming = true;
+                                app.write().session.commit_confirming = true;
                                 d.error.clear();
                             }
                         }
@@ -201,6 +242,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                                 d.error = "No staged changes".into();
                             } else {
                                 d.confirming = true;
+                                app.write().session.commit_confirming = true;
                                 d.error.clear();
                             }
                         }
@@ -257,7 +299,9 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         })
         .unwrap_or_else(|| "  Git status loading · verify staged changes before confirming".into());
     let state = draft.read();
-    let title = if state.confirming {
+    let title = if state.cancel_pending {
+        " Discard Commit Draft? "
+    } else if state.confirming {
         " Confirm Commit "
     } else {
         " Commit Composer "
@@ -267,11 +311,15 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         state.subject.value().chars().count()
     );
     let body = if state.confirming {
-        state.message().unwrap_or_default()
+        let lines = state.body.iter().map(|line| line.value())
+            .collect::<Vec<_>>().join("\n");
+        if lines.trim().is_empty() { "(no body)".to_owned() } else { lines }
     } else {
         state.body_display()
     };
-    let footer = if state.confirming {
+    let footer = if state.cancel_pending {
+        "D DISCARD draft · Esc / Enter keep editing"
+    } else if state.confirming {
         "Enter CONFIRM · Esc return to editing"
     } else {
         "Tab field · Enter newline · Ctrl+S / Ctrl+Enter review · Esc cancel"
@@ -296,6 +344,17 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edited_commit_draft_requires_explicit_discard() {
+        let mut draft = Draft::default();
+        assert!(!draft.has_edits());
+        draft.subject = tui_input::Input::new("work in progress".into());
+        assert!(draft.has_edits());
+        draft.subject = tui_input::Input::default();
+        draft.body.push(tui_input::Input::default());
+        assert!(draft.has_edits(), "extra blank lines are still a draft");
+    }
 
     #[test]
     fn multiline_message_subject_body_and_blank_lines() {
