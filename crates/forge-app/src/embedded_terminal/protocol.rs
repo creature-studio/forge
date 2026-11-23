@@ -26,9 +26,13 @@ pub(super) struct InputProtocol {
 impl InputProtocol {
     /// Advances the protocol epoch and releases every input capability
     /// negotiated by the previous foreground job.
-    pub(super) fn sync(&mut self, parser: &mut Parser, foreground: Option<i32>) {
+    pub(super) fn sync<CB: vt100::Callbacks>(
+        &mut self,
+        parser: &mut Parser<CB>,
+        foreground: Option<i32>,
+    ) -> bool {
         if self.foreground == foreground {
-            return;
+            return false;
         }
         self.foreground = foreground;
         self.mouse_owner = None;
@@ -38,9 +42,15 @@ impl InputProtocol {
         if parser.screen().alternate_screen() {
             parser.process(b"\x1b[?1049l");
         }
+        true
     }
 
-    pub(super) fn output(&mut self, parser: &mut Parser, foreground: Option<i32>, bytes: &[u8]) {
+    pub(super) fn output<CB: vt100::Callbacks>(
+        &mut self,
+        parser: &mut Parser<CB>,
+        foreground: Option<i32>,
+        bytes: &[u8],
+    ) {
         self.sync(parser, foreground);
         let previous = parser.screen().mouse_protocol_mode();
         parser.process(bytes);
@@ -54,9 +64,9 @@ impl InputProtocol {
         }
     }
 
-    pub(super) fn mouse(
+    pub(super) fn mouse<CB: vt100::Callbacks>(
         &mut self,
-        parser: &mut Parser,
+        parser: &mut Parser<CB>,
         foreground: Option<i32>,
     ) -> Option<(MouseProtocolMode, MouseProtocolEncoding)> {
         self.sync(parser, foreground);
