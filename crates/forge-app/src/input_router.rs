@@ -50,7 +50,11 @@ pub(super) fn workspace_modifier_allowed(key: KeyEvent) -> bool {
         return true;
     }
     match key.code {
-        KeyCode::Char('b' | 'B' | 'p' | 'k' | 'c' | 'C') if mods == KeyModifiers::CONTROL => true,
+        KeyCode::Char('b' | 'B' | 'p' | 'k' | 'c' | 'C' | 'r' | 'R')
+            if mods == KeyModifiers::CONTROL =>
+        {
+            true
+        }
         KeyCode::Char('f' | 'F')
             if mods == KeyModifiers::CONTROL
                 || mods == KeyModifiers::CONTROL | KeyModifiers::SHIFT =>

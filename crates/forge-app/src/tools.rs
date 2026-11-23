@@ -8,10 +8,10 @@ use std::sync::{
 };
 use tui_input::backend::crossterm::EventHandler;
 
-#[cfg(test)]
-mod tests;
 mod actions;
 mod controls;
+#[cfg(test)]
+mod tests;
 
 /// One explicitly selected Git row: absolute path (file or folder) plus side.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -618,7 +618,11 @@ impl Panel {
     pub fn is_input(&self) -> bool {
         matches!(
             self.kind,
-            PanelKind::Commands | PanelKind::Files | PanelKind::Content | PanelKind::Workspaces | PanelKind::Prompt(_)
+            PanelKind::Commands
+                | PanelKind::Files
+                | PanelKind::Content
+                | PanelKind::Workspaces
+                | PanelKind::Prompt(_)
         )
     }
 }
@@ -1035,7 +1039,7 @@ impl App {
             }
         }
         if matches!(panel.kind, PanelKind::Content) {
-            panel.detail = "Type code to search · Ctrl-R toggle regex · Enter jump · results limited to 2,000, text files ≤ 2 MiB".into();
+            panel.detail = "Type code to search · Alt-R toggle regex · Enter jump · results limited to 2,000, text files ≤ 2 MiB".into();
         }
         if matches!(panel.kind, PanelKind::Files) {
             panel.detail = "Type a few filename characters · Enter reveal file · Ctrl-E Edit text · E External editor · best 2,000 matching files".into();
@@ -1074,18 +1078,31 @@ impl App {
             recent.extend(self.config.recent_workspaces.iter().cloned());
             let query = query.to_ascii_lowercase();
             let mut seen = HashSet::new();
-            panel.rows = recent.into_iter()
+            panel.rows = recent
+                .into_iter()
                 .filter(|path| seen.insert(path.clone()))
                 .filter(|path| path.to_string_lossy().to_ascii_lowercase().contains(&query))
                 .map(|path| ToolRow {
-                    label: format!("{}  {}", if path == self.files.tree_root { "●" } else { " " }, path.display()),
+                    label: format!(
+                        "{}  {}",
+                        if path == self.files.tree_root {
+                            "●"
+                        } else {
+                            " "
+                        },
+                        path.display()
+                    ),
                     value: RowValue::Workspace(path),
-                }).collect();
+                })
+                .collect();
             panel.message = if panel.rows.is_empty() {
                 "No matching recent directories · press O to open a folder".into()
-            } else { String::new() };
+            } else {
+                String::new()
+            };
             panel.detail = "Enter switch · O open any directory · type to filter
-Git Worktrees are managed separately with W.".into();
+Git Worktrees are managed separately with W."
+                .into();
             return;
         }
         if matches!(kind, PanelKind::Settings) {
@@ -1131,19 +1148,43 @@ Git Worktrees are managed separately with W.".into();
                     value: RowValue::Command(Command::CycleTheme),
                 },
                 ToolRow {
-                    label: format!("Code auto wrap [{}]", if self.config.wrap_code { "On" } else { "Off" }),
+                    label: format!(
+                        "Code auto wrap [{}]",
+                        if self.config.wrap_code { "On" } else { "Off" }
+                    ),
                     value: RowValue::Command(Command::ToggleCodeWrap),
                 },
                 ToolRow {
-                    label: format!("Focus Overview [{}]", if self.config.show_overview_ruler { "On" } else { "Off" }),
+                    label: format!(
+                        "Focus Overview [{}]",
+                        if self.config.show_overview_ruler {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ),
                     value: RowValue::Command(Command::ToggleOverviewRuler),
                 },
                 ToolRow {
-                    label: format!("Git Gutter: staged [{}]", if self.config.git.show_staged_gutter { "On" } else { "Off" }),
+                    label: format!(
+                        "Git Gutter: staged [{}]",
+                        if self.config.git.show_staged_gutter {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ),
                     value: RowValue::Command(Command::ToggleStagedGutter),
                 },
                 ToolRow {
-                    label: format!("Git Gutter: unstaged [{}]", if self.config.git.show_unstaged_gutter { "On" } else { "Off" }),
+                    label: format!(
+                        "Git Gutter: unstaged [{}]",
+                        if self.config.git.show_unstaged_gutter {
+                            "On"
+                        } else {
+                            "Off"
+                        }
+                    ),
                     value: RowValue::Command(Command::ToggleUnstagedGutter),
                 },
                 ToolRow {
@@ -1360,7 +1401,7 @@ Git Worktrees are managed separately with W.".into();
                 let detail = if matches!(kind, PanelKind::Files) {
                     format!("{count} matching files · Enter open · max 2,000 results{index_detail}")
                 } else {
-                    format!("{count} matches · Enter jump · Ctrl-R regex · max 2,000 results / 2 MiB per file{index_detail}")
+                    format!("{count} matches · Enter jump · Alt-R regex · max 2,000 results / 2 MiB per file{index_detail}")
                 };
                 Ok(ReadReply { generation: Some(generation), history_has_older: false,
                     rows: hits.into_iter().map(|h| search_row(&root, h)).collect(), detail })
@@ -1428,20 +1469,18 @@ Git Worktrees are managed separately with W.".into();
 
     pub(super) fn poll_tools(&mut self) {
         self.request_search_context();
-        if let Some((_, result)) = pending_request::take_ready(
-            &mut self.tools.pending_context,
-            JobHandle::try_join,
-        ) {
+        if let Some((_, result)) =
+            pending_request::take_ready(&mut self.tools.pending_context, JobHandle::try_join)
+        {
             self.tools.content_context = Some(match result {
                 Ok(Ok(context)) => Ok(context),
                 Ok(Err(error)) => Err(format!("Context unavailable: {error}")),
                 Err(error) => Err(format!("Context job failed: {error}")),
             });
         }
-        if let Some((_, result)) = pending_request::take_ready(
-            &mut self.tools.pending_index,
-            JobHandle::try_join,
-        ) {
+        if let Some((_, result)) =
+            pending_request::take_ready(&mut self.tools.pending_index, JobHandle::try_join)
+        {
             self.tools.index_key = None;
             self.tools.index_cancel = None;
             match result {
@@ -1492,10 +1531,9 @@ Git Worktrees are managed separately with W.".into();
                 }
             }
         }
-        if let Some((_, result)) = pending_request::take_ready(
-            &mut self.tools.pending_read,
-            JobHandle::try_join,
-        ) {
+        if let Some((_, result)) =
+            pending_request::take_ready(&mut self.tools.pending_read, JobHandle::try_join)
+        {
             self.tools.search_hits = None;
             if let Some(panel) = &mut self.tools.panel {
                 match result {
@@ -1568,10 +1606,9 @@ Git Worktrees are managed separately with W.".into();
             }
         }
         self.request_search_context();
-        if let Some((_, result)) = pending_request::take_ready(
-            &mut self.tools.pending_task,
-            JobHandle::try_join,
-        ) {
+        if let Some((_, result)) =
+            pending_request::take_ready(&mut self.tools.pending_task, JobHandle::try_join)
+        {
             let show_completion = self
                 .tools
                 .panel
@@ -1618,13 +1655,10 @@ Git Worktrees are managed separately with W.".into();
                 _ => {}
             }
         }
-        if let Some((_, result)) = pending_request::take_ready(
-            &mut self.tools.pending_sync,
-            JobHandle::try_join,
-        ) {
-            if let Ok(Ok(summary)) = result {
-                self.tools.sync = summary;
-            }
+        if let Some((_, Ok(Ok(summary)))) =
+            pending_request::take_ready(&mut self.tools.pending_sync, JobHandle::try_join)
+        {
+            self.tools.sync = summary;
         }
         self.try_reveal();
     }
@@ -1751,7 +1785,9 @@ Git Worktrees are managed separately with W.".into();
                 Some(KeyCode::Enter)
             } else if panel.form_cancel.contains(location) {
                 Some(KeyCode::Esc)
-            } else { None };
+            } else {
+                None
+            };
             if let Some(key) = action {
                 self.handle_tools_key(KeyEvent::new(key, KeyModifiers::NONE));
             }
@@ -1863,8 +1899,12 @@ Git Worktrees are managed separately with W.".into();
         }
         // Capture identity (absolute path) rather than a fragile row index.
         let current_root = self.files.tree_root.clone();
-        self.config.recent_workspaces.retain(|p| p != &path && p != &current_root);
-        self.config.recent_workspaces.insert(0, current_root.clone());
+        self.config
+            .recent_workspaces
+            .retain(|p| p != &path && p != &current_root);
+        self.config
+            .recent_workspaces
+            .insert(0, current_root.clone());
         self.config.recent_workspaces.insert(0, path.clone());
         self.config.recent_workspaces.truncate(12);
         // Test fixtures switch workspaces often; never rewrite the developer's

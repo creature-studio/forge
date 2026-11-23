@@ -2,10 +2,10 @@
 //! The owning view provides hit regions and the tooltip is painted last so
 //! it overlays content without grabbing focus or changing mouse routing.
 use ratatui::{
-    Frame,
     layout::Rect,
     style::Style,
     widgets::{Block, Borders, Clear, Paragraph},
+    Frame,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -137,7 +137,7 @@ fn truncate_display(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{Terminal, backend::TestBackend, style::Color};
+    use ratatui::{backend::TestBackend, style::Color, Terminal};
 
     #[test]
     fn tooltip_uses_shortcut_and_stays_inside_narrow_bounds() {
@@ -238,17 +238,15 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(8, 3)).unwrap();
         terminal
             .draw(|frame| {
-                assert!(
-                    Tooltip::new("Close")
-                        .draw(
-                            frame,
-                            Rect::new(1, 0, 1, 1),
-                            frame.area(),
-                            Style::default(),
-                            Style::default()
-                        )
-                        .is_none()
-                );
+                assert!(Tooltip::new("Close")
+                    .draw(
+                        frame,
+                        Rect::new(1, 0, 1, 1),
+                        frame.area(),
+                        Style::default(),
+                        Style::default()
+                    )
+                    .is_none());
             })
             .unwrap();
     }

@@ -61,6 +61,7 @@ pub(super) fn draw_activity_bar(frame: &mut Frame<'_>, area: Rect, model: &mut A
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_button(
     frame: &mut Frame<'_>,
     bar: Rect,
@@ -210,8 +211,8 @@ mod tooltip_tests {
     use super::*;
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::{
-        Terminal,
         backend::{Backend, TestBackend},
+        Terminal,
     };
 
     fn screen_text(terminal: &Terminal<TestBackend>) -> String {
@@ -246,21 +247,26 @@ mod tooltip_tests {
         let mut terminal = Terminal::new(TestBackend::new(90, 26)).unwrap();
         let area = Rect::new(0, 1, 5, 22);
         let p = workspace_palette();
-        terminal.draw(|frame| {
-            // Simulate prior content in this lane before the activity bar
-            // paints. A borderless Block alone does NOT clear these symbols.
-            for y in area.y..area.bottom() {
-                for x in area.x..area.right() {
-                    frame.buffer_mut()[(x, y)].set_symbol("3");
+        terminal
+            .draw(|frame| {
+                // Simulate prior content in this lane before the activity bar
+                // paints. A borderless Block alone does NOT clear these symbols.
+                for y in area.y..area.bottom() {
+                    for x in area.x..area.right() {
+                        frame.buffer_mut()[(x, y)].set_symbol("3");
+                    }
                 }
-            }
-            draw_activity_bar(frame, area, &mut app, p);
-        }).unwrap();
+                draw_activity_bar(frame, area, &mut app, p);
+            })
+            .unwrap();
         let buffer = terminal.backend().buffer();
         for y in 10..21 {
             for x in 0..5 {
-                assert_eq!(buffer[(x, y)].symbol(), " ",
-                    "stale glyph at ({x},{y}) in empty activity-bar lane");
+                assert_eq!(
+                    buffer[(x, y)].symbol(),
+                    " ",
+                    "stale glyph at ({x},{y}) in empty activity-bar lane"
+                );
                 assert_eq!(buffer[(x, y)].bg, p.bg);
             }
         }

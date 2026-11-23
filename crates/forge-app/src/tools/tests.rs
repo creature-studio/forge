@@ -341,10 +341,18 @@ async fn nested_prompt_and_confirmation_esc_return_one_level_at_a_time() {
     // Previously the workspace directory prompt lost its Workspaces parent.
     app.open_tools(PanelKind::Workspaces);
     finish(&mut app).await;
-    app.prompt(PromptAction::OpenWorkspace, "Open workspace", String::new(), "Path");
+    app.prompt(
+        PromptAction::OpenWorkspace,
+        "Open workspace",
+        String::new(),
+        "Path",
+    );
     assert!(app.tools_has_parent());
     app.handle_tools_key(esc);
-    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind), Some(PanelKind::Workspaces)));
+    assert!(matches!(
+        app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Workspaces)
+    ));
     app.handle_tools_key(esc);
     assert!(app.tools.panel.is_none());
 
@@ -359,14 +367,22 @@ async fn nested_prompt_and_confirmation_esc_return_one_level_at_a_time() {
         "Do not execute".into(),
         None,
     );
-    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind), Some(PanelKind::Confirm(_))));
+    assert!(matches!(
+        app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Confirm(_))
+    ));
     app.handle_tools_key(esc);
     let prompt = app.tools.panel.as_ref().unwrap();
-    assert!(matches!(prompt.kind, PanelKind::Prompt(PromptAction::Branch)));
+    assert!(matches!(
+        prompt.kind,
+        PanelKind::Prompt(PromptAction::Branch)
+    ));
     assert_eq!(prompt.input.value(), "feature/preserve-draft");
     app.handle_tools_key(esc);
-    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind),
-        Some(PanelKind::Git(GitQuery::Branches))));
+    assert!(matches!(
+        app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Git(GitQuery::Branches))
+    ));
     app.handle_tools_key(esc);
     assert!(app.tools.panel.is_none());
     assert!(!app.tools_has_parent());
@@ -923,8 +939,10 @@ async fn content_debounce_retains_rows_then_latest_query_wins_and_regex_errors_s
         app.tools.pending_read.is_some(),
         "real debounce has not elapsed"
     );
-    assert!(app.tools.panel.as_ref().unwrap().rows.is_empty(),
-        "stale hits must never be actionable during debounce");
+    assert!(
+        app.tools.panel.as_ref().unwrap().rows.is_empty(),
+        "stale hits must never be actionable during debounce"
+    );
     assert_eq!(app.tools.panel.as_ref().unwrap().selected, 0);
     assert!(app
         .tools
@@ -939,7 +957,7 @@ async fn content_debounce_retains_rows_then_latest_query_wins_and_regex_errors_s
     assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), 3);
     assert!(app.tools.panel.as_ref().unwrap().message.is_empty());
     app.tools.panel.as_mut().unwrap().input = tui_input::Input::new("[".into());
-    app.handle_tools_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+    app.handle_tools_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT));
     finish(&mut app).await;
     assert!(app.tools.panel.as_ref().unwrap().regex);
     assert!(app
@@ -1902,7 +1920,10 @@ async fn open_changed_file_switches_from_git_diff_to_files_view() {
     app.handle_key(esc);
     assert_eq!(app.session.activity, ActivityTab::Files);
     assert_eq!(app.session.focus, PaneFocus::Preview);
-    assert_eq!(app.files.visible[app.files.selected].entry.path, dir.path().join(target));
+    assert_eq!(
+        app.files.visible[app.files.selected].entry.path,
+        dir.path().join(target)
+    );
     // Tab, rather than Esc, deliberately changes between the two panes.
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.session.focus, PaneFocus::List);
@@ -2040,7 +2061,10 @@ async fn stale_git_status_from_previous_folder_in_same_repo_is_ignored() {
     // previous root-specific snapshot must not overwrite the new view.
     assert!(app.scm.git_status.is_none());
     app.apply_status_result(old_root.clone(), Ok(Ok(Some(old_snapshot))));
-    assert!(app.scm.git_status.is_none(), "old status leaked across workspace roots");
+    assert!(
+        app.scm.git_status.is_none(),
+        "old status leaked across workspace roots"
+    );
     assert!(app.scm.branch.is_empty());
 
     // The old no-repository/error result must also be ignored.
@@ -2048,18 +2072,28 @@ async fn stale_git_status_from_previous_folder_in_same_repo_is_ignored() {
     assert!(app.scm.git_status.is_none());
 
     finish(&mut app).await;
-    let new_snapshot = app.scm.git_status.clone().expect("new workspace never loaded status");
+    let new_snapshot = app
+        .scm
+        .git_status
+        .clone()
+        .expect("new workspace never loaded status");
     let new_branch = app.scm.branch.clone();
     assert_eq!(app.files.tree_root, new_root);
     // Late responses must not reset a successfully loaded new snapshot.
     app.apply_status_result(old_root.clone(), Ok(Ok(None)));
-    assert_eq!(app.scm.git_status.as_ref().unwrap().repo_root, new_snapshot.repo_root);
+    assert_eq!(
+        app.scm.git_status.as_ref().unwrap().repo_root,
+        new_snapshot.repo_root
+    );
     assert_eq!(app.scm.branch, new_branch);
     app.apply_status_result(
         old_root,
         Ok(Err(GitReadError::Status("outdated worker error".into()))),
     );
-    assert_eq!(app.scm.git_status.as_ref().unwrap().repo_root, new_snapshot.repo_root);
+    assert_eq!(
+        app.scm.git_status.as_ref().unwrap().repo_root,
+        new_snapshot.repo_root
+    );
     assert_eq!(app.scm.branch, new_branch);
 }
 
@@ -2069,13 +2103,23 @@ async fn directory_listing_deduplicates_pending_paths_and_refresh_replaces_gener
     let root = dir.path().to_path_buf();
     // The workspace starts with an initial listing already in flight.
     assert_eq!(
-        app.files.pending_lists.iter().filter(|p| p.path == root).count(), 1
+        app.files
+            .pending_lists
+            .iter()
+            .filter(|p| p.path == root)
+            .count(),
+        1
     );
     let first_id = app.files.pending_lists[0].id;
     app.request_dir(root.clone());
     app.request_missing_expanded();
     assert_eq!(
-        app.files.pending_lists.iter().filter(|p| p.path == root).count(), 1,
+        app.files
+            .pending_lists
+            .iter()
+            .filter(|p| p.path == root)
+            .count(),
+        1,
         "repeated requests must not fan out duplicate directory reads"
     );
     assert_eq!(app.files.pending_lists[0].id, first_id);
@@ -2619,8 +2663,13 @@ async fn reopening_filename_search_starts_fresh_and_old_hits_cannot_be_activated
     app.reload_tools();
     assert!(app.tools.panel.as_ref().unwrap().rows.is_empty());
     app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert!(matches!(app.tools.panel.as_ref().map(|p| &p.kind), Some(PanelKind::Files)),
-        "Enter must not open a previous query's file while the new query loads");
+    assert!(
+        matches!(
+            app.tools.panel.as_ref().map(|p| &p.kind),
+            Some(PanelKind::Files)
+        ),
+        "Enter must not open a previous query's file while the new query loads"
+    );
 }
 
 #[tokio::test]
@@ -2839,24 +2888,47 @@ async fn workspace_switcher_opens_non_git_directory_and_restores_recent_roots() 
     let plain_root = plain.path().canonicalize().unwrap();
 
     app.open_tools(PanelKind::Workspaces);
-    assert!(app.tools.panel.as_ref().unwrap().rows.iter().any(
-        |row| matches!(&row.value, RowValue::Workspace(path) if path == &original)
-    ));
+    assert!(app
+        .tools
+        .panel
+        .as_ref()
+        .unwrap()
+        .rows
+        .iter()
+        .any(|row| matches!(&row.value, RowValue::Workspace(path) if path == &original)));
 
     app.handle_tools_key(KeyEvent::new(KeyCode::Char('O'), KeyModifiers::NONE));
-    assert!(matches!(app.tools.panel.as_ref().unwrap().kind, PanelKind::Prompt(PromptAction::OpenWorkspace)));
+    assert!(matches!(
+        app.tools.panel.as_ref().unwrap().kind,
+        PanelKind::Prompt(PromptAction::OpenWorkspace)
+    ));
     app.tools.panel.as_mut().unwrap().input =
         tui_input::Input::new(plain_root.to_string_lossy().to_string());
     app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     finish(&mut app).await;
     assert_eq!(app.files.tree_root, plain_root);
-    assert!(app.scm.git_status.is_none(), "plain workspace must not inherit Git");
-    assert!(app.files.visible.iter().any(|row| row.entry.name == "standalone.txt"));
+    assert!(
+        app.scm.git_status.is_none(),
+        "plain workspace must not inherit Git"
+    );
+    assert!(app
+        .files
+        .visible
+        .iter()
+        .any(|row| row.entry.name == "standalone.txt"));
 
     app.open_tools(PanelKind::Workspaces);
-    let recent = app.tools.panel.as_ref().unwrap().rows.iter()
+    let recent = app
+        .tools
+        .panel
+        .as_ref()
+        .unwrap()
+        .rows
+        .iter()
         .find(|row| matches!(&row.value, RowValue::Workspace(path) if path == &original))
-        .unwrap().value.clone();
+        .unwrap()
+        .value
+        .clone();
     app.activate_tool_row(PanelKind::Workspaces, recent);
     finish(&mut app).await;
     assert_eq!(app.files.tree_root, original);
@@ -2875,10 +2947,18 @@ async fn workspace_prompt_rejects_missing_directory_without_switching() {
         tui_input::Input::new(original.join("not-a-directory").to_string_lossy().into());
     app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(app.files.tree_root, original);
-    assert!(matches!(app.tools.panel.as_ref().unwrap().kind, PanelKind::Prompt(PromptAction::OpenWorkspace)));
-    assert!(app.tools.panel.as_ref().unwrap().message.contains("Cannot open directory"));
+    assert!(matches!(
+        app.tools.panel.as_ref().unwrap().kind,
+        PanelKind::Prompt(PromptAction::OpenWorkspace)
+    ));
+    assert!(app
+        .tools
+        .panel
+        .as_ref()
+        .unwrap()
+        .message
+        .contains("Cannot open directory"));
 }
-
 
 #[cfg(unix)]
 #[tokio::test]
@@ -2892,18 +2972,26 @@ async fn embedded_terminal_tabs_keep_sessions_and_close_independently() {
     app.handle_key(KeyEvent::new(KeyCode::Char('N'), shift_ctrl));
     assert_eq!(app.terminal_tabs.len(), 1);
     assert_ne!(first_id, app.terminal.as_ref().unwrap().id);
-    assert!(!std::sync::Arc::ptr_eq(&first_revision,
-        &app.terminal.as_ref().unwrap().revision));
+    assert!(!std::sync::Arc::ptr_eq(
+        &first_revision,
+        &app.terminal.as_ref().unwrap().revision
+    ));
     app.handle_key(KeyEvent::new(KeyCode::Left, shift_ctrl));
-    assert!(std::sync::Arc::ptr_eq(&first_revision,
-        &app.terminal.as_ref().unwrap().revision));
+    assert!(std::sync::Arc::ptr_eq(
+        &first_revision,
+        &app.terminal.as_ref().unwrap().revision
+    ));
     app.handle_key(KeyEvent::new(KeyCode::Right, shift_ctrl));
-    assert!(!std::sync::Arc::ptr_eq(&first_revision,
-        &app.terminal.as_ref().unwrap().revision));
+    assert!(!std::sync::Arc::ptr_eq(
+        &first_revision,
+        &app.terminal.as_ref().unwrap().revision
+    ));
     app.handle_key(KeyEvent::new(KeyCode::Char('W'), shift_ctrl));
-    assert_eq!(app.terminal_tabs.len(),0);
-    assert!(std::sync::Arc::ptr_eq(&first_revision,
-        &app.terminal.as_ref().unwrap().revision));
-    app.handle_key(KeyEvent::new(KeyCode::Char('W'),shift_ctrl));
+    assert_eq!(app.terminal_tabs.len(), 0);
+    assert!(std::sync::Arc::ptr_eq(
+        &first_revision,
+        &app.terminal.as_ref().unwrap().revision
+    ));
+    app.handle_key(KeyEvent::new(KeyCode::Char('W'), shift_ctrl));
     assert!(app.terminal.is_none());
 }

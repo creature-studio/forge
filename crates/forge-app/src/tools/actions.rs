@@ -301,34 +301,48 @@ impl App {
         if matches!(action, OpenWorkspace) {
             let input = value.trim();
             if input.is_empty() {
-                if let Some(panel) = &mut self.tools.panel { panel.message = "Directory path is required".into(); }
+                if let Some(panel) = &mut self.tools.panel {
+                    panel.message = "Directory path is required".into();
+                }
                 return;
             }
             let path = if input == "~" || input.starts_with("~/") {
                 match std::env::var_os("HOME") {
                     Some(home) => PathBuf::from(home).join(input.strip_prefix("~/").unwrap_or("")),
                     None => {
-                        if let Some(panel) = &mut self.tools.panel { panel.message = "HOME is unavailable".into(); }
+                        if let Some(panel) = &mut self.tools.panel {
+                            panel.message = "HOME is unavailable".into();
+                        }
                         return;
                     }
                 }
             } else {
                 let path = PathBuf::from(input);
-                if path.is_absolute() { path } else { self.files.tree_root.join(path) }
+                if path.is_absolute() {
+                    path
+                } else {
+                    self.files.tree_root.join(path)
+                }
             };
             let path = match path.canonicalize() {
                 Ok(path) if path.is_dir() => path,
                 Ok(_) => {
-                    if let Some(panel) = &mut self.tools.panel { panel.message = "Path is not a directory".into(); }
+                    if let Some(panel) = &mut self.tools.panel {
+                        panel.message = "Path is not a directory".into();
+                    }
                     return;
                 }
                 Err(error) => {
-                    if let Some(panel) = &mut self.tools.panel { panel.message = format!("Cannot open directory: {error}"); }
+                    if let Some(panel) = &mut self.tools.panel {
+                        panel.message = format!("Cannot open directory: {error}");
+                    }
                     return;
                 }
             };
             if self.write_busy() {
-                if let Some(panel) = &mut self.tools.panel { panel.message = "Wait for the current write to finish".into(); }
+                if let Some(panel) = &mut self.tools.panel {
+                    panel.message = "Wait for the current write to finish".into();
+                }
                 return;
             }
             self.close_tools();
@@ -707,5 +721,4 @@ impl App {
         panel.message = "Operation in progress… · Esc closes this view; operation continues".into();
         self.tools.panel = Some(panel);
     }
-
 }

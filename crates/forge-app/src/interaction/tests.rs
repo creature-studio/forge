@@ -84,8 +84,8 @@ async fn show_diff(app: &mut App, side: DiffSide) {
 fn press(app: &mut App, key: char) {
     // Exercise the physical default bindings instead of bypassing key remap.
     let (code, mods) = match key {
-        's' => ('a', KeyModifiers::ALT), // Git add/stage
-        'u' => ('u', KeyModifiers::ALT), // Git unstage
+        's' => ('a', KeyModifiers::ALT),  // Git add/stage
+        'u' => ('u', KeyModifiers::ALT),  // Git unstage
         '?' => ('?', KeyModifiers::NONE), // Help-local close remains supported
         other => (other, KeyModifiers::NONE),
     };

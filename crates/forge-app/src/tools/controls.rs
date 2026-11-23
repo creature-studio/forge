@@ -23,8 +23,9 @@ impl App {
             self.close_tools();
             return;
         }
+        // Ctrl+R is Refresh in Forge; Alt+R toggles regex locally in search.
         if key.code == KeyCode::Char('r')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
+            && key.modifiers == KeyModifiers::ALT
             && matches!(panel.kind, PanelKind::Content)
         {
             panel.regex = !panel.regex;
@@ -32,6 +33,17 @@ impl App {
                 "Search contents · {}",
                 if panel.regex { "regex" } else { "literal" }
             );
+            self.reload_tools();
+            return;
+        }
+        let is_refresh = !matches!(panel.kind, PanelKind::Prompt(_) | PanelKind::Confirm(_))
+            && self.keys.remap(key, false).is_some_and(|remapped| {
+                matches!(remapped.code, KeyCode::Char('r' | 'R'))
+                    && remapped.modifiers == KeyModifiers::CONTROL
+            });
+        if is_refresh {
+            self.request_list();
+            self.request_status();
             self.reload_tools();
             return;
         }
@@ -95,8 +107,12 @@ impl App {
             return;
         }
         if key.code == KeyCode::Char('O') && matches!(kind, PanelKind::Workspaces) {
-            self.prompt(PromptAction::OpenWorkspace, "Open workspace directory",
-                String::new(), "Absolute path, ~/path, or relative to current workspace · Enter open");
+            self.prompt(
+                PromptAction::OpenWorkspace,
+                "Open workspace directory",
+                String::new(),
+                "Absolute path, ~/path, or relative to current workspace · Enter open",
+            );
             return;
         }
         if key.code == KeyCode::Enter {
@@ -127,7 +143,10 @@ impl App {
         }
         // Do not reinterpret an unhandled Ctrl/Alt chord as a plain letter
         // action (e.g. Ctrl+Shift+W must not trigger a Worktree action).
-        if key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
             return;
         }
         self.tool_action_key(kind, selected, key.code);
@@ -148,7 +167,8 @@ impl App {
                     }
                 } else if !path.is_dir() {
                     if let Some(panel) = &mut self.tools.panel {
-                        panel.message = "Directory no longer exists · press O for another path".into();
+                        panel.message =
+                            "Directory no longer exists · press O for another path".into();
                     }
                 } else {
                     self.close_tools();
@@ -213,7 +233,12 @@ impl App {
         }
     }
 
-    pub(crate) fn tool_action_key(&mut self, kind: PanelKind, selected: Option<RowValue>, key: KeyCode) {
+    pub(crate) fn tool_action_key(
+        &mut self,
+        kind: PanelKind,
+        selected: Option<RowValue>,
+        key: KeyCode,
+    ) {
         if key == KeyCode::Char(':') {
             self.open_history_child(PanelKind::Commands);
             return;
@@ -462,5 +487,4 @@ impl App {
             _ => {}
         }
     }
-
 }

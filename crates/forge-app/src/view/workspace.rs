@@ -1,7 +1,12 @@
 //! Workspace headers, labels, tabs and contextual footer.
 use super::*;
 
-pub(super) fn draw_workspace_header(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette) {
+pub(super) fn draw_workspace_header(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &mut App,
+    p: Palette,
+) {
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
     // The footer owns the branch and upstream divergence. Use the header
     // for complementary workspace counts instead of duplicating or cropping
@@ -50,7 +55,6 @@ pub(super) fn draw_workspace_header(frame: &mut Frame<'_>, area: Rect, model: &m
         branch,
         p,
     );
-
 }
 
 pub(super) fn draw_pane_heading(
@@ -96,7 +100,12 @@ pub(super) fn draw_pane_heading(
     )
 }
 
-pub(super) fn draw_preview_heading(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette) -> Rect {
+pub(super) fn draw_preview_heading(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    model: &mut App,
+    p: Palette,
+) -> Rect {
     model.session.layout.markdown_preview_tab = Rect::default();
     model.session.layout.markdown_code_tab = Rect::default();
     model.session.layout.open_file_tab = Rect::default();
@@ -213,7 +222,11 @@ pub(super) fn draw_markdown_tabs(frame: &mut Frame<'_>, area: Rect, model: &mut 
 
 /// A compact branch/tracking chip. Counts come only from the Git status
 /// response for the *current* branch. No upstream = no invented ↓0 ↑0.
-pub(super) fn git_status_chip(model: &App, p: Palette, max_width: usize) -> Option<(Line<'static>, usize)> {
+pub(super) fn git_status_chip(
+    model: &App,
+    p: Palette,
+    max_width: usize,
+) -> Option<(Line<'static>, usize)> {
     use super::git_sync_badge::GitSyncBadge;
     use unicode_width::UnicodeWidthStr;
     let badge = GitSyncBadge::parse(&model.scm.branch, &model.tools.sync)?;
@@ -287,18 +300,36 @@ pub(super) fn file_find_has_focus(model: &App) -> bool {
 /// The remaining space is filled with the file-find mode toggles. This
 /// intentionally leaves out the usual global F4 / ? footer hints while
 /// the find input owns keyboard focus.
-pub(super) fn file_find_footer_shortcuts(model: &App, width: usize) -> Vec<interaction::Shortcut> {
+pub(super) fn file_find_footer_shortcuts(_model: &App, width: usize) -> Vec<interaction::Shortcut> {
     let navigation = [
-        interaction::Shortcut { key: "Enter", label: "Next" },
-        interaction::Shortcut { key: "Shift+Enter", label: "Prev" },
+        interaction::Shortcut {
+            key: "Enter",
+            label: "Next",
+        },
+        interaction::Shortcut {
+            key: "Shift+Enter",
+            label: "Prev",
+        },
     ];
     let toggles = [
-        interaction::Shortcut { key: "Alt+C", label: "Case" },
-        interaction::Shortcut { key: "Alt+W", label: "Word" },
-        interaction::Shortcut { key: "Alt+R", label: "Regex" },
+        interaction::Shortcut {
+            key: "Alt+C",
+            label: "Case",
+        },
+        interaction::Shortcut {
+            key: "Alt+W",
+            label: "Word",
+        },
+        interaction::Shortcut {
+            key: "Alt+R",
+            label: "Regex",
+        },
     ];
-    let close = interaction::Shortcut { key: "Esc", label: "Close" };
-    let cost = |s: &interaction::Shortcut| model.keys.label(s.key).len() + s.label.len() + 5;
+    let close = interaction::Shortcut {
+        key: "Esc",
+        label: "Close",
+    };
+    let cost = |s: &interaction::Shortcut| s.key.len() + s.label.len() + 5;
     let mut remaining = width.saturating_sub(1); // leading space in footer renderer
     let mut result = Vec::new();
     let close_cost = cost(&close);

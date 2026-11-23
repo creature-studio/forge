@@ -12,7 +12,10 @@ pub(super) fn take_ready<P, R>(
     try_result: impl FnOnce(&mut P) -> Option<R>,
 ) -> Option<(P, R)> {
     let result = try_result(slot.as_mut()?)?;
-    Some((slot.take().expect("completed request remains in slot"), result))
+    Some((
+        slot.take().expect("completed request remains in slot"),
+        result,
+    ))
 }
 
 /// Collect completed entries from a collection, keeping pending entries and
@@ -45,7 +48,10 @@ mod tests {
 
     #[test]
     fn single_slot_keeps_running_request_and_takes_ready_once() {
-        let mut request = Some(Request { key: "latest", done: false });
+        let mut request = Some(Request {
+            key: "latest",
+            done: false,
+        });
         assert!(take_ready(&mut request, |p| p.done.then_some(42)).is_none());
         assert_eq!(request.as_ref().unwrap().key, "latest");
         request.as_mut().unwrap().done = true;
@@ -59,13 +65,34 @@ mod tests {
     #[test]
     fn vec_collects_only_completed_requests_in_order() {
         let mut pending = vec![
-            Request { key: "old", done: true },
-            Request { key: "running", done: false },
-            Request { key: "new", done: true },
+            Request {
+                key: "old",
+                done: true,
+            },
+            Request {
+                key: "running",
+                done: false,
+            },
+            Request {
+                key: "new",
+                done: true,
+            },
         ];
         let done = drain_ready(&mut pending, |p| p.done.then_some(p.key));
-        assert_eq!(done.iter().map(|(p, _)| p.key).collect::<Vec<_>>(), vec!["old", "new"]);
-        assert_eq!(done.iter().map(|(_, value)| *value).collect::<Vec<_>>(), vec!["old", "new"]);
-        assert_eq!(pending, vec![Request { key: "running", done: false }]);
+        assert_eq!(
+            done.iter().map(|(p, _)| p.key).collect::<Vec<_>>(),
+            vec!["old", "new"]
+        );
+        assert_eq!(
+            done.iter().map(|(_, value)| *value).collect::<Vec<_>>(),
+            vec!["old", "new"]
+        );
+        assert_eq!(
+            pending,
+            vec![Request {
+                key: "running",
+                done: false
+            }]
+        );
     }
 }

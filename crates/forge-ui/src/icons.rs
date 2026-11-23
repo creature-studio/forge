@@ -59,23 +59,30 @@ impl IconMode {
     }
 }
 
-/// Install the icon mode used by every helper below.
-pub fn set_icon_mode(mode: IconMode) {
-    let v = match mode {
+fn mode_to_raw(mode: IconMode) -> u8 {
+    match mode {
         IconMode::Builtin => MODE_BUILTIN,
         IconMode::Nerd => MODE_NERD,
         IconMode::Ascii => MODE_ASCII,
-    };
-    ICON_MODE.store(v, Ordering::Relaxed);
+    }
 }
 
-/// Current icon emission mode.
-pub fn icon_mode() -> IconMode {
-    match ICON_MODE.load(Ordering::Relaxed) {
+fn mode_from_raw(raw: u8) -> IconMode {
+    match raw {
         MODE_NERD => IconMode::Nerd,
         MODE_ASCII => IconMode::Ascii,
         _ => IconMode::Builtin,
     }
+}
+
+/// Install the icon mode used by every helper below.
+pub fn set_icon_mode(mode: IconMode) {
+    ICON_MODE.store(mode_to_raw(mode), Ordering::Relaxed);
+}
+
+/// Current icon emission mode.
+pub fn icon_mode() -> IconMode {
+    mode_from_raw(ICON_MODE.load(Ordering::Relaxed))
 }
 
 /// Read `FORGE_ICONS` and install the mode. Call once at startup.
@@ -90,14 +97,20 @@ pub fn init_from_env() {
 
 /// Icons used by the persistent left-side Activity Bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ActivityIcon { Files, Git, Search, Terminal, Settings }
+pub enum ActivityIcon {
+    Files,
+    Git,
+    Search,
+    Terminal,
+    Settings,
+}
 
 // Keep width to one terminal cell in each icon mode so hover targets and
 // mouse hit regions stay identical, including on terminals without Nerd Font.
 fn activity_glyph(mode: IconMode, icon: ActivityIcon) -> &'static str {
     match (mode, icon) {
-        (IconMode::Nerd, ActivityIcon::Files) => "\u{f07b}",  // nf-fa-folder
-        (IconMode::Nerd, ActivityIcon::Git) => "\u{f126}",    // nf-fa-code-fork
+        (IconMode::Nerd, ActivityIcon::Files) => "\u{f07b}", // nf-fa-folder
+        (IconMode::Nerd, ActivityIcon::Git) => "\u{f126}",   // nf-fa-code-fork
         (IconMode::Nerd, ActivityIcon::Search) => "\u{f002}", // nf-fa-search
         (IconMode::Nerd, ActivityIcon::Terminal) => "\u{f120}", // nf-fa-terminal
         (IconMode::Nerd, ActivityIcon::Settings) => "\u{f013}", // nf-fa-cog
@@ -130,7 +143,11 @@ impl Icons {
 
     /// Collapsed directory chevron.
     pub fn chevron_collapsed() -> &'static str {
-        match icon_mode() {
+        Self::chevron_collapsed_in(icon_mode())
+    }
+
+    fn chevron_collapsed_in(mode: IconMode) -> &'static str {
+        match mode {
             // nf-fa-chevron_right
             IconMode::Nerd => "\u{f054}",
             // BLACK RIGHT-POINTING SMALL TRIANGLE (BMP, usually 1 cell)
@@ -140,7 +157,11 @@ impl Icons {
     }
 
     pub fn chevron_expanded() -> &'static str {
-        match icon_mode() {
+        Self::chevron_expanded_in(icon_mode())
+    }
+
+    fn chevron_expanded_in(mode: IconMode) -> &'static str {
+        match mode {
             // nf-fa-chevron_down
             IconMode::Nerd => "\u{f078}",
             // BLACK DOWN-POINTING SMALL TRIANGLE
@@ -150,7 +171,11 @@ impl Icons {
     }
 
     pub fn folder(open: bool) -> &'static str {
-        match (icon_mode(), open) {
+        Self::folder_in(icon_mode(), open)
+    }
+
+    fn folder_in(mode: IconMode, open: bool) -> &'static str {
+        match (mode, open) {
             // nf-fa-folder_open / nf-fa-folder
             (IconMode::Nerd, true) => "\u{f07c}",
             (IconMode::Nerd, false) => "\u{f07b}",
@@ -167,7 +192,11 @@ impl Icons {
 
     /// Icon for a file basename (extension / special names).
     pub fn file_for_name(name: &str) -> &'static str {
-        match icon_mode() {
+        Self::file_for_name_in(icon_mode(), name)
+    }
+
+    fn file_for_name_in(mode: IconMode, name: &str) -> &'static str {
+        match mode {
             IconMode::Ascii => " ",
             // MIDDLE DOT — single cell, ubiquitous in Latin/CJK fonts
             IconMode::Builtin => "\u{00b7}",
@@ -186,7 +215,11 @@ impl Icons {
 
     /// Git branch glyph for the header line.
     pub fn branch() -> &'static str {
-        match icon_mode() {
+        Self::branch_in(icon_mode())
+    }
+
+    fn branch_in(mode: IconMode) -> &'static str {
+        match mode {
             // nf-fa-code-branch
             IconMode::Nerd => "\u{f126}",
             // ALTERNATIVE KEY SYMBOL (⎇) — common “branch-ish” BMP glyph
@@ -253,16 +286,16 @@ fn nerd_file_for_name(name: &str) -> &'static str {
     if let Some(ext) = basename.rsplit('.').next() {
         if ext != basename {
             match ext {
-                "rs" => return "\u{e7a8}",       // nf-dev-rust
+                "rs" => return "\u{e7a8}",              // nf-dev-rust
                 "md" | "markdown" => return "\u{e73e}", // nf-dev-markdown
-                "toml" => return "\u{f013}",     // cog
-                "json" | "jsonc" => return "\u{e60b}", // nf-seti-json-ish / nf-mdi
-                "yml" | "yaml" => return "\u{f481}", // nf-fa-file_code_o alt
+                "toml" => return "\u{f013}",            // cog
+                "json" | "jsonc" => return "\u{e60b}",  // nf-seti-json-ish / nf-mdi
+                "yml" | "yaml" => return "\u{f481}",    // nf-fa-file_code_o alt
                 "lock" => return "\u{f023}",
                 "sh" | "bash" | "zsh" => return "\u{f489}", // nf-fa-terminal-ish
-                "py" => return "\u{e73c}",        // nf-dev-python
-                "js" | "mjs" | "cjs" => return "\u{e74e}", // nf-dev-javascript
-                "ts" | "tsx" => return "\u{e628}", // nf-seti-typescript
+                "py" => return "\u{e73c}",                  // nf-dev-python
+                "js" | "mjs" | "cjs" => return "\u{e74e}",  // nf-dev-javascript
+                "ts" | "tsx" => return "\u{e628}",          // nf-seti-typescript
                 "html" | "htm" => return "\u{e736}",
                 "css" | "scss" => return "\u{e749}",
                 "svg" | "png" | "jpg" | "jpeg" | "gif" | "webp" => return "\u{f1c5}",
@@ -297,11 +330,19 @@ mod tests {
         use unicode_width::UnicodeWidthStr;
         for mode in [IconMode::Builtin, IconMode::Nerd, IconMode::Ascii] {
             let mut distinct = std::collections::HashSet::new();
-            for icon in [ActivityIcon::Files, ActivityIcon::Git, ActivityIcon::Search,
-                         ActivityIcon::Terminal, ActivityIcon::Settings] {
+            for icon in [
+                ActivityIcon::Files,
+                ActivityIcon::Git,
+                ActivityIcon::Search,
+                ActivityIcon::Terminal,
+                ActivityIcon::Settings,
+            ] {
                 let glyph = activity_glyph(mode, icon);
                 assert_eq!(glyph.width(), 1, "{mode:?}: {icon:?}: {glyph}");
-                assert!(distinct.insert(glyph), "duplicate icon for {mode:?}: {icon:?}");
+                assert!(
+                    distinct.insert(glyph),
+                    "duplicate icon for {mode:?}: {icon:?}"
+                );
             }
         }
     }
@@ -325,36 +366,73 @@ mod tests {
 
     #[test]
     fn file_for_name_mappings_nerd() {
-        set_icon_mode(IconMode::Nerd);
-        assert_eq!(Icons::file_for_name("main.rs"), "\u{e7a8}");
-        assert_eq!(Icons::file_for_name("Cargo.toml"), "\u{f013}");
-        assert_eq!(Icons::file_for_name("README.md"), "\u{e73e}");
-        assert_eq!(Icons::file_for_name(".gitignore"), "\u{e702}");
-        assert_eq!(Icons::file_for_name("Cargo.lock"), "\u{f023}");
-        assert_eq!(Icons::file_for_name("LICENSE"), "\u{f0f6}");
-        assert_eq!(Icons::file_for_name("notes.txt"), "\u{f15c}");
-        assert_eq!(Icons::file_for_name("mystery.bin"), "\u{f15b}");
-        assert!(contains_private_use(Icons::file_for_name("main.rs")));
-        assert!(contains_private_use(Icons::folder_closed()));
-        set_icon_mode(IconMode::Builtin);
+        assert_eq!(mode_from_raw(mode_to_raw(IconMode::Nerd)), IconMode::Nerd);
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "main.rs"),
+            "\u{e7a8}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "Cargo.toml"),
+            "\u{f013}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "README.md"),
+            "\u{e73e}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, ".gitignore"),
+            "\u{e702}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "Cargo.lock"),
+            "\u{f023}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "LICENSE"),
+            "\u{f0f6}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "notes.txt"),
+            "\u{f15c}"
+        );
+        assert_eq!(
+            Icons::file_for_name_in(IconMode::Nerd, "mystery.bin"),
+            "\u{f15b}"
+        );
+        assert!(contains_private_use(Icons::file_for_name_in(
+            IconMode::Nerd,
+            "main.rs"
+        )));
+        assert!(contains_private_use(Icons::folder_in(
+            IconMode::Nerd,
+            false
+        )));
     }
 
     #[test]
     fn ascii_mode_has_no_private_use() {
-        set_icon_mode(IconMode::Ascii);
-        assert_eq!(Icons::file_for_name("main.rs"), " ");
-        assert_eq!(Icons::folder_closed(), "/");
-        assert_eq!(Icons::chevron_collapsed(), ">");
-        assert_eq!(Icons::branch(), "");
-        assert!(!contains_private_use(Icons::file_for_name("Cargo.toml")));
-        assert!(!contains_private_use(Icons::folder(true)));
-        assert!(!contains_private_use(Icons::chevron_expanded()));
-        set_icon_mode(IconMode::Builtin);
+        assert_eq!(mode_from_raw(mode_to_raw(IconMode::Ascii)), IconMode::Ascii);
+        assert_eq!(Icons::file_for_name_in(IconMode::Ascii, "main.rs"), " ");
+        assert_eq!(Icons::folder_in(IconMode::Ascii, false), "/");
+        assert_eq!(Icons::chevron_collapsed_in(IconMode::Ascii), ">");
+        assert_eq!(Icons::branch_in(IconMode::Ascii), "");
+        assert!(!contains_private_use(Icons::file_for_name_in(
+            IconMode::Ascii,
+            "Cargo.toml"
+        )));
+        assert!(!contains_private_use(Icons::folder_in(
+            IconMode::Ascii,
+            true
+        )));
+        assert!(!contains_private_use(Icons::chevron_expanded_in(
+            IconMode::Ascii
+        )));
     }
 
     #[test]
     fn builtin_mode_no_private_use_and_readable() {
         set_icon_mode(IconMode::Builtin);
+        assert_eq!(icon_mode(), IconMode::Builtin);
         assert_eq!(Icons::chevron_collapsed(), "\u{25b8}"); // ▸
         assert_eq!(Icons::chevron_expanded(), "\u{25be}"); // ▾
         assert_eq!(Icons::folder(false), "\u{25a1}"); // □
@@ -370,10 +448,14 @@ mod tests {
 
     #[test]
     fn padded_keeps_trailing_space() {
-        set_icon_mode(IconMode::Ascii);
-        assert_eq!(Icons::padded(Icons::folder_closed()), "/ ");
+        assert_eq!(
+            Icons::padded(Icons::folder_in(IconMode::Ascii, false)),
+            "/ "
+        );
         assert_eq!(Icons::padded(""), "  ");
-        set_icon_mode(IconMode::Builtin);
-        assert_eq!(Icons::padded(Icons::folder_closed()), "\u{25a1} ");
+        assert_eq!(
+            Icons::padded(Icons::folder_in(IconMode::Builtin, false)),
+            "\u{25a1} "
+        );
     }
 }

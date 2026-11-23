@@ -60,7 +60,11 @@ pub struct GitConfig {
 }
 impl Default for GitConfig {
     fn default() -> Self {
-        Self { blame: BlameConfig::default(), show_unstaged_gutter: true, show_staged_gutter: true }
+        Self {
+            blame: BlameConfig::default(),
+            show_unstaged_gutter: true,
+            show_staged_gutter: true,
+        }
     }
 }
 
@@ -134,16 +138,35 @@ impl Config {
         );
         table.insert("wrap_code".into(), toml::Value::Boolean(self.wrap_code));
         table.remove("show_minimap");
-        table.insert("show_overview_ruler".into(), toml::Value::Boolean(self.show_overview_ruler));
-        table.insert("recent_workspaces".into(), toml::Value::Array(
-            self.recent_workspaces.iter().map(|path| toml::Value::String(path.to_string_lossy().into_owned())).collect(),
-        ));
+        table.insert(
+            "show_overview_ruler".into(),
+            toml::Value::Boolean(self.show_overview_ruler),
+        );
+        table.insert(
+            "recent_workspaces".into(),
+            toml::Value::Array(
+                self.recent_workspaces
+                    .iter()
+                    .map(|path| toml::Value::String(path.to_string_lossy().into_owned()))
+                    .collect(),
+            ),
+        );
         // Update only the explicitly managed keys. Preserve [git.blame] and
         // all unknown plugin/custom preferences in the same configuration.
-        let git = table.entry("git").or_insert_with(|| toml::Value::Table(toml::Table::new()));
-        let git = git.as_table_mut().ok_or("Cannot save config: [git] must be a table")?;
-        git.insert("show_staged_gutter".into(), toml::Value::Boolean(self.git.show_staged_gutter));
-        git.insert("show_unstaged_gutter".into(), toml::Value::Boolean(self.git.show_unstaged_gutter));
+        let git = table
+            .entry("git")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+        let git = git
+            .as_table_mut()
+            .ok_or("Cannot save config: [git] must be a table")?;
+        git.insert(
+            "show_staged_gutter".into(),
+            toml::Value::Boolean(self.git.show_staged_gutter),
+        );
+        git.insert(
+            "show_unstaged_gutter".into(),
+            toml::Value::Boolean(self.git.show_unstaged_gutter),
+        );
         if let Some(theme) = &self.theme {
             table.insert("theme".into(), toml::Value::String(theme.clone()));
         } else {
@@ -172,7 +195,11 @@ mod tests {
         let off: Config = toml::from_str("show_overview_ruler = false").unwrap();
         assert!(!off.show_overview_ruler);
         let encoded = toml::to_string(&off).unwrap();
-        assert!(!toml::from_str::<Config>(&encoded).unwrap().show_overview_ruler);
+        assert!(
+            !toml::from_str::<Config>(&encoded)
+                .unwrap()
+                .show_overview_ruler
+        );
     }
 
     #[test]

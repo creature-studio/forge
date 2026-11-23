@@ -44,7 +44,10 @@ impl<Action: Copy> HoverTargets<Action> {
     /// Region and action under the most recent pointer position.
     pub fn hovered(&self) -> Option<(Rect, Action)> {
         let point = self.pointer?;
-        self.regions.iter().find(|(rect, _)| rect.contains(point)).copied()
+        self.regions
+            .iter()
+            .find(|(rect, _)| rect.contains(point))
+            .copied()
     }
 
     pub fn action_at(&self, column: u16, row: u16) -> Option<Action> {
@@ -94,11 +97,23 @@ pub struct Link<'a, Action> {
 
 impl<'a, Action: Copy> Link<'a, Action> {
     pub fn new(label: &'a str, action: Action, normal: Style, hovered: Style) -> Self {
-        Self { label, action, normal, hovered }
+        Self {
+            label,
+            action,
+            normal,
+            hovered,
+        }
     }
 
     pub fn draw(self, frame: &mut Frame<'_>, rect: Rect, targets: &mut HoverTargets<Action>) {
-        targets.draw_text(frame, rect, self.action, self.label, self.normal, self.hovered);
+        targets.draw_text(
+            frame,
+            rect,
+            self.action,
+            self.label,
+            self.normal,
+            self.hovered,
+        );
     }
 }
 
@@ -123,20 +138,26 @@ mod tests {
     fn link_uses_a_single_clickable_label_with_hover_style() {
         let mut links = HoverTargets::<usize>::default();
         let mut terminal = Terminal::new(TestBackend::new(30, 2)).unwrap();
-        let normal = Style::default().fg(Color::Blue).add_modifier(Modifier::UNDERLINED);
-        let hover = Style::default().fg(Color::White).bg(Color::Blue)
+        let normal = Style::default()
+            .fg(Color::Blue)
+            .add_modifier(Modifier::UNDERLINED);
+        let hover = Style::default()
+            .fg(Color::White)
+            .bg(Color::Blue)
             .add_modifier(Modifier::UNDERLINED);
         let rect = Rect::new(3, 1, 8, 1);
         links.hover_at(4, 1);
-        terminal.draw(|frame| Link::new("file.rs", 9, normal, hover)
-            .draw(frame, rect, &mut links)).unwrap();
+        terminal
+            .draw(|frame| Link::new("file.rs", 9, normal, hover).draw(frame, rect, &mut links))
+            .unwrap();
         assert_eq!(links.action_at(3, 1), Some(9));
         assert_eq!(links.action_at(11, 1), None);
         assert_eq!(terminal.backend().buffer()[(4, 1)].bg, Color::Blue);
         links.hover_at(15, 1);
         links.clear();
-        terminal.draw(|frame| Link::new("file.rs", 9, normal, hover)
-            .draw(frame, rect, &mut links)).unwrap();
+        terminal
+            .draw(|frame| Link::new("file.rs", 9, normal, hover).draw(frame, rect, &mut links))
+            .unwrap();
         assert_ne!(terminal.backend().buffer()[(4, 1)].bg, Color::Blue);
     }
 

@@ -33,7 +33,13 @@ static BINDINGS: &[Binding] = &[
     binding!("settings", "Settings", false, "F9", "F9"),
     binding!("find_file", "Find file", false, "Ctrl+p", "Ctrl+p"),
     binding!("find_content", "Search contents", false, "Ctrl+f", "Ctrl+f"),
-    binding!("commands_vscode", "Command palette (VS Code)", false, "Ctrl+Shift+p", "Ctrl+k"),
+    binding!(
+        "commands_vscode",
+        "Command palette (VS Code)",
+        false,
+        "Ctrl+Shift+p",
+        "Ctrl+k"
+    ),
     binding!(
         "commands_alt",
         "Command palette (alternative)",
@@ -41,7 +47,7 @@ static BINDINGS: &[Binding] = &[
         "Ctrl+k",
         "Ctrl+k"
     ),
-    binding!("refresh", "Refresh workspace", false, "r", "r"),
+    binding!("refresh", "Refresh workspace", false, "Ctrl+r", "Ctrl+r"),
     binding!("files_tab", "Files tab", false, "F1", "F1"),
     binding!("git_tab", "Git tab", false, "F2", "F2"),
     binding!("focus_pane", "Switch pane", false, "Tab", "Tab"),
@@ -51,14 +57,38 @@ static BINDINGS: &[Binding] = &[
     binding!("move_up", "Move up", false, "k", "k"),
     binding!("move_down", "Move down", false, "j", "j"),
     binding!("page_up", "Scroll up one page", false, "PageUp", "PageUp"),
-    binding!("page_down", "Scroll down one page", false, "PageDown", "PageDown"),
+    binding!(
+        "page_down",
+        "Scroll down one page",
+        false,
+        "PageDown",
+        "PageDown"
+    ),
     binding!("scroll_start", "Scroll to beginning", false, "Home", "Home"),
     binding!("scroll_end", "Scroll to end", false, "End", "End"),
     binding!("pan_left", "Pan code left", false, "Alt+Left", "Alt+Left"),
-    binding!("pan_right", "Pan code right", false, "Alt+Right", "Alt+Right"),
-    binding!("pan_start", "Pan to left edge", false, "Alt+Home", "Alt+Home"),
+    binding!(
+        "pan_right",
+        "Pan code right",
+        false,
+        "Alt+Right",
+        "Alt+Right"
+    ),
+    binding!(
+        "pan_start",
+        "Pan to left edge",
+        false,
+        "Alt+Home",
+        "Alt+Home"
+    ),
     binding!("pan_end", "Pan to right edge", false, "Alt+End", "Alt+End"),
-    binding!("move_parent", "Collapse / parent folder (h / Left)", false, "h", "h"),
+    binding!(
+        "move_parent",
+        "Collapse / parent folder (h / Left)",
+        false,
+        "h",
+        "h"
+    ),
     binding!("move_child", "Open child", false, "l", "l"),
     binding!("preview_mode", "Markdown Preview / Code", false, "F3", "F3"),
     binding!("help", "Help", false, "F5", "F5"),
@@ -89,7 +119,13 @@ static BINDINGS: &[Binding] = &[
     ),
     binding!("file_history", "File history", false, "Alt+h", "H"),
     binding!("inline_peek", "Source change peek", false, "F7", "F7"),
-    binding!("commit_history", "Commit history dialog", false, "Alt+l", "L"),
+    binding!(
+        "commit_history",
+        "Commit history dialog",
+        false,
+        "Alt+l",
+        "L"
+    ),
     binding!("external_editor", "External editor", false, "Alt+e", "E"),
     binding!("filters", "File filters", false, "Alt+f", "F"),
     binding!("branches", "Branches", false, "Alt+b", "B"),
@@ -120,10 +156,8 @@ fn category(b: &Binding) -> &'static str {
         "history" | "line_commit" | "file_history" | "commit_history" | "branches" | "stashes"
         | "sync" | "worktrees" | "lines" | "commit" | "stage" | "unstage" | "discard" | "diff"
         | "pull" | "push" | "previous_hunk" => "Git",
-        "files_tab" | "git_tab" | "focus_pane" | "help" | "quit" | "shortcuts"
-        | "open_item" | "back" | "move_up" | "move_down" | "move_parent" | "move_child" => {
-            "Navigation"
-        }
+        "files_tab" | "git_tab" | "focus_pane" | "help" | "quit" | "shortcuts" | "open_item"
+        | "back" | "move_up" | "move_down" | "move_parent" | "move_child" => "Navigation",
         _ => "Navigation",
     }
 }
@@ -273,11 +307,11 @@ fn same(a: KeyEvent, b: KeyEvent) -> bool {
     let normalized = |mut k: KeyEvent| {
         if let KeyCode::Char(c) = k.code {
             if c.is_ascii_uppercase()
-                && k.modifiers.contains(KeyModifiers::SHIFT)
-                && k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && k.modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             {
-                // Terminals disagree whether Ctrl+Shift+P is reported as
-                // uppercase P or lowercase p with the Shift modifier.
+                // Terminals disagree whether modified uppercase letters carry
+                // uppercase char codes (e.g. Ctrl+Shift+P or CapsLock Ctrl+R).
                 k.code = KeyCode::Char(c.to_ascii_lowercase());
             } else if c.is_ascii_uppercase() || c.is_ascii_punctuation() {
                 k.modifiers.remove(KeyModifiers::SHIFT);
@@ -330,8 +364,10 @@ fn allowed(k: KeyEvent) -> bool {
 }
 // New defaults preserve older explicit assignments to those chords.
 fn shadowed_alias(b: &Binding, map: &BTreeMap<String, String>) -> bool {
-    matches!(b.id, "commands_alt" | "commands_vscode" | "line_commit" | "inline_peek")
-        && !map.contains_key(b.id)
+    matches!(
+        b.id,
+        "commands_alt" | "commands_vscode" | "line_commit" | "inline_peek" | "refresh"
+    ) && !map.contains_key(b.id)
         && BINDINGS.iter().any(|other| {
             other.id != b.id
                 && !other.editor
@@ -369,7 +405,9 @@ fn validate(map: &BTreeMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 impl Keybindings {
-    pub fn recording(&self) -> bool { self.recording }
+    pub fn recording(&self) -> bool {
+        self.recording
+    }
 
     pub fn remap(&self, key: KeyEvent, editor: bool) -> Option<KeyEvent> {
         let configured = BINDINGS.iter().find(|b| {
@@ -399,7 +437,20 @@ impl Keybindings {
         Some(key)
     }
     pub fn label(&self, default: &str) -> String {
-        let normalized = default.replace("Ctrl-", "Ctrl+");
+        let normalized = if default.contains('-') || default == "Ctrl+R" {
+            let plus = default
+                .replace("Ctrl-", "Ctrl+")
+                .replace("Alt-", "Alt+")
+                .replace("Shift-", "Shift+");
+            match plus.rsplit_once('+') {
+                Some((prefix, tail)) if tail.len() == 1 => {
+                    format!("{prefix}+{}", tail.to_ascii_lowercase())
+                }
+                _ => plus,
+            }
+        } else {
+            default.to_owned()
+        };
         BINDINGS
             .iter()
             .find(|b| !b.editor && (b.canonical == normalized || b.default == normalized))
@@ -562,6 +613,20 @@ impl Keybindings {
             _ => {}
         }
     }
+
+    pub fn paste(&mut self, text: &str) {
+        if !self.open || self.recording {
+            return;
+        }
+        let mut changed = false;
+        for c in text.chars().filter(|c| !c.is_control()) {
+            self.query.push(c);
+            changed = true;
+        }
+        if changed {
+            self.selected = 0;
+        }
+    }
 }
 pub(super) fn draw(frame: &mut Frame<'_>, area: Rect, keys: &Keybindings, p: Palette) {
     frame.render_widget(Clear, area);
@@ -667,7 +732,10 @@ mod tests {
         for source in [",", "?", ":", "[", "]", "g"] {
             // Unbound characters may still be passed to the workspace;
             // the dispatcher has no corresponding navigation action.
-            assert!(keys.remap(parse(source).unwrap(), false).is_some(), "{source}");
+            assert!(
+                keys.remap(parse(source).unwrap(), false).is_some(),
+                "{source}"
+            );
         }
         let folder = tempfile::tempdir().unwrap();
         keys.path = Some(folder.path().join("keys.conf"));
@@ -679,24 +747,37 @@ mod tests {
     fn uppercase_actions_require_explicit_alt_chords() {
         let mut keys = Keybindings::default();
         for (id, alt, canonical) in [
-            ("push", "Alt+p", "P"), ("history", "Alt+g", "G"),
-            ("external_editor", "Alt+e", "E"), ("branches", "Alt+b", "B"),
-            ("stashes", "Alt+z", "Z"), ("previous_hunk", "Alt+n", "N"),
+            ("push", "Alt+p", "P"),
+            ("history", "Alt+g", "G"),
+            ("external_editor", "Alt+e", "E"),
+            ("branches", "Alt+b", "B"),
+            ("stashes", "Alt+z", "Z"),
+            ("previous_hunk", "Alt+n", "N"),
             ("selection_all", "Alt+v", "V"),
         ] {
             assert_eq!(keys.action_key(id), alt);
-            assert!(same(keys.remap(parse(alt).unwrap(), false).unwrap(),
-                parse(canonical).unwrap()), "{id}");
-            assert!(keys.remap(parse(canonical).unwrap(), false).is_none(),
-                "bare uppercase {canonical} must never trigger {id}");
+            assert!(
+                same(
+                    keys.remap(parse(alt).unwrap(), false).unwrap(),
+                    parse(canonical).unwrap()
+                ),
+                "{id}"
+            );
+            assert!(
+                keys.remap(parse(canonical).unwrap(), false).is_none(),
+                "bare uppercase {canonical} must never trigger {id}"
+            );
         }
         for (id, physical, action) in [
-            ("stage", "Alt+a", "s"), ("unstage", "Alt+u", "u"),
+            ("stage", "Alt+a", "s"),
+            ("unstage", "Alt+u", "u"),
             ("pull", "Alt+r", "p"),
         ] {
             assert_eq!(keys.action_key(id), physical);
-            assert!(same(keys.remap(parse(physical).unwrap(), false).unwrap(),
-                parse(action).unwrap()));
+            assert!(same(
+                keys.remap(parse(physical).unwrap(), false).unwrap(),
+                parse(action).unwrap()
+            ));
             assert!(keys.remap(parse(action).unwrap(), false).is_none());
         }
         assert_eq!(keys.label("P"), "Alt-P");
@@ -708,14 +789,19 @@ mod tests {
         keys.update("push", Some("F8".into())).unwrap();
         assert!(keys.remap(parse("Alt+p").unwrap(), false).is_none());
         assert!(keys.remap(parse("P").unwrap(), false).is_none());
-        assert!(same(keys.remap(parse("F8").unwrap(), false).unwrap(), parse("P").unwrap()));
+        assert!(same(
+            keys.remap(parse("F8").unwrap(), false).unwrap(),
+            parse("P").unwrap()
+        ));
     }
 
     #[test]
     fn rebind_conflicts_persistence_reset_and_old_key_suppression() {
         let dir = tempfile::tempdir().unwrap();
-        let mut keys = Keybindings::default();
-        keys.path = Some(dir.path().join("keys.conf"));
+        let mut keys = Keybindings {
+            path: Some(dir.path().join("keys.conf")),
+            ..Default::default()
+        };
         assert!(same(
             keys.remap(parse("Ctrl+e").unwrap(), false).unwrap(),
             parse("e").unwrap()
@@ -746,8 +832,10 @@ mod tests {
     #[test]
     fn expanded_action_registry_preserves_alias_and_rebinding_contract() {
         let dir = tempfile::tempdir().unwrap();
-        let mut keys = Keybindings::default();
-        keys.path = Some(dir.path().join("forge.conf"));
+        let mut keys = Keybindings {
+            path: Some(dir.path().join("forge.conf")),
+            ..Default::default()
+        };
         assert!(same(
             keys.remap(parse("Ctrl+k").unwrap(), false).unwrap(),
             parse("Ctrl+k").unwrap()
@@ -792,15 +880,17 @@ mod tests {
             ));
         }
         assert!(same(
-            keys.remap(parse("Ctrl+k").unwrap(),false).unwrap(),
+            keys.remap(parse("Ctrl+k").unwrap(), false).unwrap(),
             parse("Ctrl+k").unwrap()
         ));
     }
 
     #[test]
     fn grouped_shortcuts_show_fixed_navigation_without_capturing_them() {
-        let mut keys = Keybindings::default();
-        keys.open = true;
+        let mut keys = Keybindings {
+            open: true,
+            ..Default::default()
+        };
         keys.handle(parse("Tab").unwrap());
         assert_eq!(keys.group, 1);
         assert!(keys
@@ -859,8 +949,10 @@ mod tests {
 
     #[test]
     fn search_capture_cancel_and_highlight_render() {
-        let mut keys = Keybindings::default();
-        keys.open = true;
+        let mut keys = Keybindings {
+            open: true,
+            ..Default::default()
+        };
         for c in "Edit file".chars() {
             keys.handle(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
@@ -905,5 +997,63 @@ mod tests {
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
         assert_eq!(app.keys.query, "s");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "original");
+    }
+
+    #[tokio::test]
+    async fn refresh_defaults_to_ctrl_r_supports_rebinding_and_updates_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.keys.path = Some(dir.path().join("keybindings.conf"));
+        assert_eq!(app.keys.action_key("refresh"), "Ctrl+r");
+        assert_eq!(app.keys.label("Ctrl+R"), "Ctrl-R");
+
+        app.files.pending_lists.clear();
+        app.scm.pending_status = None;
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(
+            app.files.pending_lists.is_empty(),
+            "bare r must not trigger refresh"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(
+            !app.files.pending_lists.is_empty(),
+            "Ctrl+r must refresh files"
+        );
+
+        app.keys.update("refresh", Some("F6".into())).unwrap();
+        assert_eq!(app.keys.label("Ctrl+R"), "F6");
+        app.files.pending_lists.clear();
+        app.scm.pending_status = None;
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(
+            app.files.pending_lists.is_empty(),
+            "old Ctrl+r must be suppressed after rebind"
+        );
+
+        app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
+        assert!(
+            !app.files.pending_lists.is_empty(),
+            "rebound F6 must trigger refresh"
+        );
+    }
+
+    #[test]
+    fn shortcuts_search_accepts_bracketed_paste_when_not_recording() {
+        let mut keys = Keybindings {
+            open: true,
+            ..Default::default()
+        };
+        keys.paste("Refresh\n\tworkspace");
+        assert_eq!(keys.query, "Refreshworkspace");
+
+        keys.query.clear();
+        keys.paste("Refresh workspace");
+        assert_eq!(keys.rows().len(), 1);
+        assert_eq!(BINDINGS[keys.rows()[0]].id, "refresh");
+
+        keys.recording = true;
+        keys.paste("ignored");
+        assert_eq!(keys.query, "Refresh workspace");
     }
 }

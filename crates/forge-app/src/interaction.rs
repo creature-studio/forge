@@ -86,7 +86,7 @@ Untracked files, conflicts and staged contents are preserved.
 c: open commit editor. Enter submits; Esc cancels.
 Alt+R: pull repository changes. Alt+P: push repository commits.
 Pull and push always affect the repository, not just the selection.
-r: refresh files and Git status. F1: Files; F2: Git.
+Ctrl+R: refresh files and Git status. F1: Files; F2: Git.
 Esc: dismiss transient views; Tab switches Files/Git list and preview focus.
 q: quit from the main workspace. Ctrl-C: never exits; closes help or a context menu.
 F9: Settings (Tree Sticky Scroll, Show hidden files, F4 shortcuts).
@@ -100,7 +100,7 @@ Enter on a commit: list its changed files, grouped by folder.
 Enter on a file: show how that commit changed it in the preview (read-only).
 Enter on a folder: expand it. h or Left: collapse, or climb to the parent.
 j/k or arrows: move. PgUp/PgDn: jump ten rows. Home/End: first/last row.
-r: reload files, Git status and history.
+Ctrl+R: reload files, Git status and history.
 History diffs never touch the staging area; select a file under CHANGES or
 STAGED to stage it.
 \nHelp
@@ -114,7 +114,7 @@ Ctrl-P: fuzzy filename search. Ctrl-F: in-file find if a file is open,
 otherwise workspace search. Ctrl-Shift-F: always search the whole workspace.
 In-file find: Enter/Shift-Enter navigate, F3/Shift-F3 while open, Esc closes,
 Tab returns to scrolling. Alt-C case, Alt-W whole word, Alt-R regex.
-Ctrl-R in content search toggles regex. Enter jumps to the result line.
+Alt+R in content search toggles regex. Enter jumps to the result line.
 Search respects ignore files; skips binary files, files over 2 MiB and .git.
 F: filters for Git status, extension, hidden files and excluded directories.
 Filtering keeps the selected path, expansion and focus; if that path is
@@ -125,7 +125,7 @@ Ctrl-S save; Ctrl-Z/Y undo/redo. Shift+arrows or mouse drag select; Ctrl-A selec
 Ctrl-C copies selection or the current line (never quits); Ctrl-X cuts selection or the current line.
 Ctrl-V pastes; Delete/Backspace removes selection; typing/paste replaces it.
 Ctrl-Insert copies; Shift-Insert pastes; Shift-Delete cuts.
-Esc closes; unsaved changes: Ctrl-S save & close, Enter discard, Esc keep editing.
+Esc closes; unsaved changes: Ctrl-S save & close, D discard, Enter/Esc keep editing.
 Saving preserves line endings and permissions; external changes retain your draft.
 E: open the selected file using $EDITOR (fallback $VISUAL, then vi).
 The TUI releases the terminal and restores selection/scroll after editing.
@@ -154,7 +154,14 @@ S: ahead/behind and remote results. F fetch, p pull --ff-only, P push.
 W: worktrees. Enter switch workspace, A create, X remove clean worktree.
 Commands → Conflicts lists conflicts: e editor, o ours, t theirs, s mark resolved.
 Commands also includes continue/abort for cherry-pick and revert, and abort merge.
-Dialogs capture shortcuts. Esc closes; PgUp/PgDn scrolls details.";
+Dialogs capture shortcuts. Esc closes; PgUp/PgDn scrolls details.
+
+Terminal mouse routing
+TUI mouse: the foreground application owns drag when mouse tracking is on.
+Without child tracking, Forge selects visible text; Shift+drag overrides tracking.
+Ctrl+Shift+M or APP/SEL switches to explicit Forge selection mode.
+Ctrl+C goes to the foreground application, including Codex.
+Ctrl+Shift+C copies a Forge selection, without sending SIGINT.";
 
 impl App {
     pub(super) fn diff_matches_selection(&self, diff: &FileDiff) -> bool {
@@ -224,7 +231,8 @@ impl App {
         }
         if !self.session.help_open && self.terminal_help_return {
             if let Some(term) = &mut self.terminal {
-                term.focused = term.visible && !term.ended.load(std::sync::atomic::Ordering::Acquire);
+                term.focused =
+                    term.visible && !term.ended.load(std::sync::atomic::Ordering::Acquire);
             }
             self.terminal_help_return = false;
         }
@@ -438,7 +446,10 @@ impl App {
                     && self.preview_state.hunk_index.is_some()
                     && !self.preview_state.preview_loading
                 {
-                    keys.push(Shortcut { key: "n/Alt+n", label: "Next/prev hunk" });
+                    keys.push(Shortcut {
+                        key: "n/Alt+n",
+                        label: "Next/prev hunk",
+                    });
                 }
             }
             keys.push(if self.session.focus == PaneFocus::Preview {
@@ -482,7 +493,7 @@ impl App {
                     label: "Git tab",
                 },
                 Shortcut {
-                    key: "r",
+                    key: "Ctrl+R",
                     label: "Refresh",
                 },
             ]);
@@ -662,7 +673,7 @@ impl App {
         }
         keys.extend([
             Shortcut {
-                key: "r",
+                key: "Ctrl+R",
                 label: "Refresh",
             },
             Shortcut {
@@ -682,8 +693,10 @@ impl App {
                         self.tools.marks.files.len()
                     )
                 } else {
-                    format!("{} files selected · Tab to manage selection",
-                        self.tools.marks.files.len())
+                    format!(
+                        "{} files selected · Tab to manage selection",
+                        self.tools.marks.files.len()
+                    )
                 };
             }
             return self
@@ -817,7 +830,7 @@ impl App {
                         }
                     )
                 })
-                .unwrap_or_else(|| "No files · r Refresh · F5 Help".into())
+                .unwrap_or_else(|| "No files · Ctrl+R Refresh · F5 Help".into())
         }
     }
 
@@ -834,7 +847,7 @@ impl App {
             .as_ref()
             .is_some_and(|s| s.unstaged.is_empty() && s.staged.is_empty())
         {
-            "Working tree clean. Edit a file, then refresh with r."
+            "Working tree clean. Edit a file, then refresh with Ctrl+R."
         } else {
             "Select a file to view its diff."
         }

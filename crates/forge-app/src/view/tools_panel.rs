@@ -40,12 +40,20 @@ pub(super) fn draw_tools(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: 
     let input_height = if panel.is_input() { 2 } else { 0 };
     let list_height = if panel.rows.is_empty() {
         0
-    } else if matches!(panel.kind, tools::PanelKind::Commands | tools::PanelKind::Files |
-        tools::PanelKind::Workspaces | tools::PanelKind::Git(_)) {
+    } else if matches!(
+        panel.kind,
+        tools::PanelKind::Commands
+            | tools::PanelKind::Files
+            | tools::PanelKind::Workspaces
+            | tools::PanelKind::Git(_)
+    ) {
         // Compact dialogs devote space to the available choices rather than
         // a large empty context/details region.
-        inner.height.saturating_sub(input_height + 3)
-            .min(panel.rows.len().min(u16::MAX as usize) as u16).max(1)
+        inner
+            .height
+            .saturating_sub(input_height + 3)
+            .min(panel.rows.len().min(u16::MAX as usize) as u16)
+            .max(1)
     } else {
         (inner.height.saturating_sub(input_height + 3) / 2).max(1)
     };
@@ -313,7 +321,7 @@ pub(super) fn draw_content_search(
     let preview = block.inner(panes[1]);
     frame.render_widget(block, panes[1]);
     let Some((path, selected_line, fallback)) = selected else {
-        frame.render_widget(Paragraph::new("Type to search · Ctrl-R regex\nSelect a result to preview surrounding code\nEnter opens the exact line"), preview);
+        frame.render_widget(Paragraph::new("Type to search · Alt-R regex\nSelect a result to preview surrounding code\nEnter opens the exact line"), preview);
         return;
     };
     let context = if context_path == Some(path.as_path()) {
@@ -454,10 +462,18 @@ pub(super) fn draw_settings(frame: &mut Frame<'_>, area: Rect, model: &mut App, 
                 _ => "[ Current ]",
             },
             4 => {
-                if model.config.wrap_code { "[ On ]" } else { "[ Off ]" }
+                if model.config.wrap_code {
+                    "[ On ]"
+                } else {
+                    "[ Off ]"
+                }
             }
             5 => {
-                if model.config.show_overview_ruler { "[ On ]" } else { "[ Off ]" }
+                if model.config.show_overview_ruler {
+                    "[ On ]"
+                } else {
+                    "[ Off ]"
+                }
             }
             6 => {
                 if model.config.git.show_staged_gutter {

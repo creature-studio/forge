@@ -1,6 +1,7 @@
 //! Kit components. Workspace state is scoped to this tree; only the palette is
 //! process-wide. Draft text lives exclusively in the mounted commit editor.
 use super::*;
+use crate::splitter::{Axis as SplitterAxis, Splitter};
 use crossterm::event::{Event, KeyEventKind};
 use forge_ui::{
     draw_file_list, draw_preview, draw_scm_sidebar, FileListState, HorizontalScrollbar,
@@ -15,10 +16,10 @@ use ratatui::{
 };
 use ratatui_kit::{Component, ComponentDrawer, ComponentUpdater, Context};
 use tui_input::backend::crossterm::EventHandler;
-mod terminal_tabs;
 mod activity_bar;
-mod dialog;
 pub(crate) mod commit_detail;
+mod dialog;
+mod terminal_tabs;
 
 // Keep the terminal's own foreground and background. Accent belongs to small
 // focus marks; selection is a quiet neutral surface, like NSH's TUI controls.
@@ -130,11 +131,42 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     hooks.use_future(async move {
         loop {
             terminal_notify.notified().await;
+            // A child TUI can request clipboard transfer over OSC 52 after
+            // handling its own Ctrl+C. vt100's callback gives us the already
+            // validated base64 bytes; forward them to the *outer* terminal,
+            // not to Forge's local clipboard or the child's input stream.
+            // Stdout's lock keeps each escape sequence from interleaving with
+            // ratatui's frame writes.
+            let clipboard = {
+                let model = terminal_app.read();
+                model
+                    .terminal
+                    .as_ref()
+                    .and_then(|t| t.take_clipboard_request())
+                    .or_else(|| {
+                        model
+                            .terminal_tabs
+                            .iter()
+                            .find_map(|t| t.take_clipboard_request())
+                    })
+            };
+            if let Some(data) = clipboard {
+                use std::io::Write;
+                let mut stdout = std::io::stdout().lock();
+                let _ = stdout
+                    .write_all(b"\x1b]52;c;")
+                    .and_then(|_| stdout.write_all(&data))
+                    .and_then(|_| stdout.write_all(b"\x07"))
+                    .and_then(|_| stdout.flush());
+            }
             let changed = {
                 let model = terminal_app.read();
-                model.terminal.as_ref().is_some_and(|t| t.visible
-                    && (t.revision.load(std::sync::atomic::Ordering::Acquire) != t.drawn_revision
-                        || (t.ended.load(std::sync::atomic::Ordering::Acquire) && t.focused)))
+                model.terminal.as_ref().is_some_and(|t| {
+                    t.visible
+                        && (t.revision.load(std::sync::atomic::Ordering::Acquire)
+                            != t.drawn_revision
+                            || (t.ended.load(std::sync::atomic::Ordering::Acquire) && t.focused))
+                })
             };
             if changed {
                 // A mutable state access is required to wake ratatui-kit;
@@ -282,8 +314,19 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
-                    observed_app.write().tick_blame();
-                    observed_app.write().tick_inline_diff();
+                    let (blame_due, inline_due) = {
+                        let model = observed_app.read();
+                        (model.needs_blame_tick(), model.needs_inline_diff_tick())
+                    };
+                    if blame_due || inline_due {
+                        let mut model = observed_app.write();
+                        if blame_due {
+                            model.tick_blame();
+                        }
+                        if inline_due {
+                            model.tick_inline_diff();
+                        }
+                    }
                 }
             }
         }
@@ -306,6 +349,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             "git:write",
             "tools:read",
             "editor:load",
+            "editor:syntax",
             "git:blame",
             "git:gutter",
             "git:overview",
@@ -323,14 +367,32 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
-            Event::Paste(text) if model.terminal.as_ref().is_some_and(|t| t.visible && t.focused) => {
-                if let Some(term) = &mut model.terminal {
-                    if let Err(error) = term.paste(&text) {
-                        term.focused = false;
-                        model.session.status = format!("Terminal paste failed: {error}");
+            Event::Paste(text) => {
+                match model.key_owner(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)) {
+                    input_router::KeyOwner::Shortcuts => model.keys.paste(&text),
+                    input_router::KeyOwner::Editor => model.handle_editor_paste(&text),
+                    input_router::KeyOwner::Tools => {
+                        if model.tools.panel.as_ref().is_some_and(|p| p.is_input()) {
+                            for ch in text.chars().filter(|c| !c.is_control()) {
+                                model.handle_tools_key(KeyEvent::new(
+                                    KeyCode::Char(ch),
+                                    KeyModifiers::NONE,
+                                ));
+                            }
+                        }
                     }
+                    input_router::KeyOwner::Find => model.handle_file_find_paste(&text),
+                    input_router::KeyOwner::Terminal => {
+                        if let Some(term) = &mut model.terminal {
+                            if let Err(error) = term.paste(&text) {
+                                term.focused = false;
+                                model.session.status = format!("Terminal paste failed: {error}");
+                            }
+                        }
+                    }
+                    _ => return EventResult::Ignored,
                 }
-            },
+            }
             _ => return EventResult::Ignored,
         }
         input_trace::event(&input_event, nav_before, input_trace::nav_state(&model));
@@ -375,19 +437,32 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         terminal_size.1
     };
     let terminal_open = model.terminal.as_ref().is_some_and(|t| t.visible);
-    let terminal_maximized = model.terminal.as_ref().is_some_and(|t| t.visible && t.maximized);
-    let terminal_height = if terminal_open && !terminal_maximized && height >= 14 {
-        (height / 3).clamp(5, 16)
-    } else { 0 };
+    let terminal_maximized = model
+        .terminal
+        .as_ref()
+        .is_some_and(|t| t.visible && t.maximized);
+    let terminal_height = if terminal_open && !terminal_maximized {
+        terminal_panel_height(height, model.session.terminal_height)
+    } else {
+        0
+    };
     let dual = width >= 80;
     let sidebar_visible = model.session.sidebar_visible;
     let sidebar_width = if dual {
-        model.session.sidebar_width.clamp(20, width.saturating_sub(29).max(20))
-    } else { width.saturating_sub(activity_bar::activity_bar_width()) };
+        model
+            .session
+            .sidebar_width
+            .clamp(20, width.saturating_sub(29).max(20))
+    } else {
+        width.saturating_sub(activity_bar::activity_bar_width())
+    };
     let show_list = sidebar_visible && (dual || focus != PaneFocus::Preview);
     let show_preview = !sidebar_visible || dual || focus == PaneFocus::Preview;
     let screen = (width, height);
-    let tools_size = model.tools.panel.as_ref()
+    let tools_size = model
+        .tools
+        .panel
+        .as_ref()
         .map(|panel| dialog::DialogSize::tools(panel, screen));
     let commit_size = dialog::DialogSize::commit(screen);
     drop(model);
@@ -429,6 +504,11 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                     }
                 }
                 if terminal_height > 0 {
+                    // A dedicated one-cell splitter prevents its drag gesture
+                    // from being delivered to the child PTY or the preview.
+                    View(height: Constraint::Length(1)) {
+                        NativePane(kind: PaneKind::TerminalDivider)
+                    }
                     View(height: Constraint::Length(terminal_height)) {
                         NativePane(kind: PaneKind::Terminal)
                     }
@@ -481,7 +561,10 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
 fn TextEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let app = *hooks.use_context::<State<App>>();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        let mut model = app.write();
+        // Kit 0.10 renders after every dispatched terminal event. A reactive
+        // write here leaves a second wakeup queued and paints each key twice.
+        // Background job completions still use reactive writes in Workspace.
+        let mut model = app.write_no_update();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_editor_mouse(mouse),
@@ -559,6 +642,7 @@ fn Help(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
+            Event::Paste(text) => model.keys.paste(&text),
             _ => {}
         }
         if model.session.should_quit {
@@ -578,6 +662,7 @@ enum PaneKind {
     Preview,
     Terminal,
     Divider,
+    TerminalDivider,
     Footer,
     Menu,
     Help,
@@ -596,18 +681,27 @@ struct NativePaneProps {
 /// A compact 2-column file overview: markers next to the existing position thumb.
 /// Only project known rows; no I/O or scanning occurs during drawing.
 fn overview_marker_y(row: usize, total: usize, height: usize) -> usize {
-    if height <= 1 || total <= 1 { return 0; }
+    if height <= 1 || total <= 1 {
+        return 0;
+    }
     row.min(total - 1).saturating_mul(height - 1) / (total - 1)
 }
 
 fn draw_file_overview(frame: &mut Frame<'_>, area: Rect, model: &App, p: Palette) {
-    if area.width < 3 || area.height < 3
+    if area.width < 3
+        || area.height < 3
         || !matches!(model.preview_state.preview_mode, PreviewMode::File)
         || (model.markdown_available() && !model.preview_state.markdown_code)
-    { return; }
-    let total = model.overview_git_data().map_or_else(|| model.preview_total_lines(), |(n, _)| n);
+    {
+        return;
+    }
+    let total = model
+        .overview_git_data()
+        .map_or_else(|| model.preview_total_lines(), |(n, _)| n);
     let height = area.height as usize;
-    if total <= height { return; }
+    if total <= height {
+        return;
+    }
     let x = area.right() - 2;
     let mut marks = vec![None; height];
     // Git and search use *source-line* coordinates across the entire file.
@@ -623,18 +717,29 @@ fn draw_file_overview(frame: &mut Frame<'_>, area: Rect, model: &App, p: Palette
     }
     if model.preview_state.find.open
         && !model.preview_state.find.query.is_empty()
-        && model.preview_state.preview.as_ref().is_some_and(|preview| {
-            preview.path == model.preview_state.find.path
-        })
+        && model
+            .preview_state
+            .preview
+            .as_ref()
+            .is_some_and(|preview| preview.path == model.preview_state.find.path)
     {
         for hit in &model.preview_state.find.matches {
             let row = if let Some(source_lines) = known_lines {
-                Some(overview_marker_y(hit.line.saturating_sub(1), source_lines.max(1), height))
+                Some(overview_marker_y(
+                    hit.line.saturating_sub(1),
+                    source_lines.max(1),
+                    height,
+                ))
             } else {
-                model.preview_state.text_rows.source_row_range(hit.line)
+                model
+                    .preview_state
+                    .text_rows
+                    .source_row_range(hit.line)
                     .map(|range| overview_marker_y(range.start, total, height))
             };
-            if let Some(y) = row { marks[y] = Some(("•", Color::Yellow)); }
+            if let Some(y) = row {
+                marks[y] = Some(("•", Color::Yellow));
+            }
         }
     }
     for (y, marker) in marks.into_iter().enumerate() {
@@ -650,6 +755,9 @@ struct NativePane {
     app: Option<State<App>>,
     kind: PaneKind,
     palette: Palette,
+    // The modal owns input; the workspace behind it does not need to be
+    // laid out and painted again for every editor keystroke.
+    editor_backdrop: Option<(forge_theme::Theme, ratatui::buffer::Buffer)>,
 }
 
 impl Component for NativePane {
@@ -659,6 +767,7 @@ impl Component for NativePane {
             app: None,
             kind: props.kind,
             palette: Palette::default(),
+            editor_backdrop: None,
         }
     }
     fn update(
@@ -678,6 +787,30 @@ impl Component for NativePane {
         };
         let mut model = app.write_no_update();
         let mut area = drawer.area;
+        let theme = bridge_theme(self.palette);
+        let cache_area = area.intersection(drawer.frame.area());
+        let cache_backdrop = model.editing.active()
+            && matches!(
+                self.kind,
+                PaneKind::Header
+                    | PaneKind::ActivityBar
+                    | PaneKind::Sidebar
+                    | PaneKind::Preview
+                    | PaneKind::Terminal
+                    | PaneKind::Divider
+                    | PaneKind::TerminalDivider
+                    | PaneKind::Footer
+            );
+        if cache_backdrop {
+            if let Some((cached_theme, cached)) = &self.editor_backdrop {
+                if *cached_theme == theme && cached.area == cache_area {
+                    copy_pane_cells(cached, drawer.frame.buffer_mut(), cache_area);
+                    return;
+                }
+            }
+        } else {
+            self.editor_backdrop = None;
+        }
         // Ratatui Reset is transparent to terminal background. Paint every
         // cell owned by a pane before drawing text, including blank rows.
         // This keeps all panels consistent across terminal color profiles.
@@ -685,7 +818,6 @@ impl Component for NativePane {
             area,
             Style::default().bg(self.palette.bg).fg(self.palette.fg),
         );
-        let theme = bridge_theme(self.palette);
         match self.kind {
             PaneKind::Header => {
                 draw_workspace_header(drawer.frame, area, &mut model, self.palette);
@@ -695,7 +827,12 @@ impl Component for NativePane {
                 activity_bar::draw_activity_bar(drawer.frame, area, &mut model, self.palette);
             }
             PaneKind::Sidebar => {
-                area = activity_bar::draw_sidebar_heading(drawer.frame, area, &mut model, self.palette);
+                area = activity_bar::draw_sidebar_heading(
+                    drawer.frame,
+                    area,
+                    &mut model,
+                    self.palette,
+                );
                 model.session.layout.list = area;
                 if model.in_git_sidebar() {
                     let mut scroll = model.scm.scroll_scm;
@@ -753,12 +890,22 @@ impl Component for NativePane {
                 draw_marks(drawer.frame, &model, self.palette);
                 let (first, total) = if model.in_git_sidebar() {
                     (model.scm.scroll_scm, model.scm_rows().len())
-                } else { (model.files.scroll, model.files.visible.len()) };
+                } else {
+                    (model.files.scroll, model.files.visible.len())
+                };
                 let lane = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
                 let bar = VerticalScrollbar::new(lane, first, total);
-                model.session.layout.sidebar_scrollbar =
-                    if bar.geometry().is_some() { lane } else { Rect::default() };
-                bar.draw(drawer.frame, self.palette.bg, self.palette.fg_dim, self.palette.accent);
+                model.session.layout.sidebar_scrollbar = if bar.geometry().is_some() {
+                    lane
+                } else {
+                    Rect::default()
+                };
+                bar.draw(
+                    drawer.frame,
+                    self.palette.bg,
+                    self.palette.fg_dim,
+                    self.palette.accent,
+                );
             }
             PaneKind::Preview => {
                 model.commit_file_links.clear();
@@ -768,282 +915,376 @@ impl Component for NativePane {
                 model.session.layout.preview_horizontal_scrollbar = Rect::default();
                 model.session.layout.preview_horizontal_max = 0;
                 area = draw_preview_heading(drawer.frame, area, &mut model, self.palette);
-                if commit_detail::draw(drawer.frame,area,&mut model,self.palette) {
+                if commit_detail::draw(drawer.frame, area, &mut model, self.palette) {
                     model.session.layout.overview_ruler = Rect::default();
                     model.session.layout.preview_scrollbar = Rect::default();
                     model.session.layout.file_find_rect = Rect::default();
                 } else {
-                // A 3-column focus ruler, not a code minimap: preserve source width.
-                let ruler_area = if model.config.show_overview_ruler
-                    && area.width >= 36 && area.height >= 5
-                    && matches!(model.preview_state.preview_mode, PreviewMode::File)
-                    && (!model.markdown_available() || model.preview_state.markdown_code)
-                    && matches!(model.preview_state.preview.as_ref().map(|p| &p.content),
-                        Some(PreviewContent::Text { .. }))
-                {
-                    let sidebar = Rect::new(area.right() - 3, area.y, 3, area.height);
-                    area.width -= 3;
-                    Some(sidebar)
-                } else { None };
-                // Without the overview ruler, reserve a separate one-cell lane.
-                // Drawing a scrollbar over the preview truncates CJK/diff text
-                // and can leave half of a wide glyph behind the scrollbar.
-                let scrollbar_lane = if ruler_area.is_none() && area.width > 3 {
-                    let lane = Rect::new(area.right() - 1, area.y, 1, area.height);
-                    area.width -= 1;
-                    Some(lane)
-                } else {
-                    None
-                };
-                // The navigation ruler owns three terminal columns. Source
-                // wrapping, Blame cursor validation and code rendering MUST
-                // all use the same effective width. Comparing against the
-                // original full pane erased clicked Blame on every redraw.
-                let previous_width = model.preview_state.text_rows.width();
-                let clicked_source = if previous_width != area.width {
-                    model.blame.cursor.as_ref().and_then(|(path, row, scroll)| {
-                        (Some(path) == model.preview_state.preview.as_ref().map(|p| &p.path)
-                            && *scroll == model.preview_state.preview_scroll)
-                            .then(|| model.preview_state.text_rows.source_line_at(*row))
-                            .flatten()
-                            .map(|line| (path.clone(), line, *scroll))
-                    })
-                } else { None };
-                // Rebuild source-row mapping before asking whether inline
-                // Blame has a line to show. A same-file external refresh
-                // clears this cache; querying attribution first would hide
-                // its status row for one frame, expand the text viewport,
-                // and permanently clamp a reader positioned at EOF.
-                if model.config.git.blame.show_inline
-                    && !model.preview_state.preview_loading
-                    && matches!(model.preview_state.preview_mode, PreviewMode::File)
-                {
-                    let mut rows = std::mem::take(&mut model.preview_state.text_rows);
-                    if let Some(Preview {
-                        path,
-                        content: PreviewContent::Text { lines, truncated, bytes_read },
-                    }) = &model.preview_state.preview {
-                        rows.ensure_wrapping(
-                            &theme, lines, *truncated, *bytes_read,
-                            TextLang::from_name(&path.to_string_lossy()),
-                            area.width, model.config.wrap_code,
-                        );
-                    }
-                    if let Some((path, source, scroll)) = clicked_source {
-                        // Preserve attribution to the SOURCE line when wrapping
-                        // changes (resize / toggling Focus Overview).
-                        model.blame.cursor = Some((path, rows.source_to_row(source), scroll));
-                    }
-                    model.preview_state.text_rows = rows;
-                }
-                let blame_bar = if model.config.git.blame.show_inline
-                    && model.current_blame().is_some()
-                    && area.height > 1
-                {
-                    let bar = Rect::new(area.x, area.bottom() - 1, area.width, 1);
-                    area.height -= 1;
-                    Some(bar)
-                } else {
-                    None
-                };
-                if model.markdown_available() {
-                    let mut markdown = std::mem::take(&mut model.preview_state.markdown);
-                    if let Some(Preview {
-                        content:
-                            PreviewContent::Text {
-                                lines,
-                                truncated,
-                                bytes_read,
-                            },
-                        ..
-                    }) = &model.preview_state.preview
+                    // A 3-column focus ruler, not a code minimap: preserve source width.
+                    let ruler_area = if model.config.show_overview_ruler
+                        && area.width >= 36
+                        && area.height >= 5
+                        && matches!(model.preview_state.preview_mode, PreviewMode::File)
+                        && (!model.markdown_available() || model.preview_state.markdown_code)
+                        && matches!(
+                            model.preview_state.preview.as_ref().map(|p| &p.content),
+                            Some(PreviewContent::Text { .. })
+                        ) {
+                        let sidebar = Rect::new(area.right() - 3, area.y, 3, area.height);
+                        area.width -= 3;
+                        Some(sidebar)
+                    } else {
+                        None
+                    };
+                    // Without the overview ruler, reserve a separate one-cell lane.
+                    // Drawing a scrollbar over the preview truncates CJK/diff text
+                    // and can leave half of a wide glyph behind the scrollbar.
+                    let scrollbar_lane = if ruler_area.is_none() && area.width > 3 {
+                        let lane = Rect::new(area.right() - 1, area.y, 1, area.height);
+                        area.width -= 1;
+                        Some(lane)
+                    } else {
+                        None
+                    };
+                    // The navigation ruler owns three terminal columns. Source
+                    // wrapping, Blame cursor validation and code rendering MUST
+                    // all use the same effective width. Comparing against the
+                    // original full pane erased clicked Blame on every redraw.
+                    let previous_width = model.preview_state.text_rows.width();
+                    let clicked_source = if previous_width != area.width {
+                        model.blame.cursor.as_ref().and_then(|(path, row, scroll)| {
+                            (Some(path) == model.preview_state.preview.as_ref().map(|p| &p.path)
+                                && *scroll == model.preview_state.preview_scroll)
+                                .then(|| model.preview_state.text_rows.source_line_at(*row))
+                                .flatten()
+                                .map(|line| (path.clone(), line, *scroll))
+                        })
+                    } else {
+                        None
+                    };
+                    // Rebuild source-row mapping before asking whether inline
+                    // Blame has a line to show. A same-file external refresh
+                    // clears this cache; querying attribution first would hide
+                    // its status row for one frame, expand the text viewport,
+                    // and permanently clamp a reader positioned at EOF.
+                    if model.config.git.blame.show_inline
+                        && !model.preview_state.preview_loading
+                        && matches!(model.preview_state.preview_mode, PreviewMode::File)
                     {
-                        markdown.ensure(lines, *truncated, *bytes_read, area.width, &theme);
+                        let mut rows = std::mem::take(&mut model.preview_state.text_rows);
+                        if let Some(Preview {
+                            path,
+                            content:
+                                PreviewContent::Text {
+                                    lines,
+                                    truncated,
+                                    bytes_read,
+                                },
+                        }) = &model.preview_state.preview
+                        {
+                            rows.ensure_wrapping(
+                                &theme,
+                                lines,
+                                *truncated,
+                                *bytes_read,
+                                TextLang::from_name(&path.to_string_lossy()),
+                                area.width,
+                                model.config.wrap_code,
+                            );
+                        }
+                        if let Some((path, source, scroll)) = clicked_source {
+                            // Preserve attribution to the SOURCE line when wrapping
+                            // changes (resize / toggling Focus Overview).
+                            model.blame.cursor = Some((path, rows.source_to_row(source), scroll));
+                        }
+                        model.preview_state.text_rows = rows;
                     }
-                    model.preview_state.markdown = markdown;
-                }
-                let mut scroll = model.preview_state.preview_scroll;
-                // Detach caches before borrowing the preview. Code view uses
-                // the same safe, pre-wrapped row boundaries as Markdown, so
-                // a two-cell CJK glyph can never spill into the Files pane.
-                let mut cache = std::mem::take(&mut model.preview_state.split_cache);
-                let mut text_cache = std::mem::take(&mut model.preview_state.text_rows);
-                let pending_line = model.preview_state.pending_source_line.take();
-                let pending_find_byte = model.preview_state.pending_find_byte.take();
-                let (_, content) = preview_content(&model);
-                let numbered = matches!(content, PreviewView::Text { .. });
-                let mut horizontal_x = model.preview_state.preview_scroll_x;
-                let mut horizontal_bar = None;
-                let inner = match content {
-                    PreviewView::Text {
-                        lines,
-                        truncated,
-                        bytes_read,
-                        language,
-                    } => {
-                        let wrap = model.config.wrap_code;
-                        text_cache.ensure_wrapping(&theme, lines, truncated, bytes_read, language, area.width, wrap);
-                        if !wrap && area.height > 2 && area.width > 7 {
-                            let visible_cols = area.width.saturating_sub(5) as usize;
-                            let max_x = text_cache.max_code_columns().saturating_sub(visible_cols);
+                    let blame_bar = if model.config.git.blame.show_inline
+                        && model.current_blame().is_some()
+                        && area.height > 1
+                    {
+                        let bar = Rect::new(area.x, area.bottom() - 1, area.width, 1);
+                        area.height -= 1;
+                        Some(bar)
+                    } else {
+                        None
+                    };
+                    if model.markdown_available() {
+                        let mut markdown = std::mem::take(&mut model.preview_state.markdown);
+                        if let Some(Preview {
+                            content:
+                                PreviewContent::Text {
+                                    lines,
+                                    truncated,
+                                    bytes_read,
+                                },
+                            ..
+                        }) = &model.preview_state.preview
+                        {
+                            markdown.ensure(lines, *truncated, *bytes_read, area.width, &theme);
+                        }
+                        model.preview_state.markdown = markdown;
+                    }
+                    let mut scroll = model.preview_state.preview_scroll;
+                    // Detach caches before borrowing the preview. Code view uses
+                    // the same safe, pre-wrapped row boundaries as Markdown, so
+                    // a two-cell CJK glyph can never spill into the Files pane.
+                    let mut cache = std::mem::take(&mut model.preview_state.split_cache);
+                    let mut text_cache = std::mem::take(&mut model.preview_state.text_rows);
+                    let pending_line = model.preview_state.pending_source_line.take();
+                    let pending_find_byte = model.preview_state.pending_find_byte.take();
+                    let (_, content) = preview_content(&model);
+                    let numbered = matches!(content, PreviewView::Text { .. });
+                    let mut horizontal_x = model.preview_state.preview_scroll_x;
+                    let mut horizontal_bar = None;
+                    let inner = match content {
+                        PreviewView::Text {
+                            lines,
+                            truncated,
+                            bytes_read,
+                            language,
+                        } => {
+                            let wrap = model.config.wrap_code;
+                            text_cache.ensure_wrapping(
+                                &theme, lines, truncated, bytes_read, language, area.width, wrap,
+                            );
+                            if !wrap && area.height > 2 && area.width > 7 {
+                                let visible_cols = area.width.saturating_sub(5) as usize;
+                                let max_x =
+                                    text_cache.max_code_columns().saturating_sub(visible_cols);
+                                horizontal_x = horizontal_x.min(max_x);
+                                if max_x > 0 {
+                                    horizontal_bar = Some((
+                                        Rect::new(
+                                            area.x + 5,
+                                            area.bottom() - 1,
+                                            area.width.saturating_sub(6),
+                                            1,
+                                        ),
+                                        max_x,
+                                    ));
+                                    area.height -= 1;
+                                }
+                            } else {
+                                horizontal_x = 0;
+                            }
+                            if let Some(line) = pending_line {
+                                scroll = pending_find_byte.map_or_else(
+                                    || text_cache.source_to_row(line),
+                                    |byte| text_cache.source_byte_to_row(line, byte),
+                                );
+                            }
+                            draw_preview(
+                                drawer.frame,
+                                area,
+                                &theme,
+                                if wrap {
+                                    PreviewView::TextRows {
+                                        rows: text_cache.rows(),
+                                    }
+                                } else {
+                                    PreviewView::TextRowsScrolled {
+                                        rows: text_cache.rows(),
+                                        horizontal_offset: horizontal_x,
+                                    }
+                                },
+                                &mut scroll,
+                                &mut cache,
+                            )
+                        }
+                        PreviewView::Diff {
+                            path,
+                            lines,
+                            hunk_start,
+                            hunk_end,
+                            ..
+                        } if !model.config.wrap_code => {
+                            let half_content = (area.width as usize / 2).saturating_sub(7);
+                            let max_x = cache.max_code_columns(lines).saturating_sub(half_content);
                             horizontal_x = horizontal_x.min(max_x);
-                            if max_x > 0 {
-                                horizontal_bar = Some((Rect::new(area.x + 5, area.bottom() - 1,
-                                    area.width.saturating_sub(6), 1), max_x));
+                            if max_x > 0 && area.height > 2 {
+                                horizontal_bar = Some((
+                                    Rect::new(
+                                        area.x,
+                                        area.bottom() - 1,
+                                        area.width.saturating_sub(1),
+                                        1,
+                                    ),
+                                    max_x,
+                                ));
                                 area.height -= 1;
                             }
-                        } else { horizontal_x = 0; }
-                        if let Some(line) = pending_line {
-                            scroll = pending_find_byte
-                                .map_or_else(|| text_cache.source_to_row(line),
-                                    |byte| text_cache.source_byte_to_row(line, byte));
+                            draw_preview(
+                                drawer.frame,
+                                area,
+                                &theme,
+                                PreviewView::DiffScrolled {
+                                    path,
+                                    lines,
+                                    hunk_start,
+                                    hunk_end,
+                                    horizontal_offset: horizontal_x,
+                                },
+                                &mut scroll,
+                                &mut cache,
+                            )
                         }
-                        draw_preview(
-                            drawer.frame,
-                            area,
-                            &theme,
-                            if wrap { PreviewView::TextRows { rows: text_cache.rows() } }
-                            else { PreviewView::TextRowsScrolled {
-                                rows: text_cache.rows(),
-                                horizontal_offset: horizontal_x,
-                            } },
-                            &mut scroll,
-                            &mut cache,
+                        other => {
+                            draw_preview(drawer.frame, area, &theme, other, &mut scroll, &mut cache)
+                        }
+                    };
+                    model.preview_state.preview_scroll_x = horizontal_x;
+                    model.preview_state.split_cache = cache;
+                    model.preview_state.text_rows = text_cache;
+                    model.preview_state.preview_scroll = scroll;
+                    model.session.layout.preview_inner = inner;
+                    // Snapshot rendered cells before overlaying the selection.
+                    // This preserves Markdown table borders and wrapped CJK.
+                    let identity = if let Some(diff) = &model.preview_state.file_diff {
+                        format!("diff:{}:{:?}", diff.path, model.preview_state.diff_source)
+                    } else if let Some(preview) = &model.preview_state.preview {
+                        format!(
+                            "file:{}:{}",
+                            preview.path.display(),
+                            model.preview_state.markdown_code
                         )
-                    }
-                    PreviewView::Diff { path, lines, hunk_start, hunk_end, .. }
-                        if !model.config.wrap_code =>
-                    {
-                        let half_content = (area.width as usize / 2).saturating_sub(7);
-                        let max_x = cache.max_code_columns(lines).saturating_sub(half_content);
-                        horizontal_x = horizontal_x.min(max_x);
-                        if max_x > 0 && area.height > 2 {
-                            horizontal_bar = Some((Rect::new(area.x, area.bottom() - 1,
-                                area.width.saturating_sub(1), 1), max_x));
-                            area.height -= 1;
-                        }
-                        draw_preview(drawer.frame, area, &theme,
-                            PreviewView::DiffScrolled { path, lines, hunk_start, hunk_end,
-                                horizontal_offset: horizontal_x },
-                            &mut scroll, &mut cache)
-                    }
-                    other => {
-                        draw_preview(drawer.frame, area, &theme, other, &mut scroll, &mut cache)
-                    }
-                };
-                model.preview_state.preview_scroll_x = horizontal_x;
-                model.preview_state.split_cache = cache;
-                model.preview_state.text_rows = text_cache;
-                model.preview_state.preview_scroll = scroll;
-                model.session.layout.preview_inner = inner;
-                // Snapshot rendered cells before overlaying the selection.
-                // This preserves Markdown table borders and wrapped CJK.
-                let identity = if let Some(diff) = &model.preview_state.file_diff {
-                    format!("diff:{}:{:?}", diff.path, model.preview_state.diff_source)
-                } else if let Some(preview) = &model.preview_state.preview {
-                    format!(
-                        "file:{}:{}",
-                        preview.path.display(),
-                        model.preview_state.markdown_code
-                    )
-                } else {
-                    "empty".to_owned()
-                };
-                model.preview_state.selection.observe(
-                    drawer.frame,
-                    inner,
-                    scroll,
-                    &theme,
-                    &identity,
-                    numbered,
-                );
-                if let Some(bar) = blame_bar {
-                    draw_inline_blame(drawer.frame, inner, bar, &model, self.palette);
-                }
-                model.draw_inline_diff(drawer.frame, inner);
-                model.session.layout.file_find_rect = Rect::default();
-                if model.preview_state.find.open {
-                    super::file_find_ui::highlight_file_find_matches(
-                        drawer.frame,
-                        inner,
-                        &model,
-                        &theme,
-                    );
-                    model.session.layout.file_find_rect = super::file_find_ui::draw_file_find_bar(
-                        drawer.frame,
-                        inner,
-                        &model,
-                        self.palette,
-                    );
-                }
-                if let Some(ruler) = ruler_area {
-                    // Clear the dedicated lane, then show search/Git locations and viewport.
-                    for y in ruler.y..ruler.bottom() {
-                        for x in ruler.x..ruler.right() {
-                            drawer.frame.buffer_mut()[(x, y)]
-                                .set_symbol(" ")
-                                .set_style(Style::default().bg(self.palette.bg));
-                        }
-                    }
-                    draw_file_overview(drawer.frame, ruler, &model, self.palette);
-                    if let Some((source_total, _)) = model.overview_git_data() {
-                        let first_line = model.preview_state.text_rows.source_line_at(scroll)
-                            .unwrap_or(1).saturating_sub(1);
-                        VerticalScrollbar::new(ruler, first_line, source_total)
-                            .draw(drawer.frame, self.palette.bg, self.palette.fg_dim, self.palette.accent);
                     } else {
-                        VerticalScrollbar::new(ruler, scroll, model.preview_total_lines())
-                            .draw(drawer.frame, self.palette.bg, self.palette.fg_dim, self.palette.accent);
+                        "empty".to_owned()
+                    };
+                    model.preview_state.selection.observe(
+                        drawer.frame,
+                        inner,
+                        scroll,
+                        &theme,
+                        &identity,
+                        numbered,
+                    );
+                    if let Some(bar) = blame_bar {
+                        draw_inline_blame(drawer.frame, inner, bar, &model, self.palette);
                     }
-                    model.session.layout.overview_ruler = ruler;
-                    model.session.layout.preview_scrollbar = Rect::default();
-                } else {
-                    model.session.layout.overview_ruler = Rect::default();
-                    if let Some(lane) = scrollbar_lane {
-                        // Match the actual viewport after optional bottom bars.
-                        let lane = Rect::new(lane.x, inner.y, lane.width, inner.height);
-                        let total = model.preview_total_lines();
-                        if VerticalScrollbar::new(lane, scroll, total).geometry().is_some() {
-                            model.session.layout.preview_scrollbar = lane;
-                            VerticalScrollbar::new(lane, scroll, total)
-                                .draw(drawer.frame, self.palette.bg, self.palette.fg_dim, self.palette.accent);
+                    model.draw_inline_diff(drawer.frame, inner);
+                    model.session.layout.file_find_rect = Rect::default();
+                    if model.preview_state.find.open {
+                        super::file_find_ui::highlight_file_find_matches(
+                            drawer.frame,
+                            inner,
+                            &model,
+                            &theme,
+                        );
+                        model.session.layout.file_find_rect =
+                            super::file_find_ui::draw_file_find_bar(
+                                drawer.frame,
+                                inner,
+                                &model,
+                                self.palette,
+                            );
+                    }
+                    if let Some(ruler) = ruler_area {
+                        // Clear the dedicated lane, then show search/Git locations and viewport.
+                        for y in ruler.y..ruler.bottom() {
+                            for x in ruler.x..ruler.right() {
+                                drawer.frame.buffer_mut()[(x, y)]
+                                    .set_symbol(" ")
+                                    .set_style(Style::default().bg(self.palette.bg));
+                            }
+                        }
+                        draw_file_overview(drawer.frame, ruler, &model, self.palette);
+                        if let Some((source_total, _)) = model.overview_git_data() {
+                            let first_line = model
+                                .preview_state
+                                .text_rows
+                                .source_line_at(scroll)
+                                .unwrap_or(1)
+                                .saturating_sub(1);
+                            VerticalScrollbar::new(ruler, first_line, source_total).draw(
+                                drawer.frame,
+                                self.palette.bg,
+                                self.palette.fg_dim,
+                                self.palette.accent,
+                            );
+                        } else {
+                            VerticalScrollbar::new(ruler, scroll, model.preview_total_lines())
+                                .draw(
+                                    drawer.frame,
+                                    self.palette.bg,
+                                    self.palette.fg_dim,
+                                    self.palette.accent,
+                                );
+                        }
+                        model.session.layout.overview_ruler = ruler;
+                        model.session.layout.preview_scrollbar = Rect::default();
+                    } else {
+                        model.session.layout.overview_ruler = Rect::default();
+                        if let Some(lane) = scrollbar_lane {
+                            // Match the actual viewport after optional bottom bars.
+                            let lane = Rect::new(lane.x, inner.y, lane.width, inner.height);
+                            let total = model.preview_total_lines();
+                            if VerticalScrollbar::new(lane, scroll, total)
+                                .geometry()
+                                .is_some()
+                            {
+                                model.session.layout.preview_scrollbar = lane;
+                                VerticalScrollbar::new(lane, scroll, total).draw(
+                                    drawer.frame,
+                                    self.palette.bg,
+                                    self.palette.fg_dim,
+                                    self.palette.accent,
+                                );
+                            } else {
+                                model.session.layout.preview_scrollbar = Rect::default();
+                            }
                         } else {
                             model.session.layout.preview_scrollbar = Rect::default();
                         }
-                    } else {
-                        model.session.layout.preview_scrollbar = Rect::default();
                     }
-                }
-                if let Some((bar, max_x)) = horizontal_bar {
-                    let scrollbar = HorizontalScrollbar::new(
-                        bar,
-                        model.preview_state.preview_scroll_x,
-                        (bar.width as usize).saturating_add(max_x),
-                    );
-                    if scrollbar.geometry().is_some() {
-                        model.session.layout.preview_horizontal_scrollbar = bar;
-                        model.session.layout.preview_horizontal_max = max_x;
-                        scrollbar.draw(
-                            drawer.frame, self.palette.bg,
-                            self.palette.border, self.palette.accent,
+                    if let Some((bar, max_x)) = horizontal_bar {
+                        let scrollbar = HorizontalScrollbar::new(
+                            bar,
+                            model.preview_state.preview_scroll_x,
+                            (bar.width as usize).saturating_add(max_x),
                         );
+                        if scrollbar.geometry().is_some() {
+                            model.session.layout.preview_horizontal_scrollbar = bar;
+                            model.session.layout.preview_horizontal_max = max_x;
+                            scrollbar.draw(
+                                drawer.frame,
+                                self.palette.bg,
+                                self.palette.border,
+                                self.palette.accent,
+                            );
+                        }
                     }
-                }
                 }
             }
             PaneKind::Divider => {
                 model.session.layout.sidebar_divider = area;
-                drawer.frame.render_widget(
-                    Block::default()
-                        .borders(Borders::LEFT)
-                        .border_style(Style::default().fg(self.palette.border)),
+                Splitter::draw(
+                    drawer.frame,
                     area,
+                    SplitterAxis::Vertical,
+                    model.session.splitter.highlighted(SplitterAxis::Vertical),
+                    self.palette.border,
+                    self.palette.accent,
+                );
+            }
+            PaneKind::TerminalDivider => {
+                model.session.layout.terminal_divider = area;
+                Splitter::draw(
+                    drawer.frame,
+                    area,
+                    SplitterAxis::Horizontal,
+                    model.session.splitter.highlighted(SplitterAxis::Horizontal),
+                    self.palette.border,
+                    self.palette.accent,
                 );
             }
             PaneKind::Terminal => {
-                let inner = terminal_tabs::draw_tab_strip(drawer.frame, area, &mut model, self.palette);
+                let inner =
+                    terminal_tabs::draw_tab_strip(drawer.frame, area, &mut model, self.palette);
                 if let Some(term) = &mut model.terminal {
-                    term.render(drawer.frame, inner, self.palette.bg, self.palette.fg);
+                    // The child PTY's default colors belong to the outer terminal, not
+                    // Forge's theme. Explicit ANSI/RGB colors still come from vt100.
+                    term.render(drawer.frame, inner, Color::Reset, Color::Reset);
                 }
                 terminal_tabs::draw_tab_tooltip(drawer.frame, area, &model, self.palette);
             }
@@ -1098,26 +1339,47 @@ impl Component for NativePane {
                 }
             }
         }
+        if cache_backdrop {
+            let mut cached = ratatui::buffer::Buffer::empty(cache_area);
+            copy_pane_cells(buffer, &mut cached, cache_area);
+            self.editor_backdrop = Some((theme, cached));
+        }
+    }
+}
+
+fn copy_pane_cells(
+    source: &ratatui::buffer::Buffer,
+    target: &mut ratatui::buffer::Buffer,
+    area: Rect,
+) {
+    for y in area.y..area.bottom() {
+        if area.width > 0 {
+            let source_start = source.index_of(area.x, y);
+            let target_start = target.index_of(area.x, y);
+            let width = area.width as usize;
+            target.content[target_start..target_start + width]
+                .clone_from_slice(&source.content[source_start..source_start + width]);
+        }
     }
 }
 
 // Keep the component tree and layout here; drawing implementations live in
 // independent modules so UI changes stay scoped to their specific panel.
 mod decorations;
+mod footer;
 mod help_guide;
 mod preview_content;
 mod tools_panel;
 mod workspace;
-mod footer;
 
 pub(crate) use decorations::draw_blame_popup;
 use decorations::*;
+use footer::*;
 use help_guide::*;
 pub(crate) use preview_content::bridge_theme;
 use preview_content::*;
 use tools_panel::*;
 use workspace::*;
-use footer::*;
 
 #[cfg(test)]
 mod tests;

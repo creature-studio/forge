@@ -42,8 +42,22 @@ pub mod vga {
     pub const WHITE: Rgb = Rgb::new(0xFF, 0xFF, 0xFF);
 
     pub const ALL: [Rgb; 16] = [
-        BLACK, BLUE, GREEN, CYAN, RED, MAGENTA, BROWN, LIGHT_GRAY, DARK_GRAY, LIGHT_BLUE,
-        LIGHT_GREEN, LIGHT_CYAN, LIGHT_RED, LIGHT_MAGENTA, YELLOW, WHITE,
+        BLACK,
+        BLUE,
+        GREEN,
+        CYAN,
+        RED,
+        MAGENTA,
+        BROWN,
+        LIGHT_GRAY,
+        DARK_GRAY,
+        LIGHT_BLUE,
+        LIGHT_GREEN,
+        LIGHT_CYAN,
+        LIGHT_RED,
+        LIGHT_MAGENTA,
+        YELLOW,
+        WHITE,
     ];
 }
 
@@ -139,9 +153,9 @@ impl ColorMode {
     }
 }
 
-/// Detect color mode. Defaults to **Ansi256** so charcoal greys render.
-pub fn detect_color_mode() -> ColorMode {
-    if let Ok(v) = std::env::var("FORGE_COLOR") {
+/// Resolve color mode from optional `FORGE_COLOR` and `COLORTERM` values.
+pub fn detect_color_mode_with_env(forge_color: Option<&str>, colorterm: Option<&str>) -> ColorMode {
+    if let Some(v) = forge_color {
         let v = v.to_ascii_lowercase();
         match v.as_str() {
             "16" | "ansi16" | "vga" | "basic" => return ColorMode::Ansi16,
@@ -151,7 +165,7 @@ pub fn detect_color_mode() -> ColorMode {
         }
     }
 
-    if let Ok(v) = std::env::var("COLORTERM") {
+    if let Some(v) = colorterm {
         let v = v.to_ascii_lowercase();
         if v.contains("truecolor") || v.contains("24bit") {
             return ColorMode::TrueColor;
@@ -159,6 +173,13 @@ pub fn detect_color_mode() -> ColorMode {
     }
 
     ColorMode::Ansi256
+}
+
+/// Detect color mode. Defaults to **Ansi256** so charcoal greys render.
+pub fn detect_color_mode() -> ColorMode {
+    let forge_color = std::env::var("FORGE_COLOR").ok();
+    let colorterm = std::env::var("COLORTERM").ok();
+    detect_color_mode_with_env(forge_color.as_deref(), colorterm.as_deref())
 }
 
 /// Map an RGB triplet onto the xterm 256-color cube (16..231) + grayscale.
@@ -527,15 +548,47 @@ impl Theme {
 
     pub fn assert_vga_only(&self) {
         let slots = [
-            self.bg, self.panel_bg, self.header_bg, self.fg, self.muted, self.accent,
-            self.border, self.border_focus, self.selection_bg, self.selection_fg,
-            self.git_modified, self.git_added, self.git_deleted, self.git_untracked,
-            self.git_ignored, self.git_conflicted, self.git_renamed, self.diff_add,
-            self.diff_add_bg, self.diff_del, self.diff_del_bg, self.directory,
-            self.danger, self.warning, self.chrome_fg, self.chrome_bg, self.chrome_hotkey,
-            self.title_active, self.title_inactive, self.menu_bg, self.menu_fg, self.shadow,
-            self.pill_bg, self.branch_fg, self.branch_bg, self.badge_fg, self.badge_bg,
-            self.activity_bg, self.tab_active_fg, self.tab_active_bg, self.tab_inactive_fg,
+            self.bg,
+            self.panel_bg,
+            self.header_bg,
+            self.fg,
+            self.muted,
+            self.accent,
+            self.border,
+            self.border_focus,
+            self.selection_bg,
+            self.selection_fg,
+            self.git_modified,
+            self.git_added,
+            self.git_deleted,
+            self.git_untracked,
+            self.git_ignored,
+            self.git_conflicted,
+            self.git_renamed,
+            self.diff_add,
+            self.diff_add_bg,
+            self.diff_del,
+            self.diff_del_bg,
+            self.directory,
+            self.danger,
+            self.warning,
+            self.chrome_fg,
+            self.chrome_bg,
+            self.chrome_hotkey,
+            self.title_active,
+            self.title_inactive,
+            self.menu_bg,
+            self.menu_fg,
+            self.shadow,
+            self.pill_bg,
+            self.branch_fg,
+            self.branch_bg,
+            self.badge_fg,
+            self.badge_bg,
+            self.activity_bg,
+            self.tab_active_fg,
+            self.tab_active_bg,
+            self.tab_inactive_fg,
         ];
         for c in slots {
             assert!(
@@ -573,8 +626,20 @@ mod tests {
         assert_eq!(nearest_vga(vga::BLUE), VgaNamed::Blue);
     }
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn detect_defaults_ansi256() {
+        assert_eq!(detect_color_mode_with_env(None, None), ColorMode::Ansi256);
+        assert_eq!(
+            detect_color_mode_with_env(None, Some("truecolor")),
+            ColorMode::TrueColor
+        );
+        assert_eq!(
+            detect_color_mode_with_env(None, Some("24bit")),
+            ColorMode::TrueColor
+        );
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("FORGE_COLOR");
         std::env::remove_var("COLORTERM");
         assert_eq!(detect_color_mode(), ColorMode::Ansi256);
@@ -582,6 +647,19 @@ mod tests {
 
     #[test]
     fn detect_respects_forge_color_env() {
+        assert_eq!(
+            detect_color_mode_with_env(Some("truecolor"), None),
+            ColorMode::TrueColor
+        );
+        assert_eq!(
+            detect_color_mode_with_env(Some("256"), Some("truecolor")),
+            ColorMode::Ansi256
+        );
+        assert_eq!(
+            detect_color_mode_with_env(Some("16"), Some("truecolor")),
+            ColorMode::Ansi16
+        );
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("FORGE_COLOR", "truecolor");
         assert_eq!(detect_color_mode(), ColorMode::TrueColor);
         std::env::set_var("FORGE_COLOR", "256");

@@ -22,29 +22,30 @@ use forge_ui::{
     expand_ancestors_for_path, file_list_items, find_parent_row, find_scm_parent_row, flatten_tree,
     init_icons_from_env, scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode,
     staging_items, sticky_index_at, ActivityTab, ContextAction, ContextMenu, ContextTarget,
-    HorizontalScrollbar, ScrollbarDrag, VerticalScrollbar, HoverTargets,
-    MarkdownPreview, PaneFocus, PaneLayout, ScmRow, SplitRowsCache, StagingColumn, TextLang,
-    TextRowsCache, TreeRow,
+    HorizontalScrollbar, HoverTargets, MarkdownPreview, PaneFocus, PaneLayout, ScmRow,
+    ScrollbarDrag, SplitRowsCache, StagingColumn, TextLang, TextRowsCache, TreeRow,
+    VerticalScrollbar,
 };
 mod auto_refresh;
 mod blame;
 mod file_find;
 mod file_find_ui;
 mod inline_diff;
-mod preview_selection;
-mod pending_request;
 mod input;
 mod input_router;
 mod input_trace;
+mod pending_request;
+mod preview_selection;
+mod splitter;
 use preview_selection::PreviewSelection;
 mod editor;
+mod embedded_terminal;
 mod git_sync_badge;
 mod history;
 mod interaction;
 mod keybindings;
 mod tools;
 mod view;
-mod embedded_terminal;
 use ratatui_kit::prelude::*;
 
 /// Double-click window for directory enter.
@@ -199,6 +200,18 @@ struct PreviewState {
     hunk_index: Option<usize>,
 }
 
+/// Terminal body height in rows; reserve Header, Footer and a dedicated
+/// splitter row, plus at least four rows of workspace above the splitter.
+fn terminal_panel_height(window_height: u16, requested: Option<u16>) -> u16 {
+    if window_height < 14 {
+        return 0;
+    }
+    let max = window_height.saturating_sub(1 + 3 + 1 + 4);
+    requested
+        .unwrap_or((window_height / 3).clamp(5, 16))
+        .clamp(5, max)
+}
+
 struct SessionState {
     status: String,
     write_status: Option<String>,
@@ -217,7 +230,8 @@ struct SessionState {
     /// Activity Bar remains visible even when this panel is collapsed.
     sidebar_visible: bool,
     sidebar_width: u16,
-    sidebar_resizing: bool,
+    terminal_height: Option<u16>,
+    splitter: splitter::SplitterState,
     /// Activity Bar click capture: activation requires matching press and release.
     activity_pressed: Option<ActivityAction>,
     commit_open: bool,
@@ -230,10 +244,21 @@ struct SessionState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScrollbarTarget { Sidebar, Preview, PreviewHorizontal }
+enum ScrollbarTarget {
+    Sidebar,
+    Preview,
+    PreviewHorizontal,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ActivityAction { Files, Git, Search, Terminal, Settings, Collapse }
+enum ActivityAction {
+    Files,
+    Git,
+    Search,
+    Terminal,
+    Settings,
+    Collapse,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TerminalTabAction {
@@ -243,6 +268,7 @@ enum TerminalTabAction {
     Previous,
     Next,
     Maximize,
+    ToggleMouseRouting,
     Help,
     Hide,
 }
@@ -474,11 +500,11 @@ fn demo_colors(mode: ColorMode) -> Result<()> {
     ];
 
     for (label, sgr) in samples {
-        write!(out, "{sgr}  {label:<32}  \x1b[0m\n")?;
+        writeln!(out, "{sgr}  {label:<32}  \x1b[0m")?;
     }
-    write!(
+    writeln!(
         out,
-        "raw CSI: \x1b[44m BLUE-BG \x1b[0m \x1b[46m CYAN-BG \x1b[0m \x1b[103;30m YELLOW \x1b[0m\n"
+        "raw CSI: \x1b[44m BLUE-BG \x1b[0m \x1b[46m CYAN-BG \x1b[0m \x1b[103;30m YELLOW \x1b[0m"
     )?;
     out.flush()?;
     eprintln!(
@@ -580,7 +606,8 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             activity: ActivityTab::Files,
             sidebar_visible: true,
             sidebar_width: 30,
-            sidebar_resizing: false,
+            terminal_height: None,
+            splitter: splitter::SplitterState::default(),
             activity_pressed: None,
             commit_open: false,
             commit_confirming: false,
@@ -618,7 +645,11 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
     struct RestoreTerminal;
     impl Drop for RestoreTerminal {
         fn drop(&mut self) {
-            let _ = crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture);
+            let _ = crossterm::execute!(
+                io::stdout(),
+                crossterm::event::DisableBracketedPaste,
+                crossterm::event::DisableMouseCapture,
+            );
             ratatui::restore();
         }
     }
@@ -626,10 +657,21 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut initial = None;
     loop {
-        crossterm::execute!(io::stdout(), crossterm::event::EnableMouseCapture)?;
+        // Receive actual paste events from the outer terminal. Without
+        // DECSET 2004, terminal paste may arrive as hundreds of individual
+        // key presses, each triggering its own Codex redraw.
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::event::EnableMouseCapture,
+            crossterm::event::EnableBracketedPaste,
+        )?;
         element!(view::Workspace(color_mode: color_mode, initial: initial, editor_handoff: Some(handoff.clone())))
             .fullscreen().await?;
-        crossterm::execute!(io::stdout(), crossterm::event::DisableMouseCapture)?;
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::event::DisableBracketedPaste,
+            crossterm::event::DisableMouseCapture,
+        )?;
         ratatui::restore();
         let resume = handoff.lock().expect("editor handoff").take();
         let Some(resume) = resume else {
@@ -641,8 +683,6 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
 }
 
 impl App {
-
-
     fn hint_bar(&self) -> String {
         String::new()
     }
@@ -845,7 +885,9 @@ impl App {
     /// `h` / Left: collapse expanded folder, else select parent, else leave Git.
     fn scm_tree_back(&mut self) {
         self.scm.follow_selection = true;
-        let Some(row) = self.selected_scm_row() else { return; };
+        let Some(row) = self.selected_scm_row() else {
+            return;
+        };
         match row {
             ScmRow::Folder {
                 column,
@@ -946,7 +988,10 @@ impl App {
         self.cancel_pending_lists();
         let root = self.files.tree_root.clone();
         self.request_dir(root.clone());
-        let mut expanded: Vec<_> = self.files.expanded.iter()
+        let mut expanded: Vec<_> = self
+            .files
+            .expanded
+            .iter()
             .filter(|path| *path != &root && path.starts_with(&root))
             .cloned()
             .collect();
@@ -987,7 +1032,12 @@ impl App {
     fn request_dir(&mut self, path: PathBuf) {
         // Rebuilding the tree after each completed directory could otherwise
         // re-enqueue other still-pending expanded directories repeatedly.
-        if self.files.pending_lists.iter().any(|pending| pending.path == path) {
+        if self
+            .files
+            .pending_lists
+            .iter()
+            .any(|pending| pending.path == path)
+        {
             return;
         }
         let handle = self.services.fs.list(&self.services.jobs, path.clone());
@@ -1237,15 +1287,22 @@ impl App {
         // lines would otherwise make the renderer clamp scroll to 0.
         let viewport = self.session.layout.preview_inner.height as usize;
         let through_line = if self.preview_state.text_rows.line_count() > 0 {
-            self.preview_state.text_rows.row_to_source(
-                self.preview_state.preview_scroll.saturating_add(viewport),
-            ).saturating_add(16)
+            self.preview_state
+                .text_rows
+                .row_to_source(self.preview_state.preview_scroll.saturating_add(viewport))
+                .saturating_add(16)
         } else {
-            self.preview_state.preview_scroll.saturating_add(viewport).saturating_add(32)
+            self.preview_state
+                .preview_scroll
+                .saturating_add(viewport)
+                .saturating_add(32)
         };
         let path = entry.path.clone();
         let handle = self.services.fs.preview_through_line(
-            &self.services.jobs, path.clone(), entry.kind, through_line,
+            &self.services.jobs,
+            path.clone(),
+            entry.kind,
+            through_line,
         );
         self.preview_state.pending_preview = Some(PendingPreview {
             id: handle.id,
@@ -1560,10 +1617,9 @@ impl App {
     }
 
     fn poll_pending_list(&mut self) -> bool {
-        let finished = pending_request::drain_ready(
-            &mut self.files.pending_lists,
-            |pending| pending.handle.try_join(),
-        );
+        let finished = pending_request::drain_ready(&mut self.files.pending_lists, |pending| {
+            pending.handle.try_join()
+        });
         let progressed = !finished.is_empty();
         for (pending, result) in finished {
             self.apply_list_result(pending.path, result);
@@ -1572,10 +1628,11 @@ impl App {
     }
 
     fn poll_pending_status(&mut self) -> bool {
-        if let Some((pending, result)) = pending_request::take_ready(
-            &mut self.scm.pending_status,
-            |pending| pending.handle.try_join(),
-        ) {
+        if let Some((pending, result)) =
+            pending_request::take_ready(&mut self.scm.pending_status, |pending| {
+                pending.handle.try_join()
+            })
+        {
             let key = pending.key;
             self.apply_status_result(key, result);
             // A status-filtered search may have started before this snapshot arrived.
@@ -1592,10 +1649,11 @@ impl App {
     }
 
     fn poll_pending_preview(&mut self) -> bool {
-        if let Some((pending, result)) = pending_request::take_ready(
-            &mut self.preview_state.pending_preview,
-            |pending| pending.handle.try_join(),
-        ) {
+        if let Some((pending, result)) =
+            pending_request::take_ready(&mut self.preview_state.pending_preview, |pending| {
+                pending.handle.try_join()
+            })
+        {
             self.apply_preview_result(pending.path, result);
             true
         } else {
@@ -1604,10 +1662,11 @@ impl App {
     }
 
     fn poll_pending_page(&mut self) -> bool {
-        let Some((pending, result)) = pending_request::take_ready(
-            &mut self.preview_state.pending_page,
-            |pending| pending.handle.try_join(),
-        ) else {
+        let Some((pending, result)) =
+            pending_request::take_ready(&mut self.preview_state.pending_page, |pending| {
+                pending.handle.try_join()
+            })
+        else {
             return false;
         };
         let path = pending.path;
@@ -1661,9 +1720,9 @@ impl App {
     /// Prefer Find hits when a Find session is active, matching the ruler's
     /// search-over-Git priority. No marker means no navigation.
     fn jump_overview_marker(&mut self, forward: bool) {
-        if !self.config.show_overview_ruler || !matches!(
-            self.preview_state.preview_mode, PreviewMode::File
-        ) {
+        if !self.config.show_overview_ruler
+            || !matches!(self.preview_state.preview_mode, PreviewMode::File)
+        {
             return;
         }
         let mut positions = Vec::new();
@@ -1674,9 +1733,10 @@ impl App {
             sorted.sort_by_key(|(line, _)| *line);
             let mut previous_by_color: Vec<(ratatui::style::Color, usize)> = Vec::new();
             for (line, color) in sorted {
-                if line == 0 { continue; }
-                if let Some((_, previous)) =
-                    previous_by_color.iter_mut().find(|(c, _)| *c == color)
+                if line == 0 {
+                    continue;
+                }
+                if let Some((_, previous)) = previous_by_color.iter_mut().find(|(c, _)| *c == color)
                 {
                     if line > previous.saturating_add(1) {
                         positions.push(line);
@@ -1709,9 +1769,16 @@ impl App {
     }
 
     fn advance_overview_jump(&mut self) {
-        let Some(target) = self.preview_state.pending_overview_line else { return; };
-        let Some(preview) = self.preview_state.preview.as_ref() else { return; };
-        let PreviewContent::Text { lines, truncated, .. } = &preview.content else {
+        let Some(target) = self.preview_state.pending_overview_line else {
+            return;
+        };
+        let Some(preview) = self.preview_state.preview.as_ref() else {
+            return;
+        };
+        let PreviewContent::Text {
+            lines, truncated, ..
+        } = &preview.content
+        else {
             self.preview_state.pending_overview_line = None;
             return;
         };
@@ -1728,33 +1795,53 @@ impl App {
 
     /// Marker priority is search over Git; clicking empty track seeks proportionally.
     fn overview_click_target(&self, row: usize, height: usize) -> Option<usize> {
-        let source_total = self.overview_git_data().map(|(n, _)| n)
+        let source_total = self
+            .overview_git_data()
+            .map(|(n, _)| n)
             .or_else(|| match &self.preview_state.preview.as_ref()?.content {
                 PreviewContent::Text { lines, .. } => Some(lines.len()),
                 _ => None,
-            })?.max(1);
-        let scale = |line: usize| line.saturating_sub(1)
-            .saturating_mul(height.saturating_sub(1)) / source_total.saturating_sub(1).max(1);
+            })?
+            .max(1);
+        let scale = |line: usize| {
+            line.saturating_sub(1)
+                .saturating_mul(height.saturating_sub(1))
+                / source_total.saturating_sub(1).max(1)
+        };
         let y = row.min(height.saturating_sub(1));
         let find = &self.preview_state.find;
-        if find.open && !find.query.is_empty()
-            && self.preview_state.preview.as_ref().is_some_and(|p| p.path == find.path) {
-            if let Some(hit) = find.matches.iter()
+        if find.open
+            && !find.query.is_empty()
+            && self
+                .preview_state
+                .preview
+                .as_ref()
+                .is_some_and(|p| p.path == find.path)
+        {
+            if let Some(hit) = find
+                .matches
+                .iter()
                 .filter(|hit| scale(hit.line) == y)
                 .min_by_key(|hit| hit.line.abs_diff(y * source_total / height.max(1)))
-            { return Some(hit.line); }
+            {
+                return Some(hit.line);
+            }
         }
         if let Some((_, git)) = self.overview_git_data() {
-            if let Some(&(line, _)) = git.iter()
-                .filter(|(line, _)| scale(*line) == y)
-                .min_by_key(|(line, color)| {
-                    (usize::from(*color == ratatui::style::Color::Blue),
-                     line.abs_diff(y * source_total / height.max(1)))
-                })
-            { return Some(line); }
+            if let Some(&(line, _)) =
+                git.iter()
+                    .filter(|(line, _)| scale(*line) == y)
+                    .min_by_key(|(line, color)| {
+                        (
+                            usize::from(*color == ratatui::style::Color::Blue),
+                            line.abs_diff(y * source_total / height.max(1)),
+                        )
+                    })
+            {
+                return Some(line);
+            }
         }
-        Some(1 + y.saturating_mul(source_total.saturating_sub(1))
-            / height.saturating_sub(1).max(1))
+        Some(1 + y.saturating_mul(source_total.saturating_sub(1)) / height.saturating_sub(1).max(1))
     }
 
     fn cancel_preview_page(&mut self) {
@@ -1815,10 +1902,11 @@ impl App {
     }
 
     fn poll_pending_diff(&mut self) -> bool {
-        if let Some((pending, result)) = pending_request::take_ready(
-            &mut self.preview_state.pending_diff,
-            |pending| pending.handle.try_join(),
-        ) {
+        if let Some((pending, result)) =
+            pending_request::take_ready(&mut self.preview_state.pending_diff, |pending| {
+                pending.handle.try_join()
+            })
+        {
             let path = pending.path;
             let source = pending.source;
             match result {
@@ -1867,10 +1955,11 @@ impl App {
     }
 
     fn poll_pending_write(&mut self) -> bool {
-        if let Some((pending, result)) = pending_request::take_ready(
-            &mut self.scm.pending_write,
-            |pending| pending.handle.try_join(),
-        ) {
+        if let Some((pending, result)) =
+            pending_request::take_ready(&mut self.scm.pending_write, |pending| {
+                pending.handle.try_join()
+            })
+        {
             let op = match pending.op {
                 WriteOp::Stage => "staged",
                 WriteOp::Unstage => "unstaged",
@@ -1879,7 +1968,8 @@ impl App {
                 WriteOp::Commit(_) => "committed",
                 WriteOp::Push => "pushed",
                 WriteOp::Pull => "pulled",
-            }.to_string();
+            }
+            .to_string();
             let refresh = op != "pushed";
             let target = pending.target;
             let remote = matches!(op.as_str(), "pulled" | "pushed");
@@ -2136,8 +2226,10 @@ impl App {
                     && self.session.focus == PaneFocus::Preview
                     && matches!(self.preview_state.preview_mode, PreviewMode::Diff)
                     && self.selected_scm_entry().is_none()
-                    && matches!(self.selected_scm_row(),
-                        Some(ScmRow::Section { .. } | ScmRow::Folder { .. }))
+                    && matches!(
+                        self.selected_scm_row(),
+                        Some(ScmRow::Section { .. } | ScmRow::Folder { .. })
+                    )
                 {
                     self.session.focus = PaneFocus::List;
                 }
@@ -2250,6 +2342,10 @@ impl App {
 
     #[track_caller]
     fn enter_git_sidebar(&mut self) {
+        // Entering Source Control must reconcile changes missed by the shallow
+        // file watcher, including edits in collapsed directories.
+        // A hidden sidebar is refreshed when it becomes visible instead.
+        let refresh_on_entry = !self.in_git_sidebar() && self.session.sidebar_visible;
         if !self.in_git_sidebar() {
             let caller = std::panic::Location::caller();
             input_trace::log(&format!("ENTER_GIT {}:{}", caller.file(), caller.line()));
@@ -2295,6 +2391,9 @@ impl App {
             self.request_history();
         }
         self.session.status = "source control".into();
+        if refresh_on_entry {
+            self.request_status();
+        }
     }
 
     fn leave_git_sidebar(&mut self) {
@@ -2417,9 +2516,9 @@ impl App {
             };
         }
         items.retain(|item| item.action != ContextAction::OpenFile);
-        let can_discard = self.repo_root().is_some_and(|root|
-            self.has_discardable_changes_under(&root.join(&path))
-        );
+        let can_discard = self
+            .repo_root()
+            .is_some_and(|root| self.has_discardable_changes_under(&root.join(&path)));
         if !can_discard {
             items.retain(|item| item.action != ContextAction::DiscardChanges);
         }
@@ -2959,8 +3058,6 @@ impl App {
         self.session.context_menu = ContextMenu::new(items, col, row, ContextTarget::Diff);
         self.session.focus = PaneFocus::Preview;
     }
-
-
 }
 
 #[allow(dead_code)]

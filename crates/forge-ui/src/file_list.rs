@@ -11,9 +11,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::icons::{icon_mode, IconMode, Icons};
 use crate::sticky;
-use crate::ListViewport;
 use crate::style::{self, rgb};
 use crate::tree::{find_parent_row, fit_compact_label, TreeRow};
+use crate::ListViewport;
 
 /// Borrowed view model for the file list pane.
 #[derive(Debug)]
@@ -60,7 +60,8 @@ pub fn draw_file_list(
     *state.sticky_headers = viewport.pinned.clone();
     let row_width = area.width;
     let focused = state.focused;
-    let items: Vec<ListItem<'_>> = viewport.indices()
+    let items: Vec<ListItem<'_>> = viewport
+        .indices()
         .map(|index| {
             let tree_row = &state.rows[index];
             let pinned = viewport.pinned.contains(&index);
@@ -103,6 +104,7 @@ pub fn list_index_at(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn list_item(
     theme: &Theme,
     index: usize,

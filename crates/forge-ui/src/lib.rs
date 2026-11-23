@@ -12,11 +12,11 @@ mod context_menu;
 mod file_list;
 mod graph;
 mod icons;
-mod markdown;
 mod list_viewport;
+mod markdown;
 mod preview_pane;
-mod staging;
 mod scrollbar;
+mod staging;
 mod sticky;
 mod style;
 mod syntax;
@@ -34,20 +34,22 @@ pub use graph::{
     change_color, dir_key, flatten_changes, lane_color, layout_graph, ChangeRow, GraphCell,
     GraphLayout, GraphRow, LANE_WIDTH,
 };
-pub use icons::{icon_mode, init_from_env as init_icons_from_env, set_icon_mode, ActivityIcon, IconMode, Icons};
-pub use markdown::{wrap_line as wrap_text_line, MarkdownPreview};
-pub use list_viewport::ListViewport;
-pub use preview_pane::{
-    diff_render_hunk_start, draw_preview, highlight_code_lines, preview_line_count, scroll_to_hunk, PreviewView,
-    SplitRowsCache, TextLang, TextRowsCache,
+pub use icons::{
+    icon_mode, init_from_env as init_icons_from_env, set_icon_mode, ActivityIcon, IconMode, Icons,
 };
+pub use list_viewport::ListViewport;
+pub use markdown::{wrap_line as wrap_text_line, MarkdownPreview};
+pub use preview_pane::{
+    diff_render_hunk_start, draw_preview, highlight_code_lines, preview_line_count, scroll_to_hunk,
+    PreviewView, SplitRowsCache, TextLang, TextRowsCache,
+};
+pub use scrollbar::{HorizontalScrollbar, ScrollbarDrag, VerticalScrollbar};
 pub use staging::{
     build_scm_rows, compact_scm_rows, draw_commit_modal, draw_git_strip, draw_scm_sidebar,
     draw_staging, expand_ancestors_for_path, find_scm_parent_row, scm_entry, scm_index_at,
     scm_jump_to_column, staging_index_at, HistoryView, ScmRow, StagingColumn, StagingLayout,
     StagingState,
 };
-pub use scrollbar::{HorizontalScrollbar, ScrollbarDrag, VerticalScrollbar};
 pub use sticky::index_at as sticky_index_at;
 pub use style::rgb as to_color;
 pub use style::{color_mode, set_color_mode};
@@ -118,6 +120,8 @@ pub struct PaneLayout {
     /// Sidebar header collapse button and draggable boundary.
     pub sidebar_toggle: Rect,
     pub sidebar_divider: Rect,
+    /// One-row draggable horizontal boundary above the embedded Terminal.
+    pub terminal_divider: Rect,
     pub window: Rect,
     /// False when terminal width &lt; 80 (single-pane Tab switch).
     pub dual_pane: bool,
