@@ -144,6 +144,7 @@ impl TextRowsCache {
         self.ensure_wrapping(theme, lines, truncated, bytes_read, language, width, true);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ensure_wrapping(
         &mut self,
         theme: &Theme,
@@ -154,7 +155,8 @@ impl TextRowsCache {
         width: u16,
         wrap_enabled: bool,
     ) {
-        if self.width == width && self.wrap_enabled == wrap_enabled
+        if self.width == width
+            && self.wrap_enabled == wrap_enabled
             && self.theme.as_ref() == Some(theme)
             && self.lang == language
             && self.truncated == truncated
@@ -174,18 +176,26 @@ impl TextRowsCache {
                 crate::syntax::highlight_lines(theme, extension, lines, |index, body| {
                     self.source_starts.push(self.rows.len());
                     let source = numbered_line_with_body(theme, index + 1, body);
-                    self.max_code_columns = self.max_code_columns.max(source.width().saturating_sub(5));
-                    if wrap_enabled { self.rows.extend(wrap_line(&source, width)); }
-                    else { self.rows.push(source); }
+                    self.max_code_columns =
+                        self.max_code_columns.max(source.width().saturating_sub(5));
+                    if wrap_enabled {
+                        self.rows.extend(wrap_line(&source, width));
+                    } else {
+                        self.rows.push(source);
+                    }
                 });
             }
             _ => {
                 for (index, line) in lines.iter().enumerate() {
                     self.source_starts.push(self.rows.len());
                     let source = text_line_numbered(theme, index + 1, line, &language);
-                    self.max_code_columns = self.max_code_columns.max(source.width().saturating_sub(5));
-                    if wrap_enabled { self.rows.extend(wrap_line(&source, width)); }
-                    else { self.rows.push(source); }
+                    self.max_code_columns =
+                        self.max_code_columns.max(source.width().saturating_sub(5));
+                    if wrap_enabled {
+                        self.rows.extend(wrap_line(&source, width));
+                    } else {
+                        self.rows.push(source);
+                    }
                 }
             }
         }
@@ -252,16 +262,22 @@ impl TextRowsCache {
     /// Locate a UTF-8 byte offset inside a source line after soft wrapping.
     /// This powers in-file Find jumps for long logs without changing row indices.
     pub fn source_byte_to_row(&self, line: usize, byte: usize) -> usize {
-        let Some(range) = self.source_row_range(line) else { return 0; };
+        let Some(range) = self.source_row_range(line) else {
+            return 0;
+        };
         let mut seen_gutter = false;
         let mut offset = 0usize;
         let mut last = range.start;
         for row_index in range {
-            let Some(row) = self.rows.get(row_index) else { continue; };
+            let Some(row) = self.rows.get(row_index) else {
+                continue;
+            };
             last = row_index;
             for glyph in row.styled_graphemes(Style::default()) {
                 if !seen_gutter {
-                    if glyph.symbol == "│" { seen_gutter = true; }
+                    if glyph.symbol == "│" {
+                        seen_gutter = true;
+                    }
                     continue;
                 }
                 let next = offset + glyph.symbol.len();
@@ -322,17 +338,26 @@ impl SplitRowsCache {
             self.lines_ptr = ptr;
             self.lines_len = len;
             let partial = build_split_rows(lines);
-            self.rows = self.full_new_lines.as_deref()
+            self.rows = self
+                .full_new_lines
+                .as_deref()
                 .and_then(|full| build_complete_split_rows(partial.clone(), full))
                 .unwrap_or(partial);
             annotate_split_line_numbers(&mut self.rows);
             use unicode_width::UnicodeWidthStr;
-            self.max_columns = self.rows.iter().filter_map(|row| match &row.kind {
-                SplitRowKind::Pair { old, new, .. } => Some(
-                    old.as_deref().map_or(0, UnicodeWidthStr::width)
-                    .max(new.as_deref().map_or(0, UnicodeWidthStr::width))),
-                _ => None,
-            }).max().unwrap_or(0);
+            self.max_columns = self
+                .rows
+                .iter()
+                .filter_map(|row| match &row.kind {
+                    SplitRowKind::Pair { old, new, .. } => Some(
+                        old.as_deref()
+                            .map_or(0, UnicodeWidthStr::width)
+                            .max(new.as_deref().map_or(0, UnicodeWidthStr::width)),
+                    ),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
         }
         &self.rows
     }
@@ -383,7 +408,10 @@ pub fn draw_preview(
         );
     }
 
-    let is_diff = matches!(view, PreviewView::Diff { .. } | PreviewView::DiffScrolled { .. });
+    let is_diff = matches!(
+        view,
+        PreviewView::Diff { .. } | PreviewView::DiffScrolled { .. }
+    );
     let inner = area;
     style::fill_panel(frame, inner, theme);
 
@@ -404,7 +432,11 @@ pub fn draw_preview(
 
     let style = Style::default().bg(rgb(theme.panel_bg)).fg(rgb(theme.fg));
     // Diff rows are pre-fitted to width; wrapping would break the split columns.
-    let para = if is_diff || matches!(view, PreviewView::TextRows { .. } | PreviewView::TextRowsScrolled { .. }) {
+    let para = if is_diff
+        || matches!(
+            view,
+            PreviewView::TextRows { .. } | PreviewView::TextRowsScrolled { .. }
+        ) {
         Paragraph::new(visible).style(style)
     } else {
         Paragraph::new(visible)
@@ -420,7 +452,9 @@ pub fn draw_preview(
 /// Wide glyphs crossing the clip boundary become spaces rather than leaking
 /// half a CJK glyph into the adjacent pane.
 fn clip_source_row(line: &Line<'_>, offset: usize, width: usize) -> Line<'static> {
-    if width == 0 { return Line::default(); }
+    if width == 0 {
+        return Line::default();
+    }
     let gutter = width.min(5);
     let mut result = Vec::<Span<'static>>::new();
     let mut col = 0usize;
@@ -433,12 +467,17 @@ fn clip_source_row(line: &Line<'_>, offset: usize, width: usize) -> Line<'static
             let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
             let next = col.saturating_add(cw);
             if col < 5 {
-                if next <= gutter { text.push(ch); written += cw; }
+                if next <= gutter {
+                    text.push(ch);
+                    written += cw;
+                }
             } else if col >= 5 + offset && next <= 5 + end {
-                text.push(ch); written += cw;
+                text.push(ch);
+                written += cw;
             } else if next > 5 + offset && col < 5 + offset && next <= 5 + end {
                 // A requested offset lands in the second cell of a wide glyph.
-                text.push(' '); written += 1;
+                text.push(' ');
+                written += 1;
             }
             col = next;
         }
@@ -446,7 +485,9 @@ fn clip_source_row(line: &Line<'_>, offset: usize, width: usize) -> Line<'static
             result.push(Span::styled(text, span.style));
         }
     }
-    if written < width { result.push(Span::raw(" ".repeat(width - written))); }
+    if written < width {
+        result.push(Span::raw(" ".repeat(width - written)));
+    }
     Line::from(result)
 }
 
@@ -462,13 +503,22 @@ fn build_visible_lines(
     if end <= start {
         return Vec::new();
     }
-    let diff_x = match &view { PreviewView::DiffScrolled { horizontal_offset, .. } => *horizontal_offset, _ => 0 };
+    let diff_x = match &view {
+        PreviewView::DiffScrolled {
+            horizontal_offset, ..
+        } => *horizontal_offset,
+        _ => 0,
+    };
     match view {
         PreviewView::Markdown { .. } => Vec::new(),
         PreviewView::TextRows { rows } => rows[start.min(rows.len())..end.min(rows.len())].to_vec(),
-        PreviewView::TextRowsScrolled { rows, horizontal_offset } =>
-            rows[start.min(rows.len())..end.min(rows.len())].iter()
-                .map(|row| clip_source_row(row, horizontal_offset, width as usize)).collect(),
+        PreviewView::TextRowsScrolled {
+            rows,
+            horizontal_offset,
+        } => rows[start.min(rows.len())..end.min(rows.len())]
+            .iter()
+            .map(|row| clip_source_row(row, horizontal_offset, width as usize))
+            .collect(),
         PreviewView::Loading => slice_static(
             start,
             end,
@@ -592,8 +642,20 @@ fn build_visible_lines(
             }
             out
         }
-        PreviewView::Diff { path, lines, hunk_start, hunk_end, .. }
-        | PreviewView::DiffScrolled { path, lines, hunk_start, hunk_end, .. } => {
+        PreviewView::Diff {
+            path,
+            lines,
+            hunk_start,
+            hunk_end,
+            ..
+        }
+        | PreviewView::DiffScrolled {
+            path,
+            lines,
+            hunk_start,
+            hunk_end,
+            ..
+        } => {
             let rows = split_cache.rows_for(lines);
             if rows.is_empty() {
                 return slice_static(
@@ -608,26 +670,52 @@ fn build_visible_lines(
             let visible = &rows[start..end];
             // Parse each side independently, once per visible window. Source and
             // viewport remain bounded; never tokenize the entire Git history.
-            let left_text: Vec<String> = visible.iter().map(|row| match &row.kind {
-                SplitRowKind::Pair { old, .. } => if diff_x > 0 { old.clone().unwrap_or_default() }
-                    else { fit_cell(old.as_deref().unwrap_or(""), left_w.saturating_sub(6)) },
-                _ => String::new(),
-            }).collect();
-            let right_text: Vec<String> = visible.iter().map(|row| match &row.kind {
-                SplitRowKind::Pair { new, .. } => if diff_x > 0 { new.clone().unwrap_or_default() }
-                    else { fit_cell(new.as_deref().unwrap_or(""), right_w.saturating_sub(6)) },
-                _ => String::new(),
-            }).collect();
+            let left_text: Vec<String> = visible
+                .iter()
+                .map(|row| match &row.kind {
+                    SplitRowKind::Pair { old, .. } => {
+                        if diff_x > 0 {
+                            old.clone().unwrap_or_default()
+                        } else {
+                            fit_cell(old.as_deref().unwrap_or(""), left_w.saturating_sub(6))
+                        }
+                    }
+                    _ => String::new(),
+                })
+                .collect();
+            let right_text: Vec<String> = visible
+                .iter()
+                .map(|row| match &row.kind {
+                    SplitRowKind::Pair { new, .. } => {
+                        if diff_x > 0 {
+                            new.clone().unwrap_or_default()
+                        } else {
+                            fit_cell(new.as_deref().unwrap_or(""), right_w.saturating_sub(6))
+                        }
+                    }
+                    _ => String::new(),
+                })
+                .collect();
             let left_syntax = highlight_code_lines(theme, path, &left_text);
             let right_syntax = highlight_code_lines(theme, path, &right_text);
-            visible.iter().enumerate().map(|(index, row)| {
-                let in_hunk = match (hunk_start, hunk_end) {
-                    (Some(s), Some(e)) => row.src_indices.iter().any(|&i| i >= s && i < e),
-                    _ => false,
-                };
-                render_split_row_with_offset(theme, row, width, in_hunk,
-                    Some((&left_syntax[index], &right_syntax[index])), diff_x)
-            }).collect()
+            visible
+                .iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    let in_hunk = match (hunk_start, hunk_end) {
+                        (Some(s), Some(e)) => row.src_indices.iter().any(|&i| i >= s && i < e),
+                        _ => false,
+                    };
+                    render_split_row_with_offset(
+                        theme,
+                        row,
+                        width,
+                        in_hunk,
+                        Some((&left_syntax[index], &right_syntax[index])),
+                        diff_x,
+                    )
+                })
+                .collect()
         }
     }
 }
@@ -720,14 +808,18 @@ pub fn highlight_code_lines(theme: &Theme, path: &str, lines: &[String]) -> Vec<
             crate::syntax::highlight_lines(theme, &extension, lines, |_, line| out.push(line));
             out
         }
-        TextLang::Rust | TextLang::Markdown => lines.iter().map(|s| match language {
-            TextLang::Rust => rust_line(theme, s),
-            TextLang::Markdown => markdown_line(theme, s),
-            _ => unreachable!(),
-        }).collect(),
-        TextLang::Plain => lines.iter().map(|line| Line::from(Span::styled(
-            line.clone(), fg_bg(theme.fg, theme.panel_bg),
-        ))).collect(),
+        TextLang::Rust | TextLang::Markdown => lines
+            .iter()
+            .map(|s| match language {
+                TextLang::Rust => rust_line(theme, s),
+                TextLang::Markdown => markdown_line(theme, s),
+                _ => unreachable!(),
+            })
+            .collect(),
+        TextLang::Plain => lines
+            .iter()
+            .map(|line| Line::from(Span::styled(line.clone(), fg_bg(theme.fg, theme.panel_bg))))
+            .collect(),
     }
 }
 
@@ -955,7 +1047,11 @@ fn annotate_split_line_numbers(rows: &mut [SplitRow]) {
         let range = token.get(1..)?;
         let (start, count) = range.split_once(',').unwrap_or((range, "1"));
         let number = start.parse::<usize>().ok()?;
-        Some(if count == "0" { number.saturating_add(1) } else { number })
+        Some(if count == "0" {
+            number.saturating_add(1)
+        } else {
+            number
+        })
     }
     let (mut old, mut new) = (1usize, 1usize);
     for row in rows {
@@ -964,15 +1060,33 @@ fn annotate_split_line_numbers(rows: &mut [SplitRow]) {
                 let mut old_token = None;
                 let mut new_token = None;
                 for token in header.split_whitespace() {
-                    if token.starts_with('-') { old_token = Some(token); }
-                    if token.starts_with('+') { new_token = Some(token); }
+                    if token.starts_with('-') {
+                        old_token = Some(token);
+                    }
+                    if token.starts_with('+') {
+                        new_token = Some(token);
+                    }
                 }
-                if let Some(n) = old_token.and_then(start) { old = n; }
-                if let Some(n) = new_token.and_then(start) { new = n; }
+                if let Some(n) = old_token.and_then(start) {
+                    old = n;
+                }
+                if let Some(n) = new_token.and_then(start) {
+                    new = n;
+                }
             }
-            SplitRowKind::Pair { old: left, new: right, .. } => {
-                if left.is_some() { row.old_num = Some(old); old = old.saturating_add(1); }
-                if right.is_some() { row.new_num = Some(new); new = new.saturating_add(1); }
+            SplitRowKind::Pair {
+                old: left,
+                new: right,
+                ..
+            } => {
+                if left.is_some() {
+                    row.old_num = Some(old);
+                    old = old.saturating_add(1);
+                }
+                if right.is_some() {
+                    row.new_num = Some(new);
+                    new = new.saturating_add(1);
+                }
             }
             SplitRowKind::Note(_) => {}
         }
@@ -995,15 +1109,25 @@ fn build_complete_split_rows(rows: Vec<SplitRow>, full: &[String]) -> Option<Vec
                 let count = count.parse::<usize>().ok()?;
                 // For deletion-only hunks the zero-length new range points
                 // after the preceding new-side line.
-                let target = if count == 0 { start } else { start.saturating_sub(1) };
-                if target < next_line || target > full.len() { return None; }
+                let target = if count == 0 {
+                    start
+                } else {
+                    start.saturating_sub(1)
+                };
+                if target < next_line || target > full.len() {
+                    return None;
+                }
                 for source in &full[next_line..target] {
                     result.push(SplitRow {
                         kind: SplitRowKind::Pair {
-                            old: Some(source.clone()), new: Some(source.clone()),
-                            old_del: false, new_add: false,
+                            old: Some(source.clone()),
+                            new: Some(source.clone()),
+                            old_del: false,
+                            new_add: false,
                         },
-                        old_num: None, new_num: None, src_indices: Vec::new(),
+                        old_num: None,
+                        new_num: None,
+                        src_indices: Vec::new(),
                     });
                 }
                 next_line = target;
@@ -1013,7 +1137,9 @@ fn build_complete_split_rows(rows: Vec<SplitRow>, full: &[String]) -> Option<Vec
                 if let Some(new) = new {
                     // Never silently display a misaligned file: patch and blob
                     // might have changed between the two independent reads.
-                    if full.get(next_line)? != new { return None; }
+                    if full.get(next_line)? != new {
+                        return None;
+                    }
                     next_line += 1;
                 }
                 result.push(row);
@@ -1024,10 +1150,14 @@ fn build_complete_split_rows(rows: Vec<SplitRow>, full: &[String]) -> Option<Vec
     for source in &full[next_line..] {
         result.push(SplitRow {
             kind: SplitRowKind::Pair {
-                old: Some(source.clone()), new: Some(source.clone()),
-                old_del: false, new_add: false,
+                old: Some(source.clone()),
+                new: Some(source.clone()),
+                old_del: false,
+                new_add: false,
             },
-            old_num: None, new_num: None, src_indices: Vec::new(),
+            old_num: None,
+            new_num: None,
+            src_indices: Vec::new(),
         });
     }
     Some(result)
@@ -1056,7 +1186,9 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
     if let Some((idx, text)) = note {
         rows.push(SplitRow {
             kind: SplitRowKind::Note(text),
-            old_num: None, new_num: None, src_indices: vec![idx],
+            old_num: None,
+            new_num: None,
+            src_indices: vec![idx],
         });
     }
 
@@ -1070,7 +1202,9 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
         if is_hunk_header(line) {
             rows.push(SplitRow {
                 kind: SplitRowKind::Header(line.text.clone()),
-                old_num: None, new_num: None, src_indices: vec![i],
+                old_num: None,
+                new_num: None,
+                src_indices: vec![i],
             });
             i += 1;
             while i < lines.len() {
@@ -1091,7 +1225,9 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
                                 old_del: false,
                                 new_add: false,
                             },
-                            old_num: None, new_num: None, src_indices: vec![i],
+                            old_num: None,
+                            new_num: None,
+                            src_indices: vec![i],
                         });
                         i += 1;
                     }
@@ -1124,7 +1260,9 @@ fn build_split_rows(lines: &[DiffLine]) -> Vec<SplitRow> {
                                     old_del: dels.get(k).is_some(),
                                     new_add: adds.get(k).is_some(),
                                 },
-                                old_num: None, new_num: None, src_indices: src,
+                                old_num: None,
+                                new_num: None,
+                                src_indices: src,
                             });
                         }
                     }
@@ -1176,11 +1314,16 @@ fn fit_cell(s: &str, width: usize) -> String {
 fn fit_cell_window(value: &str, offset: usize, width: usize) -> String {
     let line = Line::from(value.to_owned());
     fit_styled_window(&line, offset, width, ratatui::style::Color::Reset)
-        .iter().map(|span| span.content.as_ref()).collect()
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
 }
 
 fn fit_styled_window(
-    line: &Line<'_>, offset: usize, width: usize, bg: ratatui::style::Color,
+    line: &Line<'_>,
+    offset: usize,
+    width: usize,
+    bg: ratatui::style::Color,
 ) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     let mut column = 0usize;
@@ -1199,12 +1342,23 @@ fn fit_styled_window(
                 used += 1;
             }
             column = next;
-            if column >= end { break; }
+            if column >= end {
+                break;
+            }
         }
-        if !out.is_empty() { spans.push(Span::styled(out, span.style.bg(bg))); }
-        if column >= end { break; }
+        if !out.is_empty() {
+            spans.push(Span::styled(out, span.style.bg(bg)));
+        }
+        if column >= end {
+            break;
+        }
     }
-    if used < width { spans.push(Span::styled(" ".repeat(width - used), Style::default().bg(bg))); }
+    if used < width {
+        spans.push(Span::styled(
+            " ".repeat(width - used),
+            Style::default().bg(bg),
+        ));
+    }
     spans
 }
 
@@ -1297,8 +1451,10 @@ fn render_split_row_with_offset(
         } => {
             let old_gutter = left_w.min(6);
             let new_gutter = right_w.min(6);
-            let left_txt = fit_cell_window(old.as_deref().unwrap_or(""), offset, left_w - old_gutter);
-            let right_txt = fit_cell_window(new.as_deref().unwrap_or(""), offset, right_w - new_gutter);
+            let left_txt =
+                fit_cell_window(old.as_deref().unwrap_or(""), offset, left_w - old_gutter);
+            let right_txt =
+                fit_cell_window(new.as_deref().unwrap_or(""), offset, right_w - new_gutter);
             let number_text = |number: Option<usize>, width: usize| -> String {
                 if let Some(number) = number {
                     fit_cell(&format!("{:>5} ", number), width)
@@ -1328,18 +1484,37 @@ fn render_split_row_with_offset(
             };
 
             let mut spans = vec![Span::styled(accent_ch.to_string(), accent_style)];
-            spans.push(Span::styled(number_text(row.old_num, old_gutter), numbers_style));
+            spans.push(Span::styled(
+                number_text(row.old_num, old_gutter),
+                numbers_style,
+            ));
             if let Some((left, right)) = syntax {
                 let left_bg = if *old_del { theme.diff_del_bg } else { base_bg };
                 let right_bg = if *new_add { theme.diff_add_bg } else { base_bg };
-                spans.extend(fit_styled_window(left, offset, left_w - old_gutter, rgb(left_bg)));
+                spans.extend(fit_styled_window(
+                    left,
+                    offset,
+                    left_w - old_gutter,
+                    rgb(left_bg),
+                ));
                 spans.push(Span::styled("│".to_string(), sep_style));
-                spans.push(Span::styled(number_text(row.new_num, new_gutter), numbers_style));
-                spans.extend(fit_styled_window(right, offset, right_w - new_gutter, rgb(right_bg)));
+                spans.push(Span::styled(
+                    number_text(row.new_num, new_gutter),
+                    numbers_style,
+                ));
+                spans.extend(fit_styled_window(
+                    right,
+                    offset,
+                    right_w - new_gutter,
+                    rgb(right_bg),
+                ));
             } else {
                 spans.push(Span::styled(left_txt, left_style));
                 spans.push(Span::styled("│".to_string(), sep_style));
-                spans.push(Span::styled(number_text(row.new_num, new_gutter), numbers_style));
+                spans.push(Span::styled(
+                    number_text(row.new_num, new_gutter),
+                    numbers_style,
+                ));
                 spans.push(Span::styled(right_txt, right_style));
             }
             Line::from(spans)
@@ -1375,7 +1550,9 @@ pub fn preview_line_count(view: PreviewView<'_>, split_cache: &mut SplitRowsCach
         PreviewView::Text {
             lines, truncated, ..
         } => text_preview_line_count(lines, truncated),
-        PreviewView::Diff { lines, .. } | PreviewView::DiffScrolled { lines, .. } => split_cache.ensure(lines).max(1),
+        PreviewView::Diff { lines, .. } | PreviewView::DiffScrolled { lines, .. } => {
+            split_cache.ensure(lines).max(1)
+        }
     }
 }
 
@@ -1478,7 +1655,7 @@ mod tests {
         let magenta = style::rgb(forge_theme::Rgb::new(0xc6, 0x78, 0xdd));
         let fg = style::rgb(theme.fg);
         assert!(
-            styles.iter().any(|c| *c == Some(magenta)),
+            styles.contains(&Some(magenta)),
             "expected magenta keyword span, got {:?}",
             styles
         );
@@ -1670,7 +1847,9 @@ mod tests {
                 old_del: true,
                 new_add: true,
             },
-            old_num: None, new_num: None, src_indices: vec![0, 1],
+            old_num: None,
+            new_num: None,
+            src_indices: vec![0, 1],
         };
         let line = render_split_row(&theme, &row, 40, false, None);
         let spans: Vec<_> = line.spans.iter().collect();
@@ -1699,7 +1878,9 @@ mod tests {
         let rows = [
             SplitRow {
                 kind: SplitRowKind::Header("@@ -1,3 +1,3 @@".into()),
-                old_num: None, new_num: None, src_indices: vec![0],
+                old_num: None,
+                new_num: None,
+                src_indices: vec![0],
             },
             SplitRow {
                 kind: SplitRowKind::Pair {
@@ -1708,7 +1889,9 @@ mod tests {
                     old_del: false,
                     new_add: false,
                 },
-                old_num: None, new_num: None, src_indices: vec![1],
+                old_num: None,
+                new_num: None,
+                src_indices: vec![1],
             },
             SplitRow {
                 kind: SplitRowKind::Pair {
@@ -1717,7 +1900,9 @@ mod tests {
                     old_del: true,
                     new_add: true,
                 },
-                old_num: None, new_num: None, src_indices: vec![2, 3],
+                old_num: None,
+                new_num: None,
+                src_indices: vec![2, 3],
             },
             SplitRow {
                 kind: SplitRowKind::Pair {
@@ -1726,7 +1911,9 @@ mod tests {
                     old_del: false,
                     new_add: false,
                 },
-                old_num: None, new_num: None, src_indices: vec![4],
+                old_num: None,
+                new_num: None,
+                src_indices: vec![4],
             },
         ];
         let rendered: Vec<_> = rows
@@ -1736,8 +1923,15 @@ mod tests {
         let left_widths: Vec<_> = rendered
             .iter()
             .map(|l| {
-                let sep = l.spans.iter().position(|s| s.content.as_ref() == "│").unwrap();
-                l.spans[1..sep].iter().map(|span| UnicodeWidthStr::width(span.content.as_ref())).sum::<usize>()
+                let sep = l
+                    .spans
+                    .iter()
+                    .position(|s| s.content.as_ref() == "│")
+                    .unwrap();
+                l.spans[1..sep]
+                    .iter()
+                    .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
+                    .sum::<usize>()
             })
             .collect();
         assert!(
@@ -1901,9 +2095,20 @@ mod tests {
     #[test]
     fn rust_highlighter_never_overruns_trailing_backslash() {
         let theme = Theme::modern_ide();
-        for source in ["\"abc\\", "'\\", "\"", "'", "\"escaped \\\" then end\\", "\"Unicode中文\\"] {
+        for source in [
+            "\"abc\\",
+            "'\\",
+            "\"",
+            "'",
+            "\"escaped \\\" then end\\",
+            "\"Unicode中文\\",
+        ] {
             let rendered = rust_line(&theme, source);
-            let joined: String = rendered.spans.iter().map(|span| span.content.as_ref()).collect();
+            let joined: String = rendered
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
             assert_eq!(joined, source, "failed source: {source:?}");
         }
     }
@@ -1911,22 +2116,46 @@ mod tests {
     #[test]
     fn full_diff_preserves_all_unmodified_lines_between_distant_hunks() {
         let diff = vec![
-            DiffLine { kind: DiffLineKind::Header, text: "@@ -2 +2 @@".into() },
-            DiffLine { kind: DiffLineKind::Delete, text: "-two".into() },
-            DiffLine { kind: DiffLineKind::Add, text: "+TWO".into() },
-            DiffLine { kind: DiffLineKind::Header, text: "@@ -5 +5 @@".into() },
-            DiffLine { kind: DiffLineKind::Delete, text: "-five".into() },
-            DiffLine { kind: DiffLineKind::Add, text: "+FIVE".into() },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -2 +2 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-two".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+TWO".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -5 +5 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-five".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+FIVE".into(),
+            },
         ];
         let full = ["one", "TWO", "three", "four", "FIVE", "six"]
-            .into_iter().map(str::to_owned).collect::<Vec<_>>();
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
         let mut cache = SplitRowsCache::default();
         cache.set_full_new_lines(Some(&full));
         let count = cache.ensure(&diff);
-        let new_code = cache.rows_for(&diff).iter().filter_map(|row| match &row.kind {
-            SplitRowKind::Pair { new, .. } => new.clone(),
-            _ => None,
-        }).collect::<Vec<_>>();
+        let new_code = cache
+            .rows_for(&diff)
+            .iter()
+            .filter_map(|row| match &row.kind {
+                SplitRowKind::Pair { new, .. } => new.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         assert_eq!(new_code, ["one", "TWO", "three", "four", "FIVE", "six"]);
         assert_eq!(count, 8); // Six source rows plus two hunk headings.
         assert_eq!(diff_render_hunk_start(&diff, 0, &mut cache), 1);
@@ -1938,24 +2167,43 @@ mod tests {
     #[test]
     fn full_diff_can_scroll_to_source_line_1062_outside_patch_context() {
         let theme = Theme::modern_ide();
-        let mut full = (1..=1400).map(|i| format!("source line {i}")).collect::<Vec<_>>();
+        let mut full = (1..=1400)
+            .map(|i| format!("source line {i}"))
+            .collect::<Vec<_>>();
         full[1099] = "updated source line 1100".into();
         let diff = vec![
-            DiffLine { kind: DiffLineKind::Header, text: "@@ -1100 +1100 @@".into() },
-            DiffLine { kind: DiffLineKind::Delete, text: "-source line 1100".into() },
-            DiffLine { kind: DiffLineKind::Add, text: "+updated source line 1100".into() },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -1100 +1100 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-source line 1100".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+updated source line 1100".into(),
+            },
         ];
         let mut cache = SplitRowsCache::default();
         cache.set_full_new_lines(Some(&full));
         assert_eq!(cache.ensure(&diff), 1401); // one hunk heading + all source lines
-        // The original unified patch has only three lines, but the full
-        // display remains navigable at line 1062 without loading new hunks.
+                                               // The original unified patch has only three lines, but the full
+                                               // display remains navigable at line 1062 without loading new hunks.
         let view = PreviewView::Diff {
-            path: "example.rs", side: "unstaged", lines: &diff,
-            hunk_start: None, hunk_end: None, hunk_idx: None,
+            path: "example.rs",
+            side: "unstaged",
+            lines: &diff,
+            hunk_start: None,
+            hunk_end: None,
+            hunk_idx: None,
         };
         let rendered = build_visible_lines(&theme, view, 116, 1061, 1062, &mut cache);
-        let text = rendered[0].spans.iter().map(|span| span.content.as_ref()).collect::<String>();
+        let text = rendered[0]
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
         assert!(text.contains("source line 1062"), "{text}");
         assert_eq!(cache.rows_for(&diff)[1061].new_num, Some(1062));
         assert_eq!(diff_render_hunk_start(&diff, 0, &mut cache), 1099);
@@ -1964,9 +2212,18 @@ mod tests {
     #[test]
     fn full_diff_mismatch_reverts_to_original_patch_rows() {
         let diff = vec![
-            DiffLine { kind: DiffLineKind::Header, text: "@@ -2 +2 @@".into() },
-            DiffLine { kind: DiffLineKind::Delete, text: "-two".into() },
-            DiffLine { kind: DiffLineKind::Add, text: "+TWO".into() },
+            DiffLine {
+                kind: DiffLineKind::Header,
+                text: "@@ -2 +2 @@".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Delete,
+                text: "-two".into(),
+            },
+            DiffLine {
+                kind: DiffLineKind::Add,
+                text: "+TWO".into(),
+            },
         ];
         let full = vec!["one".into(), "changed again".into(), "three".into()];
         let mut cache = SplitRowsCache::default();
@@ -1980,7 +2237,14 @@ mod tests {
         let code = ["const answer = 42; // shared".to_owned()];
         let colored = highlight_code_lines(&theme, "example.ts", &code);
         assert!(colored[0].spans.len() > 1);
-        assert_eq!(colored[0].spans.iter().map(|span| span.content.as_ref()).collect::<String>(), code[0]);
+        assert_eq!(
+            colored[0]
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            code[0]
+        );
     }
 
     #[test]
@@ -1990,17 +2254,35 @@ mod tests {
         let (left_w, right_w) = split_half_widths(width).unwrap();
         let old = fit_cell("const old = 1", left_w);
         let new = fit_cell("const next = 2", right_w);
-        let old_lines = highlight_code_lines(&theme, "x.ts", &[old.clone()]);
-        let new_lines = highlight_code_lines(&theme, "x.ts", &[new.clone()]);
-        let row = SplitRow { kind: SplitRowKind::Pair {
-            old: Some("const old = 1".into()), new: Some("const next = 2".into()),
-            old_del: true, new_add: true,
-        }, old_num: None, new_num: None, src_indices: vec![0] };
-        let rendered = render_split_row(&theme, &row, width as u16, false,
-            Some((&old_lines[0], &new_lines[0])));
+        let old_lines = highlight_code_lines(&theme, "x.ts", std::slice::from_ref(&old));
+        let new_lines = highlight_code_lines(&theme, "x.ts", std::slice::from_ref(&new));
+        let row = SplitRow {
+            kind: SplitRowKind::Pair {
+                old: Some("const old = 1".into()),
+                new: Some("const next = 2".into()),
+                old_del: true,
+                new_add: true,
+            },
+            old_num: None,
+            new_num: None,
+            src_indices: vec![0],
+        };
+        let rendered = render_split_row(
+            &theme,
+            &row,
+            width as u16,
+            false,
+            Some((&old_lines[0], &new_lines[0])),
+        );
         assert_eq!(rendered.width(), width);
-        assert!(rendered.spans.iter().any(|span| span.style.bg == Some(rgb(theme.diff_del_bg))));
-        assert!(rendered.spans.iter().any(|span| span.style.bg == Some(rgb(theme.diff_add_bg))));
+        assert!(rendered
+            .spans
+            .iter()
+            .any(|span| span.style.bg == Some(rgb(theme.diff_del_bg))));
+        assert!(rendered
+            .spans
+            .iter()
+            .any(|span| span.style.bg == Some(rgb(theme.diff_add_bg))));
         assert!(rendered.spans.len() > 4);
     }
 
@@ -2146,12 +2428,19 @@ mod horizontal_scroll_tests {
                 old_del: true,
                 new_add: true,
             },
-            old_num: Some(17), new_num: Some(18), src_indices: vec![1,2],
+            old_num: Some(17),
+            new_num: Some(18),
+            src_indices: vec![1, 2],
         };
         let width = 48;
         let first = render_split_row_with_offset(&theme, &row, width, false, None, 0);
         let scrolled = render_split_row_with_offset(&theme, &row, width, false, None, 7);
-        let joined = |line: &Line<'_>| line.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let joined = |line: &Line<'_>| {
+            line.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>()
+        };
         assert_eq!(first.width(), width as usize);
         assert_eq!(scrolled.width(), width as usize);
         assert_eq!(joined(&scrolled).matches('│').count(), 1);
@@ -2165,13 +2454,20 @@ mod horizontal_scroll_tests {
     #[test]
     fn unwrapped_rows_preserve_source_count_and_fixed_gutter_with_wide_chars() {
         let theme = Theme::modern_ide();
-        let lines = vec!["abcdefghij中文KLMNOPQRSTUVWXYZ".to_string(), "short".to_string()];
+        let lines = vec![
+            "abcdefghij中文KLMNOPQRSTUVWXYZ".to_string(),
+            "short".to_string(),
+        ];
         let mut cache = TextRowsCache::default();
         cache.ensure_wrapping(&theme, &lines, false, 0, TextLang::Plain, 12, false);
         assert_eq!(cache.line_count(), 2);
         assert!(cache.max_code_columns() > 20);
         let row = clip_source_row(&cache.rows()[0], 11, 12);
-        let rendered = row.spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let rendered = row
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
         assert!(rendered.starts_with("   1│"));
         assert_eq!(row.width(), 12);
         assert!(rendered.contains('文') || rendered.contains('中'));

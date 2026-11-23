@@ -94,14 +94,17 @@ impl PreviewSelection {
         visible_start: usize,
     ) -> Option<usize> {
         use crossterm::event::KeyCode;
-        if self.width == 0 || self.rows.is_empty() { return None; }
+        if self.width == 0 || self.rows.is_empty() {
+            return None;
+        }
         let row = visible_start;
         let first = self.rows.get(&row)?;
         let gutter = gutter_width(first, self.numbered);
         let line_end = |cells: &[CellText]| {
             let start = gutter_width(cells, self.numbered);
-            cells.iter().rposition(|cell|
-                !cell.continuation && !cell.text.trim().is_empty())
+            cells
+                .iter()
+                .rposition(|cell| !cell.continuation && !cell.text.trim().is_empty())
                 .map_or(start, |i| i + 1)
                 .max(start)
         };
@@ -110,15 +113,25 @@ impl PreviewSelection {
         } else {
             gutter
         };
-        let caret = self.keyboard_caret.unwrap_or(Point { row, col: initial_col });
+        let caret = self.keyboard_caret.unwrap_or(Point {
+            row,
+            col: initial_col,
+        });
         let start = self.keyboard_anchor.unwrap_or(caret);
         let mut next = caret;
         match code {
             KeyCode::Left => {
-                if next.col > self.rows.get(&next.row).map_or(0, |r| gutter_width(r, self.numbered)) {
+                if next.col
+                    > self
+                        .rows
+                        .get(&next.row)
+                        .map_or(0, |r| gutter_width(r, self.numbered))
+                {
                     next.col -= 1;
-                    while self.rows.get(&next.row).is_some_and(|r|
-                        r.get(next.col).is_some_and(|cell| cell.continuation))
+                    while self
+                        .rows
+                        .get(&next.row)
+                        .is_some_and(|r| r.get(next.col).is_some_and(|cell| cell.continuation))
                     {
                         next.col = next.col.saturating_sub(1);
                     }
@@ -128,36 +141,55 @@ impl PreviewSelection {
                 }
             }
             KeyCode::Right => {
-                let end = self.rows.get(&next.row).map_or(self.width as usize, |r| line_end(r));
+                let end = self
+                    .rows
+                    .get(&next.row)
+                    .map_or(self.width as usize, |r| line_end(r));
                 if next.col < end {
                     next.col += 1;
-                    while self.rows.get(&next.row).is_some_and(|r|
-                        r.get(next.col).is_some_and(|cell| cell.continuation))
+                    while self
+                        .rows
+                        .get(&next.row)
+                        .is_some_and(|r| r.get(next.col).is_some_and(|cell| cell.continuation))
                     {
                         next.col += 1;
                     }
                 } else {
                     next.row += 1;
-                    next.col = self.rows.get(&next.row)
+                    next.col = self
+                        .rows
+                        .get(&next.row)
                         .map_or(gutter, |r| gutter_width(r, self.numbered));
                 }
             }
             KeyCode::Up => {
                 next.row = next.row.saturating_sub(1);
                 if let Some(cells) = self.rows.get(&next.row) {
-                    next.col = next.col.clamp(gutter_width(cells, self.numbered), line_end(cells));
+                    next.col = next
+                        .col
+                        .clamp(gutter_width(cells, self.numbered), line_end(cells));
                 }
             }
             KeyCode::Down => {
                 next.row = next.row.saturating_add(1);
                 if let Some(cells) = self.rows.get(&next.row) {
-                    next.col = next.col.clamp(gutter_width(cells, self.numbered), line_end(cells));
+                    next.col = next
+                        .col
+                        .clamp(gutter_width(cells, self.numbered), line_end(cells));
                 }
             }
-            KeyCode::Home => next.col = self.rows.get(&next.row)
-                .map_or(0, |r| gutter_width(r, self.numbered)),
-            KeyCode::End => next.col = self.rows.get(&next.row)
-                .map_or(self.width as usize, |r| line_end(r)),
+            KeyCode::Home => {
+                next.col = self
+                    .rows
+                    .get(&next.row)
+                    .map_or(0, |r| gutter_width(r, self.numbered))
+            }
+            KeyCode::End => {
+                next.col = self
+                    .rows
+                    .get(&next.row)
+                    .map_or(self.width as usize, |r| line_end(r))
+            }
             _ => return None,
         }
         self.dragging = false;
@@ -291,20 +323,26 @@ impl PreviewSelection {
 
     fn range(&self) -> Option<(Point, Point)> {
         if let (Some(a), Some(b)) = (self.keyboard_anchor, self.keyboard_caret) {
-            if a == b { return None; }
+            if a == b {
+                return None;
+            }
             let (start, end_exclusive) = (a.min(b), a.max(b));
             // A keyboard caret is an exclusive endpoint; convert it to the
             // inclusive rendered-cell range used by mouse selection.
             let end = if end_exclusive.col > 0 {
-                Point { row: end_exclusive.row, col: end_exclusive.col - 1 }
+                Point {
+                    row: end_exclusive.row,
+                    col: end_exclusive.col - 1,
+                }
             } else if end_exclusive.row > 0 {
                 let row = end_exclusive.row - 1;
                 Point {
                     row,
-                    col: self.rows.get(&row).map_or(
-                        self.width as usize,
-                        |cells| cells.len(),
-                    ).saturating_sub(1),
+                    col: self
+                        .rows
+                        .get(&row)
+                        .map_or(self.width as usize, |cells| cells.len())
+                        .saturating_sub(1),
                 }
             } else {
                 return None;
@@ -354,15 +392,35 @@ mod tests {
     #[test]
     fn keyboard_selection_copies_rendered_unicode_cells_and_clears_on_esc() {
         use crossterm::event::KeyCode;
-        let mut selection = PreviewSelection::default();
-        selection.width = 12;
-        selection.rows.insert(0, vec![
-            CellText { text: "A".into(), continuation: false },
-            CellText { text: "中".into(), continuation: false },
-            CellText { text: " ".into(), continuation: true },
-            CellText { text: "B".into(), continuation: false },
-            CellText { text: " ".into(), continuation: false },
-        ]);
+        let mut selection = PreviewSelection {
+            width: 12,
+            ..Default::default()
+        };
+        selection.rows.insert(
+            0,
+            vec![
+                CellText {
+                    text: "A".into(),
+                    continuation: false,
+                },
+                CellText {
+                    text: "中".into(),
+                    continuation: false,
+                },
+                CellText {
+                    text: " ".into(),
+                    continuation: true,
+                },
+                CellText {
+                    text: "B".into(),
+                    continuation: false,
+                },
+                CellText {
+                    text: " ".into(),
+                    continuation: false,
+                },
+            ],
+        );
         assert_eq!(selection.keyboard_extend(KeyCode::Right, 0), Some(0));
         assert_eq!(selection.selected_text().as_deref(), Some("A"));
         assert_eq!(selection.keyboard_extend(KeyCode::Right, 0), Some(0));
@@ -637,8 +695,10 @@ mod tests {
 
     #[test]
     fn single_click_and_missing_rows_do_not_copy_arbitrary_data() {
-        let mut s = PreviewSelection::default();
-        s.anchor = Some(Point { row: 2, col: 0 });
+        let mut s = PreviewSelection {
+            anchor: Some(Point { row: 2, col: 0 }),
+            ..Default::default()
+        };
         assert!(s.selected_text().is_none());
         s.head = Some(Point { row: 10, col: 3 });
         assert!(s.selected_text().is_none());

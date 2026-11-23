@@ -8,12 +8,13 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
+use std::sync::OnceLock;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Default)]
 pub(super) struct EditingState {
     pub view: Option<TextEditor>,
-    pending_load: Option<JobHandle<Result<(TextDocument, usize)>>>,
+    pending_load: Option<JobHandle<Result<TextEditor>>>,
     pending_save: Option<JobHandle<Result<TextDocument>>>,
     return_focus: Option<PaneFocus>,
     close_after_save: bool,
@@ -42,28 +43,114 @@ impl EditingState {
 #[derive(Default)]
 struct EditorSyntaxCache {
     start: usize,
+    top: usize,
     source: Vec<String>,
     path: String,
     theme: Option<forge_theme::Theme>,
     colored: Vec<Line<'static>>,
+    revision: u64,
+    colored_revision: u64,
+    pending: Option<JobHandle<SyntaxJobResult>>,
 }
 
+type SyntaxJobResult = Result<(u64, Vec<Line<'static>>)>;
+
 impl EditorSyntaxCache {
+    fn poll(&mut self) {
+        if let Some(result) = self.pending.as_mut().and_then(JobHandle::try_join) {
+            self.pending = None;
+            match result {
+                Ok(Ok((revision, colored))) if revision == self.revision => {
+                    self.colored = colored;
+                    self.colored_revision = revision;
+                }
+                Ok(Ok(_)) => {} // Superseded source or viewport; keep existing colors.
+                _ => self.colored_revision = self.revision,
+            }
+        }
+    }
+
     fn visible<'a>(
-        &'a mut self, theme: &forge_theme::Theme, path: &str,
-        lines: &[String], top: usize, end: usize,
+        &'a mut self,
+        jobs: &JobScheduler,
+        theme: &forge_theme::Theme,
+        path: &str,
+        lines: &[String],
+        top: usize,
+        end: usize,
     ) -> &'a [Line<'static>] {
+        self.poll();
         let start = top.saturating_sub(48);
-        let source = &lines[start..end];
-        if self.start != start || self.path != path || self.theme.as_ref() != Some(theme)
-            || self.source != source
+        // Very long lines remain editable, but do not run language parsers
+        // over them (including the Rust and Markdown fallback highlighters).
+        let source = || {
+            lines[start..end].iter().map(|line| {
+                if line.len() > 16 * 1024 {
+                    ""
+                } else {
+                    line.as_str()
+                }
+            })
+        };
+        if self.start != start
+            || self.top != top
+            || self.path != path
+            || self.theme.as_ref() != Some(theme)
+            || !self.source.iter().map(String::as_str).eq(source())
         {
+            self.revision = self.revision.wrapping_add(1);
+            // Reuse existing colors while the latest source is parsed. Text
+            // always comes from the live document, never from these spans.
+            if self.theme.as_ref() != Some(theme) || self.path != path {
+                self.colored = vec![Line::default(); end - top];
+            } else if self.top != top || self.colored.len() != end - top {
+                self.colored = (top..end)
+                    .map(|row| {
+                        row.checked_sub(self.top)
+                            .and_then(|index| self.colored.get(index))
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect();
+            }
             self.start = start;
+            self.top = top;
             self.path = path.to_owned();
             self.theme = Some(theme.clone());
-            self.source = source.to_vec();
-            let parsed = forge_ui::highlight_code_lines(theme, path, source);
-            self.colored = parsed.into_iter().skip(top - start).collect();
+            self.source = source().map(str::to_owned).collect();
+            if matches!(
+                forge_ui::TextLang::from_name(path),
+                forge_ui::TextLang::Plain
+            ) {
+                jobs.cancel_key("editor:syntax");
+                self.pending = None;
+                self.colored.clear();
+                self.colored.resize_with(end - top, Line::default);
+                self.colored_revision = self.revision;
+            }
+        }
+        // At most one parse is in flight. New keys only update the desired
+        // revision, avoiding cancellation notifications and extra UI frames
+        // for every key in a burst. The next parse uses the latest source.
+        if self.pending.is_none() && self.colored_revision != self.revision {
+            let source = self.source.clone();
+            let theme = theme.clone();
+            let path = path.to_owned();
+            let revision = self.revision;
+            self.pending =
+                Some(
+                    jobs.spawn(JobPriority::Low, Some("editor:syntax".into()), async move {
+                        tokio::time::sleep(Duration::from_millis(16)).await;
+                        Ok(tokio::task::spawn_blocking(move || {
+                            let colored = forge_ui::highlight_code_lines(&theme, &path, &source)
+                                .into_iter()
+                                .skip(top - start)
+                                .collect();
+                            (revision, colored)
+                        })
+                        .await?)
+                    }),
+                );
         }
         &self.colored
     }
@@ -71,7 +158,11 @@ impl EditorSyntaxCache {
 
 #[derive(Clone)]
 struct Snapshot {
-    text: String,
+    // Only retain the replaced lines, plus the size of the unchanged suffix.
+    // Typing in a large document must not copy the entire file for undo.
+    lines: Vec<String>,
+    start: usize,
+    after: usize,
     row: usize,
     col: usize,
     anchor: Option<(usize, usize)>,
@@ -80,6 +171,8 @@ struct Snapshot {
 pub(super) struct TextEditor {
     document: TextDocument,
     lines: Vec<String>,
+    byte_len: usize,
+    dirty_cache: OnceLock<bool>,
     row: usize,
     col: usize, // UTF-8 byte boundary
     top: usize,
@@ -89,6 +182,8 @@ pub(super) struct TextEditor {
     confirm_close: bool,
     anchor: Option<(usize, usize)>,
     dragging: bool,
+    // Wheel scrolling does not move the editing cursor.
+    follow_cursor: bool,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     syntax_cache: EditorSyntaxCache,
@@ -99,6 +194,8 @@ impl TextEditor {
         let lines: Vec<_> = document.text.split('\n').map(str::to_owned).collect();
         let row = line.saturating_sub(1).min(lines.len() - 1);
         Self {
+            byte_len: document.text.len(),
+            dirty_cache: OnceLock::from(false),
             document,
             lines,
             row,
@@ -110,6 +207,7 @@ impl TextEditor {
             confirm_close: false,
             anchor: None,
             dragging: false,
+            follow_cursor: true,
             undo: Vec::new(),
             redo: Vec::new(),
             syntax_cache: EditorSyntaxCache::default(),
@@ -119,28 +217,49 @@ impl TextEditor {
         self.lines.join("\n")
     }
     fn dirty(&self) -> bool {
-        self.value() != self.document.text
+        *self.dirty_cache.get_or_init(|| {
+            self.byte_len != self.document.text.len()
+                || !self
+                    .lines
+                    .iter()
+                    .map(String::as_str)
+                    .eq(self.document.text.split('\n'))
+        })
     }
-    fn snapshot(&self) -> Snapshot {
+    fn snapshot(&self, start: usize, end: usize) -> Snapshot {
         Snapshot {
-            text: self.value(),
+            lines: self.lines[start..end].to_vec(),
+            start,
+            after: self.lines.len() - end,
             row: self.row,
             col: self.col,
             anchor: self.anchor,
         }
     }
     fn restore(&mut self, snapshot: Snapshot) {
-        self.lines = snapshot.text.split('\n').map(str::to_owned).collect();
+        self.lines.splice(
+            snapshot.start..self.lines.len() - snapshot.after,
+            snapshot.lines,
+        );
+        self.byte_len = self.lines.iter().map(String::len).sum::<usize>() + self.lines.len() - 1;
+        self.dirty_cache.take();
         self.row = snapshot.row;
         self.col = snapshot.col;
         self.anchor = snapshot.anchor;
     }
     fn checkpoint(&mut self) {
-        self.undo.push(self.snapshot());
+        let (start, end) = self
+            .selection()
+            .map_or((self.row, self.row + 1), |((sr, _), (er, _))| (sr, er + 1));
+        self.checkpoint_range(start, end);
+    }
+    fn checkpoint_range(&mut self, start: usize, end: usize) {
+        self.undo.push(self.snapshot(start, end));
         if self.undo.len() > 32 {
             self.undo.remove(0);
         }
         self.redo.clear();
+        self.dirty_cache.take();
         self.message.clear();
     }
     fn undo(&mut self, redo: bool) {
@@ -150,7 +269,7 @@ impl TextEditor {
             self.undo.pop()
         };
         if let Some(snapshot) = snapshot {
-            let current = self.snapshot();
+            let current = self.snapshot(snapshot.start, self.lines.len() - snapshot.after);
             if redo {
                 self.undo.push(current);
             } else {
@@ -175,11 +294,26 @@ impl TextEditor {
         selected.push(self.lines[er][..ec].to_owned());
         Some(selected.join("\n"))
     }
+    fn selected_len(&self) -> usize {
+        let Some(((sr, sc), (er, ec))) = self.selection() else {
+            return 0;
+        };
+        if sr == er {
+            ec - sc
+        } else {
+            self.lines[sr].len() - sc + ec + er - sr
+                + self.lines[sr + 1..er]
+                    .iter()
+                    .map(String::len)
+                    .sum::<usize>()
+        }
+    }
     // Caller checkpoints once, so replacing a selection is one undo step.
     fn remove_selection(&mut self) -> bool {
         let Some(((sr, sc), (er, ec))) = self.selection() else {
             return false;
         };
+        self.byte_len -= self.selected_len();
         let tail = self.lines[er][ec..].to_owned();
         self.lines[sr].truncate(sc);
         self.lines[sr].push_str(&tail);
@@ -223,14 +357,13 @@ impl TextEditor {
         if value.is_empty() {
             return;
         }
-        if self.value().len() - self.selected_text().map_or(0, |s| s.len()) + value.len()
-            > text::MAX_TEXT_BYTES
-        {
+        if self.byte_len - self.selected_len() + value.len() > text::MAX_TEXT_BYTES {
             self.message = "Text exceeds the editor's 2 MiB limit".into();
             return;
         }
         self.checkpoint();
         self.remove_selection();
+        self.byte_len += value.len();
         self.anchor = None;
         let tail = self.lines[self.row].split_off(self.col);
         let parts: Vec<_> = value.split('\n').collect();
@@ -259,13 +392,15 @@ impl TextEditor {
                 .unwrap()
                 .0;
             self.lines[self.row].drain(start..self.col);
+            self.byte_len -= self.col - start;
             self.col = start;
         } else if self.row > 0 {
-            self.checkpoint();
+            self.checkpoint_range(self.row - 1, self.row + 1);
             let line = self.lines.remove(self.row);
             self.row -= 1;
             self.col = self.lines[self.row].len();
             self.lines[self.row].push_str(&line);
+            self.byte_len -= 1;
         }
     }
     fn delete(&mut self) {
@@ -282,10 +417,12 @@ impl TextEditor {
                     .unwrap()
                     .len_utf8();
             self.lines[self.row].drain(self.col..end);
+            self.byte_len -= end - self.col;
         } else if self.row + 1 < self.lines.len() {
-            self.checkpoint();
+            self.checkpoint_range(self.row, self.row + 2);
             let next = self.lines.remove(self.row + 1);
             self.lines[self.row].push_str(&next);
+            self.byte_len -= 1;
         }
     }
     fn up_down(&mut self, delta: isize) {
@@ -379,13 +516,20 @@ impl App {
             JobPriority::High,
             Some("editor:load".into()),
             async move {
-                let doc = tokio::task::spawn_blocking(move || text::load(&root, &path)).await??;
-                Ok((doc, line))
+                tokio::task::spawn_blocking(move || {
+                    let document = text::load(&root, &path)?;
+                    // Grammar initialization and splitting large documents
+                    // must not block input or the first loading frame.
+                    let _ = forge_ui::TextLang::from_name(&path.to_string_lossy());
+                    Ok(TextEditor::new(document, line))
+                })
+                .await?
             },
         ));
     }
     fn close_text_editor(&mut self) {
         self.services.jobs.cancel_key("editor:load");
+        self.services.jobs.cancel_key("editor:syntax");
         self.editing.pending_load = None;
         self.editing.view = None;
         if let Some(focus) = self.editing.return_focus.take() {
@@ -418,6 +562,9 @@ impl App {
         ));
     }
     pub(super) fn poll_editor(&mut self) {
+        if let Some(view) = &mut self.editing.view {
+            view.syntax_cache.poll();
+        }
         if let Some(result) = self
             .editing
             .pending_load
@@ -426,7 +573,7 @@ impl App {
         {
             self.editing.pending_load = None;
             match result {
-                Ok(Ok((doc, line))) => self.editing.view = Some(TextEditor::new(doc, line)),
+                Ok(Ok(view)) => self.editing.view = Some(view),
                 other => {
                     self.session.status = format!(
                         "Text editor error: {}",
@@ -452,6 +599,7 @@ impl App {
                     let path = doc.path.clone();
                     if let Some(view) = &mut self.editing.view {
                         view.document = doc;
+                        view.dirty_cache = OnceLock::from(false);
                         view.confirm_close = false;
                         view.message = "Saved".into();
                     }
@@ -488,6 +636,7 @@ impl App {
         }
         if let Some(view) = &mut self.editing.view {
             if !view.confirm_close {
+                view.follow_cursor = true;
                 view.insert(value);
             }
         }
@@ -522,6 +671,8 @@ impl App {
             }
             return;
         };
+        // Keyboard input resumes caret following after wheel scrolling.
+        view.follow_cursor = true;
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('s') {
             let close = view.confirm_close;
@@ -699,6 +850,7 @@ impl App {
             MouseEventKind::Down(MouseButton::Left)
                 if view.viewport.contains((mouse.column, mouse.row).into()) =>
             {
+                view.follow_cursor = true;
                 if !mouse.modifiers.contains(KeyModifiers::SHIFT) {
                     view.anchor = None;
                 } else {
@@ -716,6 +868,7 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left)
                 if view.dragging && view.viewport.width > 0 && view.viewport.height > 0 =>
             {
+                view.follow_cursor = true;
                 if mouse.row < view.viewport.y {
                     view.top = view.top.saturating_sub(1);
                 }
@@ -733,11 +886,92 @@ impl App {
                 );
             }
             MouseEventKind::Up(MouseButton::Left) => view.dragging = false,
-            MouseEventKind::ScrollUp => view.up_down(-3),
-            MouseEventKind::ScrollDown => view.up_down(3),
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                // Pan the viewport; never move the caret or selection anchor.
+                let max_top = view
+                    .lines
+                    .len()
+                    .saturating_sub(view.viewport.height.max(1) as usize);
+                view.top = match mouse.kind {
+                    MouseEventKind::ScrollUp => view.top.saturating_sub(3),
+                    _ => view.top.saturating_add(3).min(max_top),
+                };
+                view.follow_cursor = false;
+            }
             _ => {}
         }
     }
+}
+
+// Build borrowed style runs for the horizontal viewport. Work and allocations
+// after locating its left edge depend on screen width, not source-line length.
+fn editor_line<'a>(
+    source: &'a str,
+    colored: Option<&Line<'_>>,
+    selection: Option<std::ops::Range<usize>>,
+    left: usize,
+    width: usize,
+    highlight: Style,
+) -> (Line<'a>, u16) {
+    if width == 0 {
+        return (Line::default(), 0);
+    }
+    let start = byte_at_cell(source, left);
+    let start_cell = display_width(&source[..start]);
+    let mut cell = start_cell;
+    let mut syntax = colored.into_iter().flat_map(|line| line.spans.iter());
+    let mut syntax_end = 0;
+    let mut syntax_style = Style::default();
+    let mut spans = Vec::new();
+    let mut run_start = start;
+    let mut run_end = start;
+    let mut run_style = Style::default();
+    for (offset, ch) in source[start..].char_indices() {
+        let byte = start + offset;
+        if cell >= left + width && char_width(ch) > 0 {
+            break;
+        }
+        while byte >= syntax_end {
+            let Some(span) = syntax.next() else { break };
+            syntax_end += span.content.len();
+            syntax_style = span.style;
+        }
+        let style = if selection
+            .as_ref()
+            .is_some_and(|range| range.contains(&byte))
+        {
+            highlight
+        } else {
+            syntax_style
+        };
+        if style != run_style || ch == '\t' {
+            if run_start < byte {
+                spans.push(Span::styled(&source[run_start..byte], run_style));
+            }
+            run_start = byte;
+            run_style = style;
+        }
+        run_end = byte + ch.len_utf8();
+        if ch == '\t' {
+            spans.push(Span::styled("    ", style));
+            run_start = run_end;
+        }
+        cell += char_width(ch);
+    }
+    if run_start < run_end {
+        spans.push(Span::styled(&source[run_start..run_end], run_style));
+    }
+    if cell < left + width
+        && selection
+            .as_ref()
+            .is_some_and(|range| range.contains(&source.len()))
+    {
+        spans.push(Span::styled(" ", highlight));
+    }
+    (
+        Line::from(spans),
+        (left - start_cell).min(u16::MAX as usize) as u16,
+    )
 }
 
 pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: Palette) {
@@ -788,20 +1022,30 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
         rows[0].height,
     );
     view.viewport = text_area;
-    if view.row < view.top {
-        view.top = view.row;
-    }
-    if view.row >= view.top + text_area.height as usize {
-        view.top = view
-            .row
-            .saturating_sub(text_area.height.saturating_sub(1) as usize);
+    if view.follow_cursor {
+        if view.row < view.top {
+            view.top = view.row;
+        }
+        if view.row >= view.top + text_area.height as usize {
+            view.top = view
+                .row
+                .saturating_sub(text_area.height.saturating_sub(1) as usize);
+        }
+    } else {
+        view.top = view.top.min(
+            view.lines
+                .len()
+                .saturating_sub(text_area.height.max(1) as usize),
+        );
     }
     let cursor = display_width(&view.lines[view.row][..view.col]);
-    if cursor < view.left {
-        view.left = cursor;
-    }
-    if cursor >= view.left + text_area.width as usize {
-        view.left = cursor.saturating_sub(text_area.width.saturating_sub(1) as usize);
+    if view.follow_cursor {
+        if cursor < view.left {
+            view.left = cursor;
+        }
+        if cursor >= view.left + text_area.width as usize {
+            view.left = cursor.saturating_sub(text_area.width.saturating_sub(1) as usize);
+        }
     }
     // Only tokenize the visible editor window. Keep per-line styles separate
     // from selection, which must always take precedence over syntax colors.
@@ -810,7 +1054,12 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
     let visible_end = (view.top + text_area.height as usize).min(view.lines.len());
     let selection = view.selection();
     let colored = view.syntax_cache.visible(
-        &syntax_theme, &syntax_path, &view.lines, view.top, visible_end,
+        &app.services.jobs,
+        &syntax_theme,
+        &syntax_path,
+        &view.lines,
+        view.top,
+        visible_end,
     );
     for (offset, line) in view
         .lines
@@ -830,44 +1079,25 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
             Rect::new(rows[0].x, y, gutter, 1),
         );
         let highlight = Style::default().fg(p.on_accent).bg(p.selection);
-        let mut syntax_styles = vec![Style::default(); line.len()];
-        let mut byte_pos = 0;
-        if let Some(styled) = colored.get(offset - view.top) {
-            for span in &styled.spans {
-                let end = (byte_pos + span.content.len()).min(syntax_styles.len());
-                for style in &mut syntax_styles[byte_pos.min(end)..end] {
-                    *style = span.style;
-                }
-                byte_pos = end;
-            }
-        }
-        let mut spans: Vec<Span> = line
-            .char_indices()
-            .map(|(byte, ch)| {
-                let selected = selection
-                    .is_some_and(|(start, end)| (offset, byte) >= start && (offset, byte) < end);
-                let text = if ch == '\t' {
-                    "    ".into()
+        let selected = selection.and_then(|((sr, sc), (er, ec))| {
+            (offset >= sr && offset <= er).then_some(
+                (if offset == sr { sc } else { 0 })..(if offset == er {
+                    ec
                 } else {
-                    ch.to_string()
-                };
-                Span::styled(
-                    text,
-                    if selected {
-                        highlight
-                    } else {
-                        syntax_styles.get(byte).copied().unwrap_or_default()
-                    },
-                )
-            })
-            .collect();
-        if selection
-            .is_some_and(|(start, end)| (offset, line.len()) >= start && (offset, line.len()) < end)
-        {
-            spans.push(Span::styled(" ", highlight));
-        }
+                    line.len() + 1
+                }),
+            )
+        });
+        let (visible, scroll) = editor_line(
+            line,
+            colored.get(offset - view.top),
+            selected,
+            view.left,
+            text_area.width as usize,
+            highlight,
+        );
         frame.render_widget(
-            Paragraph::new(Line::from(spans)).scroll((0, view.left.min(u16::MAX as usize) as u16)),
+            Paragraph::new(visible).scroll((0, scroll)),
             Rect::new(text_area.x, y, text_area.width, 1),
         );
     }
@@ -900,7 +1130,15 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
         ]),
         rows[1],
     );
-    if !view.confirm_close && !saving && text_area.width > 0 && text_area.height > 0 {
+    if !view.confirm_close
+        && !saving
+        && text_area.width > 0
+        && text_area.height > 0
+        && view.row >= view.top
+        && view.row < view.top + text_area.height as usize
+        && cursor >= view.left
+        && cursor < view.left + text_area.width as usize
+    {
         frame.set_cursor_position((
             text_area.x + (cursor - view.left) as u16,
             text_area.y + (view.row - view.top) as u16,
@@ -910,21 +1148,282 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn syntax_cache_tracks_edits_and_bounded_scroll_window() {
+    #[tokio::test]
+    #[ignore = "manual editor latency measurements; run with --ignored --nocapture"]
+    async fn profile_editor_latency() {
+        for (name, content) in [
+            ("short lines", "let item = 123;\n".repeat(60_000)),
+            ("long line", "a".repeat(128 * 1024)),
+            (
+                "TypeScript",
+                "const item = { value: 123 };\n".repeat(30_000),
+            ),
+        ] {
+            let (_dir, mut app, path) = fixture(&content);
+            app.editing.view = Some(TextEditor::new(
+                text::load(&app.files.tree_root, &path).unwrap(),
+                1,
+            ));
+            if name == "TypeScript" {
+                app.editing
+                    .view
+                    .as_mut()
+                    .unwrap()
+                    .document
+                    .path
+                    .set_extension("ts");
+            }
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+            // Warm up syntax initialization separately from steady-state redraws.
+            let start = std::time::Instant::now();
+            terminal
+                .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+                .unwrap();
+            println!(
+                "{name}: first draw {:.3} ms",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+            let start = std::time::Instant::now();
+            for _ in 0..10 {
+                terminal
+                    .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+                    .unwrap();
+            }
+            println!(
+                "{name}: redraw {:.3} ms/frame",
+                start.elapsed().as_secs_f64() * 100.0
+            );
+            let view = app.editing.view.as_mut().unwrap();
+            let start = std::time::Instant::now();
+            for _ in 0..32 {
+                view.insert("x");
+                std::hint::black_box(view.dirty());
+            }
+            println!(
+                "{name}: insert + dirty {:.3} ms/key",
+                start.elapsed().as_secs_f64() * 1000.0 / 32.0
+            );
+            let start = std::time::Instant::now();
+            for _ in 0..10 {
+                let view = app.editing.view.as_mut().unwrap();
+                view.top = view.top.saturating_add(3).min(view.lines.len() - 1);
+                view.follow_cursor = false;
+                terminal
+                    .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+                    .unwrap();
+            }
+            println!(
+                "{name}: scroll {:.3} ms/frame",
+                start.elapsed().as_secs_f64() * 100.0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn syntax_cache_scrolls_within_lookbehind_and_skips_very_long_lines() {
         let mut cache = EditorSyntaxCache::default();
+        let jobs = JobScheduler::new();
         let theme = forge_theme::Theme::modern_ide();
-        let mut source = (0..200).map(|i| format!("const item{i} = {i};")).collect::<Vec<_>>();
-        let first = cache.visible(&theme, "example.ts", &source, 100, 120);
+        let mut source = (0..100)
+            .map(|i| format!("const item{i} = {i};"))
+            .collect::<Vec<_>>();
+        cache.visible(&jobs, &theme, "example.ts", &source, 0, 10);
+        settle_syntax(&mut cache).await;
+        let scrolled = cache.visible(&jobs, &theme, "example.ts", &source, 3, 10);
+        assert_eq!(scrolled.len(), 7);
+        assert_eq!(
+            scrolled[0]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            source[3]
+        );
+        source[3] = "x".repeat(128 * 1024);
+        cache.visible(&jobs, &theme, "example.rs", &source, 3, 10);
+        assert!(
+            cache.source[3].is_empty(),
+            "long lines should bypass every syntax parser"
+        );
+    }
+
+    #[test]
+    fn editor_line_bounds_output_and_preserves_unicode_tabs_and_selection() {
+        let highlight = Style::default().bg(ratatui::style::Color::Blue);
+        let long = "x".repeat(128 * 1024);
+        let (line, scroll) = editor_line(&long, None, None, 0, 80, highlight);
+        assert_eq!(scroll, 0);
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(line.spans[0].content.len(), 80);
+        assert!(matches!(
+            line.spans[0].content,
+            std::borrow::Cow::Borrowed(_)
+        ));
+
+        let text = "中\ta\u{301}bc";
+        let syntax = Line::from(vec![
+            Span::styled("中\t", Style::default().fg(ratatui::style::Color::Red)),
+            Span::styled(
+                "a\u{301}bc",
+                Style::default().fg(ratatui::style::Color::Green),
+            ),
+        ]);
+        let (line, scroll) = editor_line(text, Some(&syntax), Some(4..7), 3, 5, highlight);
+        assert_eq!(
+            scroll, 1,
+            "scrolling into a tab retains its remaining cells"
+        );
+        assert_eq!(
+            line.spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            "    a\u{301}b"
+        );
+        assert_eq!(line.spans[0].style.fg, Some(ratatui::style::Color::Red));
+        assert_eq!(line.spans[1].content, "a\u{301}");
+        assert_eq!(line.spans[1].style, highlight);
+        assert_eq!(line.spans[2].style.fg, Some(ratatui::style::Color::Green));
+
+        let (line, _) = editor_line("a", None, Some(0..2), 0, 5, highlight);
+        assert_eq!(
+            line.spans.last().unwrap().content,
+            " ",
+            "selected newlines remain visible"
+        );
+        let (line, scroll) = editor_line(&long, None, None, 70_000, 5, highlight);
+        assert_eq!(scroll, 0);
+        assert_eq!(line.spans[0].content.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn undo_retains_only_changed_lines_and_tracks_bytes_and_saved_content() {
+        let content = "中文\nsecond\nlast\n".repeat(1000);
+        let (dir, _app, path) = fixture(&content);
+        let mut view = TextEditor::new(text::load(dir.path(), &path).unwrap(), 1);
+        assert!(!view.dirty());
+        view.insert("x");
+        assert!(view.dirty());
+        assert_eq!(view.undo[0].lines, ["中文"]);
+        view.backspace();
+        assert!(
+            !view.dirty(),
+            "manually restoring saved text clears the dirty indicator"
+        );
+        view.row = 1;
+        view.col = 0;
+        view.backspace(); // Join with the preceding line.
+        view.insert("\nnew\n");
+        view.delete();
+        view.anchor = Some((0, 3));
+        view.row = 3;
+        view.col = 2;
+        assert_eq!(view.selected_len(), view.selected_text().unwrap().len());
+        view.insert("replacement\n文");
+        let edited = view.value();
+        assert_eq!(view.byte_len, edited.len());
+        let steps = view.undo.len();
+        for _ in 0..steps {
+            view.undo(false);
+            assert_eq!(view.byte_len, view.value().len());
+        }
+        assert_eq!(view.value(), content);
+        assert!(!view.dirty());
+        for _ in 0..steps {
+            view.undo(true);
+            assert_eq!(view.byte_len, view.value().len());
+        }
+        assert_eq!(view.value(), edited);
+        assert!(view.dirty());
+
+        view.select_all();
+        view.insert(&"a".repeat(text::MAX_TEXT_BYTES));
+        assert_eq!(view.byte_len, text::MAX_TEXT_BYTES);
+        let steps = view.undo.len();
+        view.insert("中");
+        assert_eq!(view.undo.len(), steps);
+        assert_eq!(view.byte_len, text::MAX_TEXT_BYTES);
+        view.select_all();
+        view.insert("small");
+        assert_eq!(view.value(), "small");
+        assert_eq!(view.byte_len, 5);
+    }
+
+    async fn settle_syntax(cache: &mut EditorSyntaxCache) {
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while cache.pending.is_some() {
+                cache.poll();
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn syntax_cache_tracks_edits_and_bounded_scroll_window() {
+        let mut cache = EditorSyntaxCache::default();
+        let jobs = JobScheduler::new();
+        let theme = forge_theme::Theme::modern_ide();
+        let mut source = (0..200)
+            .map(|i| format!("const item{i} = {i};"))
+            .collect::<Vec<_>>();
+        cache.visible(&jobs, &theme, "example.ts", &source, 100, 120);
+        assert!(
+            cache.pending.is_some(),
+            "parsing must run outside the input frame"
+        );
+        settle_syntax(&mut cache).await;
+        let first = cache.visible(&jobs, &theme, "example.ts", &source, 100, 120);
         assert_eq!(first.len(), 20);
-        let initial = first[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>();
+        let initial = first[0]
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
         assert_eq!(initial, source[100]);
         assert_eq!(cache.source.len(), 68); // 48 lookbehind + 20 visible
         source[100] = "const updated = 999;".to_owned();
-        let edited = cache.visible(&theme, "example.ts", &source, 100, 120);
-        assert_eq!(edited[0].spans.iter().map(|s| s.content.as_ref()).collect::<String>(), source[100]);
+        cache.visible(&jobs, &theme, "example.ts", &source, 100, 120);
+        let pending = cache.pending.as_ref().unwrap().id;
+        for i in 0..10 {
+            source[100] = format!("const updated = {i};");
+            cache.visible(&jobs, &theme, "example.ts", &source, 100, 120);
+        }
+        assert_eq!(
+            cache.pending.as_ref().unwrap().id,
+            pending,
+            "rapid edits must share one in-flight parse instead of flooding completion wakeups"
+        );
+        settle_syntax(&mut cache).await;
+        assert_eq!(
+            cache.colored[0]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            initial,
+            "an obsolete result must not replace current colors"
+        );
+        cache.visible(&jobs, &theme, "example.ts", &source, 100, 120);
+        settle_syntax(&mut cache).await;
+        let edited = cache.visible(&jobs, &theme, "example.ts", &source, 100, 120);
+        assert_eq!(
+            edited[0]
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>(),
+            source[100]
+        );
         assert_eq!(cache.source.len(), 68);
-        assert_eq!(cache.visible(&theme, "example.ts", &source, 101, 121).len(), 20);
+        assert_eq!(
+            cache
+                .visible(&jobs, &theme, "example.ts", &source, 101, 121)
+                .len(),
+            20
+        );
     }
 
     use super::*;
@@ -956,8 +1455,11 @@ mod tests {
         app.session.activity = ActivityTab::Git;
         app.session.focus = PaneFocus::Preview;
         app.open_text_editor(path.clone(), 1);
-        assert_eq!(app.session.activity, ActivityTab::Files,
-            "Editor must not sit on top of the Git Diff Activity");
+        assert_eq!(
+            app.session.activity,
+            ActivityTab::Files,
+            "Editor must not sit on top of the Git Diff Activity"
+        );
         assert!(app.editing.active());
         finish(&mut app).await;
         assert!(app.editing.view.is_some());
@@ -981,7 +1483,10 @@ mod tests {
         assert!(app.editing.exit_confirmation());
         assert_eq!(app.session.activity, ActivityTab::Files);
         key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-        assert!(app.editing.active(), "Esc on dirty confirmation keeps editing");
+        assert!(
+            app.editing.active(),
+            "Esc on dirty confirmation keeps editing"
+        );
         key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         key(&mut app, KeyCode::Char('D'), KeyModifiers::NONE);
         assert!(!app.editing.active());
@@ -1163,7 +1668,8 @@ mod tests {
         app.open_text_editor(path, 1);
         finish(&mut app).await;
         key(&mut app, KeyCode::Right, KeyModifiers::NONE);
-        let before = app.editing.view.as_ref().unwrap().snapshot();
+        let view = app.editing.view.as_ref().unwrap();
+        let before = view.snapshot(0, view.lines.len());
         key(&mut app, KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(app.editing.clipboard, "中文\n");
         assert!(app.editing.clipboard_line);
@@ -1172,7 +1678,7 @@ mod tests {
             (view.row, view.col, view.anchor),
             (before.row, before.col, before.anchor)
         );
-        assert_eq!(view.value(), before.text);
+        assert_eq!(view.value(), before.lines.join("\n"));
         assert!(!view.dirty());
         assert!(view.undo.is_empty());
         key(&mut app, KeyCode::Char('v'), KeyModifiers::CONTROL);
@@ -1184,6 +1690,65 @@ mod tests {
         key(&mut app, KeyCode::Insert, KeyModifiers::CONTROL);
         assert_eq!(app.editing.clipboard, "\n");
         assert!(!app.session.should_quit);
+    }
+
+    #[tokio::test]
+    async fn mouse_wheel_scrolls_viewport_without_moving_cursor_or_selecting() {
+        let content = (0..30)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (_dir, mut app, path) = fixture(&content);
+        app.open_text_editor(path, 1);
+        finish(&mut app).await;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(90, 12)).unwrap();
+        terminal
+            .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+            .unwrap();
+        let area = app.editing.view.as_ref().unwrap().viewport;
+        let event = |kind| MouseEvent {
+            kind,
+            column: area.x + 2,
+            row: area.y,
+            modifiers: KeyModifiers::NONE,
+        };
+
+        // A click sets the anchor. Wheel events must not extend it.
+        app.handle_editor_mouse(event(MouseEventKind::Down(MouseButton::Left)));
+        app.handle_editor_mouse(event(MouseEventKind::Up(MouseButton::Left)));
+        let before = {
+            let v = app.editing.view.as_ref().unwrap();
+            (v.row, v.col, v.anchor)
+        };
+        app.handle_editor_mouse(event(MouseEventKind::ScrollDown));
+        {
+            let v = app.editing.view.as_ref().unwrap();
+            assert_eq!((v.row, v.col, v.anchor), before);
+            assert!(v.selection().is_none());
+            assert_eq!(v.top, 3);
+        }
+        terminal
+            .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+            .unwrap();
+        assert_eq!(
+            app.editing.view.as_ref().unwrap().top,
+            3,
+            "render must not snap the wheel-scrolled viewport back to the caret"
+        );
+        app.handle_editor_mouse(event(MouseEventKind::ScrollUp));
+        assert_eq!(app.editing.view.as_ref().unwrap().top, 0);
+        app.handle_editor_mouse(event(MouseEventKind::ScrollDown));
+        app.handle_editor_mouse(event(MouseEventKind::ScrollDown));
+        assert_eq!(app.editing.view.as_ref().unwrap().top, 6);
+        key(&mut app, KeyCode::Down, KeyModifiers::NONE);
+        terminal
+            .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+            .unwrap();
+        let v = app.editing.view.as_ref().unwrap();
+        assert!(v.follow_cursor);
+        assert!(v.row >= v.top && v.row < v.top + v.viewport.height as usize);
+        assert!(v.selection().is_none());
     }
 
     #[tokio::test]

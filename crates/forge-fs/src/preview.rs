@@ -183,7 +183,12 @@ pub async fn preview_path_through_line(
     visible_through_line: usize,
 ) -> Result<Preview, FsError> {
     let mut preview = preview_path(path.clone(), kind).await?;
-    while let PreviewContent::Text { lines, truncated, bytes_read } = &mut preview.content {
+    while let PreviewContent::Text {
+        lines,
+        truncated,
+        bytes_read,
+    } = &mut preview.content
+    {
         if !*truncated || lines.len() >= visible_through_line {
             break;
         }
@@ -403,7 +408,7 @@ mod tests {
             "b".repeat(20_000),
             "c".repeat(23_000)
         );
-        source.push_str("🦀");
+        source.push('🦀');
         source.push_str("\nlast line\n");
         source.push_str(&"x".repeat(90_000));
         source.push_str("\nfinished\n");
