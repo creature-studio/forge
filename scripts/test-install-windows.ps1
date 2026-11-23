@@ -1,6 +1,16 @@
 # Offline integration tests of the Windows install script, run on Windows CI.
 $ErrorActionPreference = 'Stop'
 $installer = Join-Path (Split-Path $PSScriptRoot -Parent) 'install.ps1'
+$textInstaller = Join-Path (Split-Path $PSScriptRoot -Parent) 'web/public/install.txt'
+# CI runs this test using Windows PowerShell 5.1. Prevent accidental
+# reintroduction of nullable RuntimeInformation.OSArchitecture.ToString().
+if ((Get-Content -LiteralPath $installer -Raw) -match 'RuntimeInformation\]::OSArchitecture') {
+    throw 'Installer must not depend on nullable RuntimeInformation.OSArchitecture'
+}
+if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne
+    (Get-FileHash -LiteralPath $textInstaller -Algorithm SHA256).Hash) {
+    throw 'Text installer differs from downloadable PowerShell installer'
+}
 $assetName = 'forge-x86_64-pc-windows-msvc.zip'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('forge-windows-install-test-' + [Guid]::NewGuid().ToString('N'))
 $source = Join-Path $root 'release'

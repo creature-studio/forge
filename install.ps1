@@ -1,14 +1,16 @@
 # Install or update the Windows x64 release of Forge.
 # Usage: irm https://creature-studio.github.io/forge/install.txt | iex
-# Overrides: FORGE_VERSION=v0.4.0, FORGE_INSTALL_DIR=C:\path\to\bin
+# Overrides: FORGE_VERSION=v0.4.1, FORGE_INSTALL_DIR=C:\path\to\bin
 $ErrorActionPreference = 'Stop'
 
 $repo = 'creature-studio/forge'
 $asset = 'forge-x86_64-pc-windows-msvc.zip'
 
-if (-not [Environment]::Is64BitOperatingSystem -or
-    [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') {
-    throw 'Forge currently publishes native Windows builds for Windows x64 only.'
+# RuntimeInformation.OSArchitecture can be unavailable/null in older Windows
+# PowerShell/.NET Framework environments. The supported x64 package requires a
+# 64-bit Windows OS; avoid calling methods on optional runtime information.
+if (-not [Environment]::Is64BitOperatingSystem) {
+    throw 'Forge requires 64-bit Windows. Download the Windows x64 build on a supported system.'
 }
 
 # Windows PowerShell 5.1 may otherwise negotiate an obsolete TLS protocol.
