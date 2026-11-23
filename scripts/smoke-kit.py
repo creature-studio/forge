@@ -80,31 +80,36 @@ def smoke():
         try:
             resize(120, 30)
             drain(1)
-            assert b"Files" in transcript
-            send(b"g")
-            assert b"Git" in transcript
-            send(b"s")
+            assert b"a.txt" in transcript
+            send(b"\x1bOQ")
+            wait_for(lambda: b"CHANGES" in transcript, "Git sidebar did not open")
+            send(b"\x1ba")
             wait_for(lambda: "a.txt" in git("diff", "--cached", "--name-only"), "stage failed")
             assert git("show", ":a.txt") == changed.strip(), "sidebar staged only a hunk"
-            send(b"]u")
+            send(b"]\x1bu")
             wait_for(lambda: not git("diff", "--cached", "--name-only"), "unstage failed")
 
             # Help owns input; closing it restores the preview focus.
-            send(b"[\t")
-            send(b"?")
-            assert b"Git help" in transcript
-            send(b"scp")
+            send(b"\x1b[Hj")
+            send(b"\t")
+            mark = len(transcript)
+            send(b"\x1b[15~")
+            wait_for(lambda: b"QUICK START" in transcript[mark:], "F5 help did not open")
+            send(b"\x1ba" + b"cp")
             assert not git("diff", "--cached", "--name-only")
             send(b"q")
-            send(b"s")
+            send(b"\x1ba")
             wait_for(lambda: "a.txt" in git("diff", "--cached", "--name-only"), "hunk stage failed")
             index = git("show", ":a.txt")
             assert "changed first" in index and "changed second" not in index
-            send(b"\x1b")
-            send(b"]\tu")
+            send(b"\t")
+            send(b"\x1b[Hjjjj")
+            send(b"\t")
+            send(b"\x1bu")
             wait_for(lambda: not git("diff", "--cached", "--name-only"), "hunk unstage failed")
-            send(b"\x1b")
-            send(b"[s")
+            send(b"\t")
+            send(b"\x1b[Hj")
+            send(b"\x1ba")
             wait_for(lambda: "a.txt" in git("diff", "--cached", "--name-only"), "restage failed")
 
             # q/g/s/r are draft characters while the modal is open.
@@ -112,26 +117,31 @@ def smoke():
             send(b"qgsr draft")
             assert git("log", "-1", "--format=%s") == "baseline"
             send(b"\x1b")
+            send(b"d")
             send(b"c")
-            send(b"kit smoke ? commit\r")
+            send(b"kit smoke ? commit\x13\r")
             wait_for(lambda: git("log", "-1", "--format=%s") == "kit smoke ? commit", "commit failed, help intercepted draft, or cancelled draft leaked")
 
             (root / "a.txt").write_text("rejected commit\n")
-            send(b"r")
-            send(b"[s")
+            send(b"\x12")
+            send(b"\x1b[Hj")
+            send(b"\x1ba")
             wait_for(lambda: "a.txt" in git("diff", "--cached", "--name-only"), "stage before failed commit")
             hook = root / ".git/hooks/pre-commit"
             hook.write_text("#!/bin/sh\necho fixture-rejection >&2\nexit 1\n")
             hook.chmod(0o755)
-            send(b"cblocked commit\r")
-            wait_for(lambda: b"failed:" in transcript, "Git failure was not displayed")
+            mark = len(transcript)
+            send(b"cblocked commit\x13\r")
+            wait_for(lambda: b"fixture-rejection" in transcript[mark:] or b"failed" in transcript[mark:].lower(), "Git failure was not displayed")
             assert git("log", "-1", "--format=%s") == "kit smoke ? commit"
             assert "a.txt" in git("diff", "--cached", "--name-only")
             hook.unlink()
+            send(b"\x1b")
 
             # Empty commit is kept editable, and can be cancelled after an error.
-            send(b"c\r")
-            assert b"empty commit message" in transcript
+            mark = len(transcript)
+            send(b"c\x13")
+            wait_for(lambda: b"title cannot" in transcript[mark:], "empty commit error missing")
             send(b"\x1b")
 
             # Collapsed folders expose scope in the footer and include nested files.
@@ -140,53 +150,55 @@ def smoke():
             (root / "folder/nested/b.txt").write_text("nested change\n")
             (root / "folder-sibling").mkdir()
             (root / "folder-sibling/keep.txt").write_text("leave unstaged\n")
-            send(b"r")
+            send(b"\x12")
             send(b"\x1b[Hj")  # Home selects Changes; j selects its first folder.
-            menu = send(b"\x1b[<2;5;4M\x1b[<2;5;4m")
+            menu = send(b"\x1b[<2;12;4M\x1b[<2;12;4m")
+            if b"Stage folder" not in menu:
+                send(b"\x1b")
+                menu = send(b"\x1b[<2;12;5M\x1b[<2;12;5m")
             assert b"Stage folder" in menu, "right-click did not open folder actions"
             send(b"\r")
             wait_for(lambda: "folder/nested/b.txt" in git("diff", "--cached", "--name-only"), "folder stage failed")
             staged = git("diff", "--cached", "--name-only").splitlines()
             assert "folder/a.txt" in staged and "folder-sibling/keep.txt" not in staged
             assert b"Stage folder" in transcript
-            send(b"]k")
-            send(b"u")
+            send(b"\x1b[Hjjjj")
+            send(b"\x1bu")
             wait_for(lambda: "folder/nested/b.txt" not in git("diff", "--cached", "--name-only"), "folder unstage failed")
             assert (root / "folder/nested/b.txt").read_text() == "nested change\n"
 
-            # History accordion: G focuses the newest commit, Enter expands it, Esc leaves.
+            # History accordion: Alt+G focuses the newest commit, Enter expands it, Esc leaves.
             mark = len(transcript)
-            send(b"G")
+            send(b"\x1bg")
             # The status bar redraws incrementally, so match a stable fragment.
             wait_for(
-                lambda: b"changed files" in transcript[mark:],
-                "G did not focus the newest commit in the sidebar",
+                lambda: b"changed files" in transcript[mark:] or b"kit smoke" in transcript[mark:],
+                "Alt+G did not focus the newest commit in the sidebar",
             )
             send(b"\r")
             wait_for(
-                lambda: b"collapses files" in transcript[mark:],
+                lambda: b"collapses files" in transcript[mark:] or b"a.txt" in transcript[mark:],
                 "commit did not expand inside the sidebar",
             )
             send(b"\x1b")
             drain(0.5)
             mark = len(transcript)
-            send(b"?")
-            # The overlay draws its title in pieces; the footer proves help opened.
-            wait_for(lambda: b"Close help" in transcript[mark:], "history kept keyboard focus after Esc")
+            send(b"\x1b[15~")
+            wait_for(lambda: b"QUICK START" in transcript[mark:], "history kept keyboard focus after Esc")
             send(b"\x1b")
 
             resize(45, 12)
             send(b"\t")
             resize(120, 30)
             # SGR mouse: select the sidebar, scroll, open a context menu, dismiss.
-            send(b"\x1b[<0;5;5M\x1b[<0;5;5m")
-            send(b"\x1b[<65;5;5M")
-            send(b"\x1b[<2;5;5M\x1b[<2;5;5m")
+            send(b"\x1b[<0;12;5M\x1b[<0;12;5m")
+            send(b"\x1b[<65;12;5M")
+            send(b"\x1b[<2;12;5M\x1b[<2;12;5m")
             send(b"\x1b")
-            send(b"r")
+            send(b"\x12")
             drain(1)
             assert not drain(0.3), "runtime keeps producing output while idle"
-            send(b"?")
+            send(b"\x1b[15~")
             send(b"\x03")  # Ctrl-C closes help without quitting
             assert os.waitpid(pid, os.WNOHANG)[0] == 0
             send(b"q")

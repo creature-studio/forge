@@ -39,12 +39,12 @@ with tempfile.TemporaryDirectory(prefix="forge-tools-nav-") as d:
         return next((line.strip() for line in s.splitlines()
             if "│› " in line or "│›" in line), "")
     def click(x,y):
-        raw(f"\x1b[<0;{x+1};{y+1}M")
-        raw(f"\x1b[<0;{x+1};{y+1}m")
+        tm("send-keys","-l","-t","ui",f"\x1b[<0;{x+1};{y+1}M\x1b[<0;{x+1};{y+1}m")
+        time.sleep(.05)
     try:
         tm("-f","/dev/null","new-session","-d","-s","ui","-x","116","-y","34","-c",str(root),str(BIN))
-        until("Files")
-        send("B");s=until("feature/b-44")
+        until("note_00.txt")
+        send("M-b");s=until("feature/b-44")
         assert "* main" in selected(s),f"initial selected branch should be current:\n{s}"
         send("Home");first=selected(pane())
         assert "feature/b-00" in first,first
@@ -54,23 +54,24 @@ with tempfile.TemporaryDirectory(prefix="forge-tools-nav-") as d:
         print("PASS: Branches defaults current; Home / End / PageDown navigate long list")
 
         send(":");until("Commands");send("Escape")
-        assert "┌ Branches" in pane(),"Commands Esc should return Branches"
+        assert "╭ Branches" in pane(),"Commands Esc should return Branches"
         send("F4");until("Keyboard shortcuts")
-        send("Escape");assert "┌ Branches" in pane(),"F4 help should return Branches"
+        send("Escape");assert "╭ Branches" in pane(),"F4 help should return Branches"
         print("PASS: : Commands / Esc and F4 / Esc return to original Branches panel")
 
         send("Home")
         s=pane()
-        row=next(i for i,line in enumerate(s.splitlines()) if "feature/b-00" in line)
-        click(10,row);click(10,row)
+        row,row_line=next((i,line) for i,line in enumerate(s.splitlines()) if "feature/b-00" in line)
+        col=row_line.index("feature/b-00")+2
+        click(col,row);click(col,row);time.sleep(.2)
         s=until("Switch this repository to branch feature/b-00")
         send("Escape")
         assert git("branch","--show-current")=="main"
-        assert "┌ Branches" in pane()
+        assert "╭ Branches" in pane()
         print("PASS: double-click opens switch confirmation, Esc protects Git branch")
 
         send("Escape")
-        send("C-f");raw("needle")
+        send("C-k");raw("file contents");send("Enter");raw("needle")
         until("57 results")
         time.sleep(.55)
         def selected_hit():
@@ -81,8 +82,8 @@ with tempfile.TemporaryDirectory(prefix="forge-tools-nav-") as d:
         assert before=="00" and after is not None and after!=before,(before,after,pane())
         send("PageUp");again=selected_hit()
         assert again==before,(before,after,again,pane())
-        send("C-r");until("Search contents · regex")
-        send("Escape");send("C-f")
+        send("M-r");until("Search contents · regex")
+        send("Escape");send("C-k");raw("file contents");send("Enter")
         s=until("Search contents · regex")
         assert "> needle" in s,s
         print("PASS: Content PgUp/PgDn moves results, query and regex survive reopening")
@@ -93,11 +94,12 @@ with tempfile.TemporaryDirectory(prefix="forge-tools-nav-") as d:
         send("PageDown")
         assert "note_" in selected(pane())
         send("Escape");send("C-p")
-        assert "> note_" in pane()
+        s=until("Find file")
+        assert "note_00.txt" in s,s
         send("Escape")
-        print("PASS: File search PageDown navigates; filename query survives reopening")
+        print("PASS: File search PageDown navigates; reopening starts fresh with full index")
 
-        send("L");until("Commit history");send("Space")
+        send("M-l");until("Commit history");send("Space")
         send("D");until("Git diff")
         send("Escape")
         assert "Commit history" in pane()
@@ -106,9 +108,9 @@ with tempfile.TemporaryDirectory(prefix="forge-tools-nav-") as d:
         send("Escape")
 
         tm("resize-window","-t","ui","-x","48","-y","17")
-        send("Z");until("Stashes")
+        send("M-z");until("Stashes")
         s=pane()
-        assert "┌ Stashes " in s and "Restore st" not in s.splitlines()[2]
+        assert "╭ Stashes " in s and "Restore st" not in s.splitlines()[2]
         assert "p Pop" in s or "X Drop" in s,s
         print("PASS: narrow Stash panel has short title and discoverable actions")
     finally:
@@ -124,7 +126,7 @@ with tempfile.TemporaryDirectory(prefix="forge-no-git-commands-") as d:
     try:
         tm2("-f","/dev/null","new-session","-d","-s","ui","-x","100","-y","29","-c",d,str(BIN))
         time.sleep(.65)
-        tm2("send-keys","-t","ui",":")
+        tm2("send-keys","-t","ui","C-k")
         tm2("send-keys","-l","-t","ui","Push")
         time.sleep(.65)
         result=tm2("capture-pane","-pt","ui")

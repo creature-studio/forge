@@ -16,7 +16,7 @@ BINARY = Path(__file__).resolve().parents[1] / "target/debug/forge"
 
 with tempfile.TemporaryDirectory(prefix="forge-watch-") as temp:
     root = Path(temp)
-    (root / "a.txt").write_text("before-change\n")
+    (root / "a.txt").write_text("00000000\n")
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=root, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.test"], cwd=root, check=True)

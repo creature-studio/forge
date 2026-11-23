@@ -14,7 +14,8 @@ with tempfile.TemporaryDirectory(prefix="forge-git-status-") as temp:
     remote = Path(temp, "origin.git")
     root.mkdir()
     def run(*args, cwd=root):
-        proc = sp.run(args, cwd=cwd, capture_output=True, text=True)
+        proc = sp.run(args, cwd=cwd, capture_output=True, text=True,
+                      env={**os.environ, "LC_ALL": "C", "LANG": "C"})
         if proc.returncode != 0:
             raise AssertionError(f"{args}: {proc.stderr}")
         return proc.stdout
@@ -33,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix="forge-git-status-") as temp:
     sock = f"forge-status-ui-{os.getpid()}"
     def tm(*args):
         result = sp.run(["tmux", "-u", "-L", sock, *args], capture_output=True, text=True,
-                        env={**os.environ, "LC_ALL": "C.UTF-8",
+                        env={**os.environ,
                              "XDG_CONFIG_HOME": str(Path(temp, "cfg"))})
         if result.returncode:
             raise AssertionError(f"tmux {args}: {result.stderr}")

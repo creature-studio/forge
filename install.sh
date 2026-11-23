@@ -64,8 +64,7 @@ elif command -v wget >/dev/null 2>&1; then
     }
     fetch_latest_redirect() {
         # wget cannot expose the redirect target portably, so ask the API instead.
-        fetch_stdout "https://api.github.com/repos/${REPOSITORY}/releases/latest" |
-            sed -n 's/.*"tag_name" *: *"\([^"]*\)".*/\1/p' | head -n 1
+        fetch_stdout "https://api.github.com/repos/${REPOSITORY}/releases/latest"
     }
     download() {
         wget -q -O "$2" "$1"

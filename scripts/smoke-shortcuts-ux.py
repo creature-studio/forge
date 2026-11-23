@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix='forge-shortcuts-ux-') as folder:
            '-c', str(root), str(BINARY))
         time.sleep(1)
         press('C-k')
-        assert '┌ Commands' in screen(), 'Ctrl-K did not open command palette'
+        assert '╭ Commands' in screen(), 'Ctrl-K did not open command palette'
         press('Escape')
         press('F4')
         assert 'Keyboard shortcuts' in screen()
@@ -53,6 +53,7 @@ with tempfile.TemporaryDirectory(prefix='forge-shortcuts-ux-') as folder:
         press('Tab')
         assert 'Copy selection / line' in screen(), 'Editor group missing'
         press('Tab')
+        press('q', 'u', 'i', 't')
         page = screen()
         assert 'Quit workspace' in page and 'fixed' in page, 'fixed navigation not visible'
         press('Escape')
@@ -76,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='forge-shortcuts-ux-') as folder:
            '-c', str(root), str(BINARY))
         time.sleep(.8)
         press('C-k', target='ux2')
-        assert '┌ Commands' not in screen('ux2'), 'Ctrl-K stole a legacy custom binding'
+        assert '╭ Commands' not in screen('ux2'), 'Ctrl-K stole a legacy custom binding'
         press('F4', target='ux2')
         page = screen('ux2')
         assert 'assigned elsewhere' in page, 'legacy Ctrl-K shadowing not explained'

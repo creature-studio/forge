@@ -49,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='forge-sticky-wheel-') as folder:
         time.sleep(.25)
         return [line.split('│')[0] for line in tm('capture-pane', '-pt', 'ui').splitlines()[2:11]]
     def toggle():
-        send(':')
+        send('C-k')
         for char in 'sticky':
             send(char)
         assert 'Tree Sticky Scroll' in tm('capture-pane', '-pt', 'ui')

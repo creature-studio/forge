@@ -106,16 +106,17 @@ def smoke():
             expect(results, b"1 matches")
             assert b"excluded.rs" not in results
             send(b"\r")
-            # Reopening search now restores its query and regex mode.
-            expect(send(b"\x06"), b"> needle")
-            expect(send(b"\x7f" * 32 + b"needle\\d+\x12", 1.4), b"1 results")
+            # Reopening workspace content search restores its query and regex mode.
+            content_open = b"\x1b[102;6u"
+            expect(send(content_open), b"> needle")
+            expect(send(b"\x7f" * 32 + b"needle\\d+\x1br", 1.4), b"1 results")
             send(b"\x1b")
-            expect(send(b"\x06"), b"Search contents")
+            expect(send(content_open), b"Search contents")
             expect(send(b"\x7f" * 32 + b"[", 1.2), b"Failed:")
-            expect(send(b"\x12"), b"No results")
+            expect(send(b"\x1br"), b"No results")
             send(b"\x1b")
             # Cancel during the debounce and immediately open the other mode.
-            send(b"\x06" + b"\x7f" * 32 + b"needle", 0.02)
+            send(content_open + b"\x7f" * 32 + b"needle", 0.02)
             send(b"\x1b", 0.05)
             expect(send(b"\x10" + b"\x7f" * 32 + b"deep"), b"deep.rs")
             send(b"\x1b")
