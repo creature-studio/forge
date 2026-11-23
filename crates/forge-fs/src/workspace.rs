@@ -95,70 +95,46 @@ pub enum FileOperation {
     Delete(Vec<PathBuf>),
 }
 
-/// Canonicalization on Windows adds the verbatim path prefix, even when the
-/// caller uses a standard path from a directory listing. Strip only recognized
-/// verbatim drive/UNC prefixes for *lexical comparison*. Keep canonical paths
-/// for actual filesystem operations and containment checks.
-#[cfg(windows)]
-fn normalize_windows_prefix(path: &Path) -> PathBuf {
-    use std::ffi::OsString;
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use std::path::Prefix;
-
-    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
-    let kind = match path.components().next() {
-        Some(Component::Prefix(prefix)) => prefix.kind(),
-        _ => return path.to_path_buf(),
-    };
-    let normalized = match kind {
-        Prefix::VerbatimDisk(_) if wide.starts_with(&[92, 92, 63, 92]) => wide[4..].to_vec(),
-        Prefix::VerbatimUNC(_, _) if wide.starts_with(&[92, 92, 63, 92, 85, 78, 67, 92]) => {
-            let mut result = vec![92, 92];
-            result.extend_from_slice(&wide[8..]);
-            result
-        }
-        _ => return path.to_path_buf(),
-    };
-    PathBuf::from(OsString::from_wide(&normalized))
-}
-
-#[cfg(not(windows))]
-fn normalize_windows_prefix(path: &Path) -> PathBuf {
-    path.to_path_buf()
-}
-
-/// Validate lexical boundaries and every existing parent, without following
-/// the final symlink. Use normalized *lexical* paths for prefix checks, then
-/// canonical paths for the parent containment check.
+/// Validate the workspace boundary using resolved parent directories, without
+/// following the final component (which may be a symlink being renamed or
+/// deleted). Canonical Windows paths can differ lexically from non-canonical
+/// paths (verbatim prefixes, short names and junctions), so comparing absolute
+/// paths before filesystem resolution is not reliable.
 pub fn checked_path(root: &Path, path: &Path) -> Result<PathBuf> {
-    let canonical_root = root.canonicalize()?;
-    let lexical_root = normalize_windows_prefix(root);
-    let normalized_root = normalize_windows_prefix(&canonical_root);
-    let normalized_path = normalize_windows_prefix(path);
-    let relative = if normalized_path.is_absolute() {
-        normalized_path
-            .strip_prefix(&lexical_root)
-            .or_else(|_| normalized_path.strip_prefix(&normalized_root))
-            .context("path must be inside the workspace")?
+    let root = root.canonicalize()?;
+    let path = if path.is_absolute() {
+        path.to_path_buf()
     } else {
-        normalized_path.as_path()
+        root.join(path)
     };
-    if relative.as_os_str().is_empty()
-        || relative
-            .components()
-            .any(|p| matches!(p, Component::ParentDir) || p.as_os_str() == ".git")
-    {
+    if path.components().any(|component| {
+        matches!(component, Component::ParentDir)
+            || component
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(".git")
+    }) {
         bail!("workspace root, parent traversal and .git are protected");
     }
-    let path = canonical_root.join(relative);
+
+    // Find an existing ancestor so new files and nested directories can be
+    // validated too. Resolve the ancestor to prevent symlink/junction escapes,
+    // but deliberately leave the final path component unresolved.
     let mut parent = path.parent().context("path has no parent")?;
     while !parent.exists() {
         parent = parent.parent().context("missing workspace parent")?;
     }
-    if !parent.canonicalize()?.starts_with(&canonical_root) {
-        bail!("symlink parent leaves the workspace");
+    let real_parent = parent.canonicalize()?;
+    let suffix = path.strip_prefix(parent)?;
+    let checked = real_parent.join(suffix);
+
+    if checked == root {
+        bail!("workspace root, parent traversal and .git are protected");
     }
-    Ok(path)
+    if !checked.starts_with(&root) {
+        bail!("path must be inside the workspace");
+    }
+    Ok(checked)
 }
 
 fn exists(path: &Path) -> bool {
@@ -433,21 +409,6 @@ mod tests {
         assert_eq!(
             crate::text::load(root, &ordinary_file).unwrap().text,
             "editable"
-        );
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn normalizes_only_windows_verbatim_disk_and_unc_prefixes() {
-        let disk = Path::new(r"\\?\C:\Projects\Forge\main.rs");
-        assert_eq!(
-            normalize_windows_prefix(disk),
-            PathBuf::from(r"C:\Projects\Forge\main.rs")
-        );
-        let unc = Path::new(r"\\?\UNC\server\share\project\main.rs");
-        assert_eq!(
-            normalize_windows_prefix(unc),
-            PathBuf::from(r"\\server\share\project\main.rs")
         );
     }
 

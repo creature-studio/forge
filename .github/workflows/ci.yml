@@ -50,12 +50,15 @@ jobs:
       - name: Compile all Windows targets
         run: cargo check --workspace --all-targets --locked
 
-      - name: Run Windows workspace tests
-        run: cargo test --workspace --locked
+      - name: Verify Windows workspace path boundaries and editor load
+        run: cargo test -p forge-fs --lib --locked windows_verbatim_and_standard_paths_are_equivalent_inside_workspace -- --nocapture
 
       - name: Test PowerShell installer (offline)
         shell: powershell
         run: .\scripts\test-install-windows.ps1
+
+      - name: Run Windows workspace tests
+        run: cargo test --workspace --locked
 
   site:
     name: Web & SEO checks

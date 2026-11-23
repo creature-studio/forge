@@ -276,6 +276,9 @@ fn fixture() -> (tempfile::TempDir, App) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-qb", "main"]);
+    // Git for Windows may default to core.autocrlf=true, which changes
+    // line endings on checkout. Test file operations against exact bytes.
+    git(root, &["config", "core.autocrlf", "false"]);
     git(root, &["config", "user.name", "Test"]);
     git(root, &["config", "user.email", "test@example.test"]);
     std::fs::create_dir_all(root.join("folder/nested")).unwrap();
