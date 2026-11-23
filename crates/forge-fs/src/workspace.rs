@@ -404,9 +404,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         fs::write(root.join("hello.txt"), "first\n\nthird\n").unwrap();
-        let mut options = SearchOptions::default();
-        options.content = true;
-        options.regex = true;
+        let mut options = SearchOptions {
+            content: true,
+            regex: true,
+            ..Default::default()
+        };
         let cancel = AtomicBool::new(false);
         let hits = search(root, "^$", &options, &cancel).unwrap();
         assert!(hits.iter().any(|hit| hit.content

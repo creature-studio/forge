@@ -201,10 +201,9 @@ impl App {
     }
 
     pub(super) fn poll_file_find(&mut self) -> bool {
-        let Some((_, result)) = pending_request::take_ready(
-            &mut self.preview_state.find.pending,
-            |job| job.try_join(),
-        ) else {
+        let Some((_, result)) =
+            pending_request::take_ready(&mut self.preview_state.find.pending, |job| job.try_join())
+        else {
             return false;
         };
         if !self.preview_state.find.open {
@@ -416,6 +415,25 @@ impl App {
             self.start_file_find();
         }
     }
+
+    pub(super) fn handle_file_find_paste(&mut self, text: &str) {
+        if !self.preview_state.find.open || !self.preview_state.find.input_active {
+            return;
+        }
+        let find = &mut self.preview_state.find;
+        let mut changed = false;
+        for c in text.chars().filter(|c| !c.is_control()) {
+            if find.query.len() > 180 {
+                break;
+            }
+            find.query.insert(find.cursor, c);
+            find.cursor += c.len_utf8();
+            changed = true;
+        }
+        if changed {
+            self.start_file_find();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -611,5 +629,30 @@ mod tests {
             .panel
             .as_ref()
             .is_some_and(|p| matches!(p.kind, tools::PanelKind::Content)));
+    }
+
+    #[tokio::test]
+    async fn file_find_paste_inserts_sanitized_query_and_runs_single_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("paste.log");
+        std::fs::write(&file, "alpha\nbeta-target\ngamma\n").unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        ready_file(&mut app, &file).await;
+        app.session.focus = PaneFocus::Preview;
+        app.open_file_find();
+        assert!(app.preview_state.find.open && app.preview_state.find.input_active);
+
+        app.handle_file_find_paste("beta-target\r\n");
+        assert_eq!(app.preview_state.find.query, "beta-target");
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while app.preview_state.find.pending.is_some() {
+                app.poll_file_find();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(app.preview_state.find.matches.len(), 1);
+        assert_eq!(app.preview_state.find.matches[0].line, 2);
     }
 }

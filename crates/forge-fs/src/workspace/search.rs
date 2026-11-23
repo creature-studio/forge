@@ -320,17 +320,19 @@ mod tests {
         fs::write(&path, "before\r\n界needle[42]\r\nafter").unwrap();
         let context = ContentContext::load(&path, &cancel).unwrap();
         assert_eq!(context.lines, ["before", "界needle[42]", "after"]);
+        let literal_hit = 3..13;
         assert_eq!(
             ContentMatcher::new("needle[42]", false)
                 .unwrap()
                 .ranges(&context.lines[1]),
-            [3..13]
+            [literal_hit]
         );
+        let regex_hit = 0..13;
         assert_eq!(
             ContentMatcher::new(r"界needle\[\d+\]", true)
                 .unwrap()
                 .ranges(&context.lines[1]),
-            [0..13]
+            [regex_hit]
         );
         assert!(ContentMatcher::new("NEEDLE", false)
             .unwrap()
