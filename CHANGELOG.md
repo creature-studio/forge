@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.4.0] - 2026-11-23
+
+### Added
+- Draggable workspace pane splitters, improved Activity Bar and scrollbar interactions, and more compact focus-aware dialogs.
+- A rebuilt bilingual product/docs site and a shared interactive release timeline.
+- CI checks for formatting, Clippy, workspace tests and website SEO, plus installer regression tests.
+
+### Improved
+- Large-file editor responsiveness: bounded syntax highlighting, efficient undo snapshots and wheel scrolling without expanding text selection.
+- Embedded Terminal TUI input and mouse routing, copy/paste, synchronized frame handling, cursor visibility and tab controls.
+- Git change review, blame, history, commit details, refresh behavior and search/navigation shortcuts.
+- Keyboard and mouse event ownership, dynamic footer guidance and default Ctrl+R refresh.
+
+### Compatibility
+- Local PTY Terminal sessions remain independent and are not persisted with tmux.
+- Existing Git workflows and custom keyboard mappings remain supported.
+
+## [0.3.4] - 2026-11-19
+
+### Added
+- Persistent left Activity Bar with hover navigation and reusable terminal control tooltips.
+- Responsive dialogs and a context-aware footer with centralized keyboard and pointer ownership.
+- Screenshot-driven guides and home page updates highlighting Forge's performance and TUI mouse support.
+
+### Improved
+- Forward child TUI mouse gestures after protocol negotiation and honor child cursor visibility.
+- Refine Git Change Peek, commit history navigation, and structured commit details.
+
 ## [0.3.3] - 2026-11-16
 
 ### Added

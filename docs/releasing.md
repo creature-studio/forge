@@ -56,6 +56,7 @@ musl 与非 Linux/macOS 平台直接退出，提示改用源码构建，因为 r
 ## 本地验证
 
 ```bash
+python3 -I scripts/test-install.py     # 离线验证 curl/wget、显式版本和校验失败
 cargo test -p forge                    # 版本解析与排序
 cargo build -p forge
 target/debug/forge update --check      # 需要已发布至少一个 release
