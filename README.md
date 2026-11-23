@@ -24,11 +24,19 @@ Forge is intentionally **both** a file workspace and a Git interface. Tools such
 
 ## Install
 
-**Linux** (x86_64 / aarch64, glibc) and **macOS** (Intel / Apple Silicon) have prebuilt releases. No Rust toolchain is needed.
+**Linux** (x86_64 / aarch64, glibc), **macOS** (Intel / Apple Silicon), and **Windows x64** have prebuilt release targets. A Rust toolchain is not needed once the matching release is published.
 
 ```sh
 curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 ```
+
+**Windows 10/11 x64** (PowerShell or Windows Terminal):
+
+```powershell
+irm https://creature-studio.github.io/forge/install.ps1 | iex
+```
+
+The Windows installer verifies the ZIP checksum and installs `forge.exe` to `%LOCALAPPDATA%\Programs\Forge\bin`, adding it to your user PATH. Open a new terminal and run `forge` from a project directory. Windows upgrades use the same installer (close Forge before reinstalling); `forge update` remains Linux/macOS-only. Requires Git for Git actions. To inspect the installer, see [install.ps1](install.ps1).
 
 The installer downloads the appropriate [GitHub Release](https://github.com/creature-studio/forge/releases/latest), verifies its SHA-256 checksum, and installs into `~/.local/bin` by default. Review the [install script](install.sh) before running it, or [download a release manually](https://github.com/creature-studio/forge/releases/latest).
 
@@ -44,7 +52,7 @@ forge update --check
 forge update
 ```
 
-Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and `FORGE_VERSION=v0.3.0` pins a release. See the [release and update guide](docs/releasing.md) for details. Windows is not currently included in the prebuilt release matrix; Windows users can use WSL or build from source.
+Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and `FORGE_VERSION=v0.3.0` pins a release. See the [release and update guide](docs/releasing.md) for details. Windows x64 releases use a native MSVC ZIP archive; WSL remains an alternative.
 
 ## See it in action
 

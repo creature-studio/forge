@@ -19,6 +19,9 @@ fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
+    // Git for Windows defaults to CRLF checkout on some runners. These
+    // byte-exact staging, discard and stash tests use LF fixture contents.
+    git(root, &["config", "core.autocrlf", "false"]);
     git(root, &["config", "user.name", "Test"]);
     git(root, &["config", "user.email", "test@example.test"]);
     fs::write(root.join("a.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
@@ -215,6 +218,19 @@ async fn branch_stash_worktree_and_history_actions_roundtrip() {
     cli.action(root, GitAction::RemoveWorktree(worktree))
         .await
         .unwrap();
+    // Safe branch deletion requires the branch tip to actually be an
+    // ancestor of HEAD. Cherry-picking an equivalent patch is not a merge,
+    // and Git for Windows correctly refuses to delete an unmerged branch.
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            "merge feature branch",
+            "feature-next",
+        ],
+    );
     cli.action(root, GitAction::DeleteBranch("feature-next".into()))
         .await
         .unwrap();

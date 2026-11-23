@@ -12,7 +12,7 @@ Forge 的二进制通过 GitHub Release 分发，安装脚本和 `forge update` 
    git push origin v0.3.0
    ```
 
-3. `.github/workflows/release.yml` 被 tag 触发，四个平台并行构建：
+3. `.github/workflows/release.yml` 被 tag 触发，五个 target 并行构建：
 
    | tag 中的平台 | Runner | 产物 |
    |---|---|---|
@@ -20,8 +20,9 @@ Forge 的二进制通过 GitHub Release 分发，安装脚本和 `forge update` 
    | `aarch64-unknown-linux-gnu` | `ubuntu-24.04-arm` | `forge-aarch64-unknown-linux-gnu.tar.gz` |
    | `x86_64-apple-darwin` | `macos-15-intel` | `forge-x86_64-apple-darwin.tar.gz` |
    | `aarch64-apple-darwin` | `macos-15` | `forge-aarch64-apple-darwin.tar.gz` |
+   | `x86_64-pc-windows-msvc` | `windows-2022` | `forge-x86_64-pc-windows-msvc.zip` |
 
-4. 汇总 job 生成 `SHA256SUMS`，把四个压缩包、`SHA256SUMS` 和 `install.sh` 一起发布到 Release，tag 自动成为 latest。
+4. 汇总 job 生成 `SHA256SUMS`，把五个压缩包、`SHA256SUMS`、`install.sh` 和 `install.ps1` 一起发布到 Release，tag 自动成为 latest。
 
 构建使用 `cargo build --release --locked`。如果 tag 与 `Cargo.toml` 里的版本号不一致，工作流会在构建前失败，避免出现 `forge update` 永远判定有新版本的情况。重跑同一个 tag（`workflow_dispatch` 填 tag）会用 `gh release upload --clobber` 覆盖已有资产。
 
@@ -51,7 +52,7 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 - 目标目录没有写权限时直接报错，不会留下半截文件。
 - `--force` 可在版本相同时重新安装，用于修复损坏的二进制。
 
-musl 与非 Linux/macOS 平台直接退出，提示改用源码构建，因为 release 只提供 glibc 二进制。
+`forge update` 仍只适用于 Linux/macOS；Windows 用户关闭 Forge 后重新运行 `install.ps1` 更新。Linux musl 用户需从源码构建。
 
 ## 本地验证
 

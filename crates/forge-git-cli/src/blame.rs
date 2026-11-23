@@ -4,6 +4,13 @@ use std::time::Duration;
 
 pub const MAX_BLAME_BYTES: u64 = 1024 * 1024;
 const MAX_BLAME_LINES: usize = 10_000;
+// Git for Windows can take longer to spawn several read-only Git subprocesses
+// on loaded Windows hosts. The deadline is still bounded and runs off the UI
+// thread, so the terminal interface remains responsive.
+#[cfg(windows)]
+const BLAME_TIMEOUT: Duration = Duration::from_secs(20);
+#[cfg(not(windows))]
+const BLAME_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlameLine {
@@ -30,7 +37,7 @@ impl CliWriteBackend {
         path: &Path,
         line_count: usize,
     ) -> Result<Vec<BlameLine>, GitWriteError> {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(BLAME_TIMEOUT, async {
             let relative = path
                 .strip_prefix(repo)
                 .map_err(|e| GitWriteError::Command {
@@ -115,7 +122,7 @@ impl CliWriteBackend {
         .map_err(|_| GitWriteError::Command {
             op: "blame",
             code: -1,
-            stderr: "Blame timed out after 5 seconds".into(),
+            stderr: format!("Blame timed out after {} seconds", BLAME_TIMEOUT.as_secs()),
         })?
     }
 }

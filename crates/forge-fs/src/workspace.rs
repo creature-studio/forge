@@ -95,32 +95,46 @@ pub enum FileOperation {
     Delete(Vec<PathBuf>),
 }
 
-/// Validate lexical boundaries and every existing parent, without following the final symlink.
+/// Validate the workspace boundary using resolved parent directories, without
+/// following the final component (which may be a symlink being renamed or
+/// deleted). Canonical Windows paths can differ lexically from non-canonical
+/// paths (verbatim prefixes, short names and junctions), so comparing absolute
+/// paths before filesystem resolution is not reliable.
 pub fn checked_path(root: &Path, path: &Path) -> Result<PathBuf> {
     let root = root.canonicalize()?;
     let path = if path.is_absolute() {
-        path.to_owned()
+        path.to_path_buf()
     } else {
         root.join(path)
     };
-    let relative = path
-        .strip_prefix(&root)
-        .context("path must be inside the workspace")?;
-    if relative.as_os_str().is_empty()
-        || relative
-            .components()
-            .any(|p| matches!(p, Component::ParentDir) || p.as_os_str() == ".git")
-    {
+    if path.components().any(|component| {
+        matches!(component, Component::ParentDir)
+            || component
+                .as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case(".git")
+    }) {
         bail!("workspace root, parent traversal and .git are protected");
     }
+
+    // Find an existing ancestor so new files and nested directories can be
+    // validated too. Resolve the ancestor to prevent symlink/junction escapes,
+    // but deliberately leave the final path component unresolved.
     let mut parent = path.parent().context("path has no parent")?;
     while !parent.exists() {
         parent = parent.parent().context("missing workspace parent")?;
     }
-    if !parent.canonicalize()?.starts_with(root) {
-        bail!("symlink parent leaves the workspace");
+    let real_parent = parent.canonicalize()?;
+    let suffix = path.strip_prefix(parent)?;
+    let checked = real_parent.join(suffix);
+
+    if checked == root {
+        bail!("workspace root, parent traversal and .git are protected");
     }
-    Ok(path)
+    if !checked.starts_with(&root) {
+        bail!("path must be inside the workspace");
+    }
+    Ok(checked)
 }
 
 fn exists(path: &Path) -> bool {
@@ -361,6 +375,42 @@ fn copy_directory_contents(from: &Path, to: &Path, permissions: fs::Permissions)
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_and_standard_paths_are_equivalent_inside_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let ordinary_file = root.join("editor.txt");
+        fs::write(&ordinary_file, "editable").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let canonical_file = ordinary_file.canonicalize().unwrap();
+
+        for base in [root, canonical_root.as_path()] {
+            for file in [ordinary_file.as_path(), canonical_file.as_path()] {
+                let checked = checked_path(base, file).unwrap();
+                assert_eq!(checked.canonicalize().unwrap(), canonical_file);
+            }
+        }
+
+        // New files must pass the same lexical boundary check.
+        let created = checked_path(&canonical_root, &root.join("new.txt")).unwrap();
+        assert_eq!(created, canonical_root.join("new.txt"));
+        assert!(checked_path(&canonical_root, &root.join("..").join("escape.txt")).is_err());
+        assert!(checked_path(&canonical_root, &root.join(".git").join("config")).is_err());
+        assert!(checked_path(
+            &canonical_root,
+            &dir.path().parent().unwrap().join("outside.txt")
+        )
+        .is_err());
+
+        // Also exercise the full editor load path, which canonicalizes the
+        // workspace before checking a filename supplied by the file tree.
+        assert_eq!(
+            crate::text::load(root, &ordinary_file).unwrap().text,
+            "editable"
+        );
+    }
 
     #[test]
     fn fuzzy_and_regex_search_respect_ignores_limits_and_filters() {

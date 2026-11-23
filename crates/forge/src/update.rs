@@ -13,6 +13,9 @@ struct Version(u64, u64, u64);
 
 /// Update Forge in place from the latest GitHub release.
 pub fn run(check: bool, force: bool) -> Result<()> {
+    if cfg!(windows) {
+        bail!("On Windows, update Forge by rerunning the PowerShell installer (install.ps1). Close Forge before reinstalling.");
+    }
     if !cfg!(unix) {
         bail!("forge update is currently supported on Linux and macOS only");
     }
