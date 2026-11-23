@@ -1,5 +1,5 @@
 //! Opt-in diagnostic of navigation and pointer events.
-//! FORGE_INPUT_TRACE=1 logs to /tmp/forge-input-trace-<pid>.log.
+//! FORGE_INPUT_TRACE=1 logs to the OS temporary directory.
 //! No ordinary typing, prompt text, file contents or paths are recorded.
 use super::{ActivityAction, ActivityTab, App, PaneFocus};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
@@ -32,7 +32,7 @@ pub(super) fn log(message: &str) {
     if !enabled() {
         return;
     }
-    let path = format!("/tmp/forge-input-trace-{}.log", std::process::id());
+    let path = std::env::temp_dir().join(format!("forge-input-trace-{}.log", std::process::id()));
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > 512_000) {
         return;
     }

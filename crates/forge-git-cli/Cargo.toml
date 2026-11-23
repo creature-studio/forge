@@ -10,6 +10,4 @@ description = "Write / network git operations via the git CLI"
 forge-model = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-
-[dev-dependencies]
 tempfile = { workspace = true }

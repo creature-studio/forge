@@ -569,6 +569,43 @@ fn parse_unified_diff(text: &str) -> Vec<DiffLine> {
     out
 }
 
+/// Normalize a no-index comparison against an empty temporary file into a
+/// real "new file" patch. Merely changing --- to /dev/null is not enough:
+/// partial staging also requires the diff --git path and index metadata.
+fn normalize_untracked_diff(mut lines: Vec<DiffLine>) -> Vec<DiffLine> {
+    let Some(target) = lines
+        .iter()
+        .find_map(|line| line.text.strip_prefix("+++ "))
+        .filter(|label| label.starts_with("b/") || label.starts_with("\"b/"))
+        .map(|label| label.split('\t').next().unwrap_or(label).to_owned())
+    else {
+        return lines;
+    };
+    let source = target.replacen("b/", "a/", 1);
+    let mut normalized = Vec::with_capacity(lines.len() + 1);
+    for mut line in lines.drain(..) {
+        if line.text.starts_with("diff --git ") {
+            line.text = format!("diff --git {source} {target}");
+        } else if let Some(index) = line.text.strip_prefix("index ") {
+            if let Some((hashes, mode)) = index.rsplit_once(' ') {
+                if let Some((_, new_hash)) = hashes.split_once("..") {
+                    normalized.push(DiffLine {
+                        kind: DiffLineKind::Meta,
+                        text: format!("new file mode {mode}"),
+                    });
+                    line.text = format!("index 0000000..{new_hash}");
+                }
+            }
+        } else if line.text.starts_with("--- ") {
+            line.text = "--- /dev/null".into();
+        } else if line.text.starts_with("+++ ") {
+            line.text = format!("+++ {target}");
+        }
+        normalized.push(line);
+    }
+    normalized
+}
+
 /// For untracked files, invent a minimal unified-diff-like preview.
 async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, GitWriteError> {
     let abs = repo.join(rela);
@@ -590,7 +627,10 @@ async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, Git
     if tracked.status.success() {
         return Ok(Vec::new());
     }
-    // `git diff --no-index -- /dev/null path` exits 1 with a diff.
+    // Compare against an empty temporary file instead of /dev/null, which
+    // does not exist in a native Windows process. An empty file preserves
+    // the same hunk lines and avoids a platform-specific device path.
+    let empty = tempfile::NamedTempFile::new()?;
     let output = git_command(repo)
         .args([
             "diff",
@@ -600,16 +640,18 @@ async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, Git
             "--no-index",
             "--unified=3",
             "--",
-            "/dev/null",
-            rela,
         ])
+        .arg(empty.path())
+        .arg(rela)
         .output()
         .await?;
     let code = output.status.code().unwrap_or(1);
     if code != 0 && code != 1 {
         return Ok(Vec::new());
     }
-    Ok(parse_unified_diff(&String::from_utf8_lossy(&output.stdout)))
+    Ok(normalize_untracked_diff(parse_unified_diff(
+        &String::from_utf8_lossy(&output.stdout),
+    )))
 }
 
 #[cfg(test)]

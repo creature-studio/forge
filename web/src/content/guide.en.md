@@ -17,6 +17,14 @@ On supported Linux and macOS targets, install the latest release:
 curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 ```
 
+On **Windows 10/11 x64**, install a native `forge.exe` from PowerShell (no WSL needed):
+
+```powershell
+irm https://creature-studio.github.io/forge/install.ps1 | iex
+```
+
+The Windows installer verifies SHA-256, installs under the user profile, and updates the user PATH. Open a fresh terminal after installation. Close Forge and rerun the installer to upgrade; `forge update` currently works only on Linux/macOS. Install Git for Windows for Git actions.
+
 The installer verifies the downloaded release against matching checksums. Use `FORGE_INSTALL_DIR` for a custom destination or `FORGE_VERSION` to pin a published release. From the project directory:
 
 ```bash
@@ -24,7 +32,7 @@ cd /path/to/project
 forge
 ```
 
-Run `forge update` for self-update or obtain a package from [GitHub Releases](https://github.com/creature-studio/forge/releases/latest). For source builds, use `cargo build --release -p forge` inside the repository (Rust 1.89+ and Git required). Windows users can run Forge in WSL; a native Windows package is not currently part of the release matrix.
+Run `forge update` for self-update or obtain a package from [GitHub Releases](https://github.com/creature-studio/forge/releases/latest). For source builds, use `cargo build --release -p forge` inside the repository (Rust 1.89+ and Git required). Windows also has a native x64 ZIP release target; WSL is optional.
 
 ## 2. Workspace layout and navigation
 

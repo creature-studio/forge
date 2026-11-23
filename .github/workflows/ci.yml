@@ -35,6 +35,28 @@ jobs:
       - name: Run workspace tests
         run: cargo test --workspace --locked
 
+  windows:
+    name: Windows x64 (check and test)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compile all Windows targets
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Run Windows workspace tests
+        run: cargo test --workspace --locked
+
+      - name: Test PowerShell installer (offline)
+        shell: powershell
+        run: .\scripts\test-install-windows.ps1
+
   site:
     name: Web & SEO checks
     runs-on: ubuntu-latest

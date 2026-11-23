@@ -19,6 +19,7 @@ interface Props {
 const { english = false } = Astro.props;
 const base = english ? '/forge/en/' : '/forge/';
 const installCmd = 'curl -fsSL https://creature-studio.github.io/forge/install.sh | sh';
+const windowsInstallCmd = 'irm https://creature-studio.github.io/forge/install.ps1 | iex';
 
 const copy = english
   ? {
@@ -30,7 +31,7 @@ const copy = english
       copiedBtn: 'Copied',
       download: `Download ${FORGE_TAG}`,
       guide: 'Read Guide',
-      platforms: ['Linux (x64 / ARM64)', 'macOS (Intel / Apple Silicon)', 'WSL', 'MIT'],
+      platforms: ['Linux (x64 / ARM64)', 'macOS (Intel / Apple Silicon)', 'Windows x64', 'MIT'],
 
       ledgerKicker: 'ENGINEERING & TELEMETRY',
       ledgerTitle: 'Zero runtime bloat. Instant terminal flow.',
@@ -146,7 +147,7 @@ const copy = english
       copiedBtn: '已复制',
       download: `下载 ${FORGE_TAG}`,
       guide: '阅读指南',
-      platforms: ['Linux (x64 / ARM64)', 'macOS (Intel / Apple Silicon)', 'WSL', 'MIT 开源'],
+      platforms: ['Linux (x64 / ARM64)', 'macOS (Intel / Apple Silicon)', 'Windows x64', 'MIT 开源'],
 
       ledgerKicker: 'ENGINEERING & TELEMETRY',
       ledgerTitle: '克制架构，把速度还给终端。',
@@ -262,6 +263,25 @@ const copy = english
             data-label-default={copy.copyBtn}
             data-label-copied={copy.copiedBtn}
             aria-label={english ? 'Copy install command' : '复制安装命令'}
+          >
+            <Copy size={12} strokeWidth={2} class="copy-icon-default" aria-hidden="true" />
+            <Check size={12} strokeWidth={2.4} class="copy-icon-done" style="display:none" aria-hidden="true" />
+            <span data-cli-copy-text>{copy.copyBtn}</span>
+          </button>
+        </div>
+
+        <div class="cli-install hero-stagger-3" data-cli-box data-cmd={windowsInstallCmd} style="margin-top: 8px;">
+          <div class="cli-code-wrap">
+            <span class="cli-prompt" aria-hidden="true">PS&gt;</span>
+            <code class="cli-command">{windowsInstallCmd}</code>
+          </div>
+          <button
+            type="button"
+            class="cli-copy-btn"
+            data-cli-copy
+            data-label-default={copy.copyBtn}
+            data-label-copied={copy.copiedBtn}
+            aria-label={english ? 'Copy Windows PowerShell install command' : '复制 Windows PowerShell 安装命令'}
           >
             <Copy size={12} strokeWidth={2} class="copy-icon-default" aria-hidden="true" />
             <Check size={12} strokeWidth={2.4} class="copy-icon-done" style="display:none" aria-hidden="true" />

@@ -75,9 +75,49 @@ jobs:
           path: forge-${{ matrix.target }}.tar.gz
           if-no-files-found: error
 
+  build-windows:
+    name: x86_64-pc-windows-msvc
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+
+      - name: Check tag matches workspace version
+        shell: pwsh
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $line = Get-Content Cargo.toml | Select-String '^version = "' | Select-Object -First 1
+          if (-not $line) { throw 'Missing workspace version' }
+          $version = [regex]::Match($line.Line, '^version = "([^"]+)"').Groups[1].Value
+          if ("v$version" -ne $env:TAG) { throw "tag $env:TAG does not match workspace version $version" }
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: x86_64-pc-windows-msvc
+
+      - name: Build Windows Forge
+        run: cargo build --release --locked -p forge --target x86_64-pc-windows-msvc
+
+      - name: Package Windows Forge
+        shell: pwsh
+        run: |
+          Compress-Archive -LiteralPath target/x86_64-pc-windows-msvc/release/forge.exe -DestinationPath forge-x86_64-pc-windows-msvc.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forge-x86_64-pc-windows-msvc
+          path: forge-x86_64-pc-windows-msvc.zip
+          if-no-files-found: error
+
   release:
     name: Publish release
-    needs: build
+    needs: [build, build-windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +133,8 @@ jobs:
         run: |
           set -eu
           cp install.sh dist/install.sh
-          (cd dist && sha256sum forge-*.tar.gz > SHA256SUMS && cat SHA256SUMS)
+          cp install.ps1 dist/install.ps1
+          (cd dist && sha256sum forge-*.tar.gz forge-*.zip > SHA256SUMS && cat SHA256SUMS)
 
       - name: Publish
         env:
