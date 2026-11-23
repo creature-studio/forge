@@ -9,7 +9,12 @@ enum MarkRow {
 
 /// Pick the richest inline attribution that fits without hiding source code.
 /// Full metadata stays available in the reserved bottom row and F6 popup.
-pub(super) fn compact_blame_label(full: &str, author: &str, age: &str, available: usize) -> Option<String> {
+pub(super) fn compact_blame_label(
+    full: &str,
+    author: &str,
+    age: &str,
+    available: usize,
+) -> Option<String> {
     use unicode_width::UnicodeWidthStr;
     let variants = [
         full.to_owned(),
@@ -19,7 +24,13 @@ pub(super) fn compact_blame_label(full: &str, author: &str, age: &str, available
     variants.into_iter().find(|text| text.width() <= available)
 }
 
-pub(super) fn draw_inline_blame(frame: &mut Frame<'_>, inner: Rect, fallback: Rect, model: &App, p: Palette) {
+pub(super) fn draw_inline_blame(
+    frame: &mut Frame<'_>,
+    inner: Rect,
+    fallback: Rect,
+    model: &App,
+    p: Palette,
+) {
     use unicode_width::UnicodeWidthStr;
     let Some((blame, line)) = model.current_blame() else {
         return;
@@ -62,10 +73,16 @@ pub(super) fn draw_inline_blame(frame: &mut Frame<'_>, inner: Rect, fallback: Re
     } else {
         super::blame::relative_time(blame.time)
     };
-    let short_author = if blame.uncommitted() { "Uncommitted" } else { blame.author.as_str() };
+    let short_author = if blame.uncommitted() {
+        "Uncommitted"
+    } else {
+        blame.author.as_str()
+    };
     let inline = if y < inner.bottom() {
         compact_blame_label(&label, short_author, &short_age, available as usize)
-    } else { None };
+    } else {
+        None
+    };
     if let Some(text) = inline {
         frame.render_widget(
             Paragraph::new(text).style(Style::default().fg(p.fg_dim)),
@@ -141,12 +158,15 @@ pub(super) fn draw_marks(frame: &mut Frame<'_>, model: &App, p: Palette) {
         indices
             .take(area.height as usize)
             .map(|index| match &rows[index] {
-                ScmRow::Folder { path, column, .. } => root.as_ref()
+                ScmRow::Folder { path, column, .. } => root
+                    .as_ref()
                     .map(|root| MarkRow::Git(root.join(path), column.side()))
                     .unwrap_or(MarkRow::None),
                 row @ ScmRow::Change { .. } => scm_entry(row, u, s)
-                    .and_then(|entry| root.as_ref()
-                        .map(|root| MarkRow::Git(root.join(&entry.path), entry.side)))
+                    .and_then(|entry| {
+                        root.as_ref()
+                            .map(|root| MarkRow::Git(root.join(&entry.path), entry.side))
+                    })
                     .unwrap_or(MarkRow::None),
                 _ => MarkRow::None,
             })

@@ -141,44 +141,90 @@ async fn untracked_binary_large_and_cache_invalidation() {
 #[tokio::test]
 async fn staged_and_unstaged_marks_are_both_visible_and_mapped() {
     let (dir, path) = fixture("one\ntwo\nthree\nfour\nfive\n");
-    git(dir.path(), &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "base",
+        ],
+    );
     // First edit is staged, a second independent edit remains unstaged.
     std::fs::write(&path, "one\nSTAGED\nthree\nfour\nfive\n").unwrap();
     git(dir.path(), &["add", "sample.md"]);
     std::fs::write(&path, "INSERTED\none\nSTAGED\nthree\nfour\nWORKTREE\n").unwrap();
     let loaded = load(dir.path(), &path).await;
-    assert!(loaded.staged_hunks.iter().flat_map(|h| &h.marks)
-        .any(|(n, c)| *n == 3 && *c == Change::Modified), "staged marks not mapped: {:?}", loaded.staged_hunks.iter().flat_map(|h| h.marks.iter().map(|(n, _)| *n)).collect::<Vec<_>>());
-    assert!(loaded.hunks.iter().flat_map(|h| &h.marks)
+    assert!(
+        loaded
+            .staged_hunks
+            .iter()
+            .flat_map(|h| &h.marks)
+            .any(|(n, c)| *n == 3 && *c == Change::Modified),
+        "staged marks not mapped: {:?}",
+        loaded
+            .staged_hunks
+            .iter()
+            .flat_map(|h| h.marks.iter().map(|(n, _)| *n))
+            .collect::<Vec<_>>()
+    );
+    assert!(loaded
+        .hunks
+        .iter()
+        .flat_map(|h| &h.marks)
         .any(|(n, c)| *n == 1 && *c == Change::Added));
     let mut app = app(dir.path(), &path).await;
     let index = app.inline_active().unwrap().hunks.len();
     app.toggle_inline_hunk(index, None);
     assert_eq!(app.inline_diff.open, Some(index));
-    assert!(matches!(App::selected_hunk(app.inline_active().unwrap(), index), Some((_, DiffSide::Staged))));
+    assert!(matches!(
+        App::selected_hunk(app.inline_active().unwrap(), index),
+        Some((_, DiffSide::Staged))
+    ));
     app.close_inline_peek();
     app.session.layout.preview_inner = Rect::new(10, 2, 46, 12);
     let line = app.inline_active().unwrap().staged_hunks[0].marks[0].0;
     let y = 2 + app.preview_state.text_rows.source_to_row(line) as u16;
     assert!(app.inline_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: y,
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,
+        row: y,
         modifiers: KeyModifiers::NONE,
     }));
     assert_eq!(app.inline_diff.open, Some(index));
     app.config.git.show_staged_gutter = false;
     app.close_inline_peek();
     assert!(!app.inline_mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: y,
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 10,
+        row: y,
         modifiers: KeyModifiers::NONE,
     }));
     app.toggle_inline_peek();
-    assert!(app.inline_diff.open.is_some_and(|i| i < index), "disabled staged layer must be skipped");
+    assert!(
+        app.inline_diff.open.is_some_and(|i| i < index),
+        "disabled staged layer must be skipped"
+    );
 }
 
 #[tokio::test]
 async fn staged_only_changes_have_gutter_marks() {
     let (dir, path) = fixture("one\ntwo\nthree\n");
-    git(dir.path(), &["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base"]);
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "base",
+        ],
+    );
     std::fs::write(&path, "one\nSTAGED\nthree\n").unwrap();
     git(dir.path(), &["add", "sample.md"]);
     let loaded = load(dir.path(), &path).await;
@@ -263,7 +309,10 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
         row: popup.y,
         ..click(2)
     }));
-    assert!(app.inline_diff.open.is_some(), "heading is not a dismiss button");
+    assert!(
+        app.inline_diff.open.is_some(),
+        "heading is not a dismiss button"
+    );
     assert!(app.inline_mouse(MouseEvent {
         column: popup.right() - 2,
         row: popup.y,
@@ -361,22 +410,33 @@ async fn overview_git_marks_cover_paged_files() {
     let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
     app.files.pending_lists.clear();
     app.preview_state.preview = Some(forge_fs::preview_from_bytes(
-        &path, after.as_bytes(), after.len() as u64,
+        &path,
+        after.as_bytes(),
+        after.len() as u64,
     ));
     app.preview_state.preview_mode = PreviewMode::File;
     app.preview_state.preview_loading = false;
     app.preview_state.markdown_code = true;
-    assert!(app.inline_path().is_some(), "paged files must support Git Change Peek");
+    assert!(
+        app.inline_path().is_some(),
+        "paged files must support Git Change Peek"
+    );
     app.tick_inline_diff();
     tokio::time::timeout(Duration::from_secs(5), async {
         while app.inline_diff.overview.pending.is_some() {
             app.poll_inline_diff();
             tokio::task::yield_now().await;
         }
-    }).await.unwrap();
-    let (lines, marks) = app.overview_git_data().expect("overview fetched independently");
+    })
+    .await
+    .unwrap();
+    let (lines, marks) = app
+        .overview_git_data()
+        .expect("overview fetched independently");
     assert_eq!(lines, 650);
-    assert!(marks.iter().any(|&(line, color)| line == 550 && color == Color::Yellow));
+    assert!(marks
+        .iter()
+        .any(|&(line, color)| line == 550 && color == Color::Yellow));
     // The same 550th-line hunk must be accessible in the inline peek
     // after loading further preview pages, not merely shown on the ruler.
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -384,9 +444,16 @@ async fn overview_git_marks_cover_paged_files() {
             app.poll_inline_diff();
             tokio::task::yield_now().await;
         }
-    }).await.unwrap();
+    })
+    .await
+    .unwrap();
     assert!(app.inline_active().is_some());
-    assert!(app.inline_active().unwrap().hunks.iter().any(|h| h.marks.iter().any(|&(n, _)| n == 550)));
+    assert!(app
+        .inline_active()
+        .unwrap()
+        .hunks
+        .iter()
+        .any(|h| h.marks.iter().any(|&(n, _)| n == 550)));
 
     let y = (550 - 1) * (30 - 1) / (lines - 1);
     assert_eq!(app.overview_click_target(y, 30), Some(550));
@@ -396,7 +463,8 @@ async fn overview_git_marks_cover_paged_files() {
     app.config.show_overview_ruler = true;
     app.session.focus = PaneFocus::Preview;
     app.handle_key(crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Down, crossterm::event::KeyModifiers::ALT,
+        crossterm::event::KeyCode::Down,
+        crossterm::event::KeyModifiers::ALT,
     ));
     assert!(
         app.preview_state.pending_source_line == Some(550)

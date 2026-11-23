@@ -97,7 +97,7 @@ fn hunks(diff: &FileDiff, count: usize) -> Vec<Hunk> {
                             DiffLineKind::Delete => {
                                 hunk.row_lines.push(Some(start.max(1)));
                                 deleted += 1;
-                            },
+                            }
                             _ => {
                                 i += 1;
                                 continue;
@@ -145,10 +145,9 @@ fn fingerprint(value: impl Hash) -> u64 {
 
 fn preview_hash(preview: &Preview) -> Option<u64> {
     match &preview.content {
-        PreviewContent::Text {
-            lines,
-            ..
-        } => Some(fingerprint(&lines[..lines.len().min(forge_fs::PREVIEW_MAX_LINES)])),
+        PreviewContent::Text { lines, .. } => Some(fingerprint(
+            &lines[..lines.len().min(forge_fs::PREVIEW_MAX_LINES)],
+        )),
         _ => None,
     }
 }
@@ -172,10 +171,15 @@ struct Read {
 /// single ordered pass. Avoid O(staged_marks * unstaged_diff_lines) on big files.
 /// Removed Index lines anchor to the next surviving worktree line.
 fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
-    let mut targets = staged.iter().flat_map(|h|
-        h.marks.iter().map(|(n, _)| *n)
-            .chain(h.row_lines.iter().flatten().copied())
-    ).collect::<Vec<_>>();
+    let mut targets = staged
+        .iter()
+        .flat_map(|h| {
+            h.marks
+                .iter()
+                .map(|(n, _)| *n)
+                .chain(h.row_lines.iter().flatten().copied())
+        })
+        .collect::<Vec<_>>();
     targets.sort_unstable();
     targets.dedup();
     let mut resolved = std::collections::HashMap::with_capacity(targets.len());
@@ -184,7 +188,11 @@ fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
         let raw = part.get(1..)?;
         let (number, length) = raw.split_once(',').unwrap_or((raw, "1"));
         let n = number.parse::<usize>().ok()?;
-        Some(if length == "0" { n.saturating_add(1) } else { n })
+        Some(if length == "0" {
+            n.saturating_add(1)
+        } else {
+            n
+        })
     };
     for target in targets {
         let mapped = loop {
@@ -194,12 +202,17 @@ fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
             match line.kind {
                 DiffLineKind::Header => {
                     let mut words = line.text.split_whitespace();
-                    if words.next() != Some("@@") { cursor += 1; continue; }
+                    if words.next() != Some("@@") {
+                        cursor += 1;
+                        continue;
+                    }
                     let (Some(old), Some(new)) = (words.next(), words.next()) else {
-                        cursor += 1; continue;
+                        cursor += 1;
+                        continue;
                     };
                     let (Some(old), Some(new)) = (parse(old), parse(new)) else {
-                        cursor += 1; continue;
+                        cursor += 1;
+                        continue;
                     };
                     if target < old {
                         break new_line.saturating_add(target.saturating_sub(old_line));
@@ -209,14 +222,19 @@ fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
                     cursor += 1;
                 }
                 DiffLineKind::Context | DiffLineKind::Delete => {
-                    if target == old_line { break new_line; }
+                    if target == old_line {
+                        break new_line;
+                    }
                     old_line = old_line.saturating_add(1);
                     if matches!(line.kind, DiffLineKind::Context) {
                         new_line = new_line.saturating_add(1);
                     }
                     cursor += 1;
                 }
-                DiffLineKind::Add => { new_line = new_line.saturating_add(1); cursor += 1; }
+                DiffLineKind::Add => {
+                    new_line = new_line.saturating_add(1);
+                    cursor += 1;
+                }
                 DiffLineKind::Meta => cursor += 1,
             }
         };
@@ -224,10 +242,14 @@ fn map_staged_marks(diff: &FileDiff, staged: &mut [Hunk], count: usize) {
     }
     for hunk in staged {
         for (line, _) in &mut hunk.marks {
-            if let Some(mapped) = resolved.get(line) { *line = *mapped; }
+            if let Some(mapped) = resolved.get(line) {
+                *line = *mapped;
+            }
         }
         for line in hunk.row_lines.iter_mut().flatten() {
-            if let Some(mapped) = resolved.get(line) { *line = *mapped; }
+            if let Some(mapped) = resolved.get(line) {
+                *line = *mapped;
+            }
         }
     }
 }
@@ -278,11 +300,22 @@ async fn read(
 ) -> Result<Read> {
     let (key, fresh) = snapshot(git, &repo, &path).await?;
     if let Some((_, hunks, staged_hunks)) = cached.filter(|(k, _, _)| k == &key) {
-        return Ok(Read { key, fresh, hunks, staged_hunks });
+        return Ok(Read {
+            key,
+            fresh,
+            hunks,
+            staged_hunks,
+        });
     }
     let rel = forge_model::path_to_rela(path.strip_prefix(&repo)?);
-    let diff = git.write.gutter_diff_side(&repo, &rel, DiffSide::Unstaged).await?;
-    let staged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Staged).await?;
+    let diff = git
+        .write
+        .gutter_diff_side(&repo, &rel, DiffSide::Unstaged)
+        .await?;
+    let staged = git
+        .write
+        .gutter_diff_side(&repo, &rel, DiffSide::Staged)
+        .await?;
     let (after, _) = snapshot(git, &repo, &path).await?;
     anyhow::ensure!(key == after, "source or index changed during diff");
     // The preview is intentionally paginated to 400 lines. Git hunks must
@@ -338,7 +371,9 @@ async fn overview_source_lines(path: &Path) -> Result<usize> {
     let mut last = None;
     loop {
         let n = file.read(&mut buf).await?;
-        if n == 0 { break; }
+        if n == 0 {
+            break;
+        }
         lines += buf[..n].iter().filter(|&&b| b == b'\n').count();
         last = Some(buf[n - 1]);
     }
@@ -348,8 +383,14 @@ async fn overview_source_lines(path: &Path) -> Result<usize> {
 async fn read_overview(git: GitService, repo: PathBuf, path: PathBuf) -> Result<OverviewRead> {
     let source_lines = overview_source_lines(&path).await?;
     let rel = forge_model::path_to_rela(path.strip_prefix(&repo)?);
-    let unstaged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Unstaged).await?;
-    let staged = git.write.gutter_diff_side(&repo, &rel, DiffSide::Staged).await?;
+    let unstaged = git
+        .write
+        .gutter_diff_side(&repo, &rel, DiffSide::Unstaged)
+        .await?;
+    let staged = git
+        .write
+        .gutter_diff_side(&repo, &rel, DiffSide::Staged)
+        .await?;
     let mut staged_hunks = hunks(&staged, usize::MAX);
     map_staged_marks(&unstaged, &mut staged_hunks, source_lines);
     let mut marks = Vec::new();
@@ -363,7 +404,11 @@ async fn read_overview(git: GitService, repo: PathBuf, path: PathBuf) -> Result<
             marks.push((line, change.color()));
         }
     }
-    Ok(OverviewRead { path, source_lines, marks })
+    Ok(OverviewRead {
+        path,
+        source_lines,
+        marks,
+    })
 }
 
 impl App {
@@ -373,7 +418,9 @@ impl App {
             || !matches!(self.preview_state.preview_mode, PreviewMode::File)
             || self.editing.active()
             || (self.markdown_available() && !self.preview_state.markdown_code)
-        { return None; }
+        {
+            return None;
+        }
         match &self.preview_state.preview.as_ref()?.content {
             PreviewContent::Text { .. } => Some(self.preview_state.preview.as_ref()?.path.clone()),
             _ => None,
@@ -386,6 +433,52 @@ impl App {
         (data.path == path).then_some((data.source_lines, data.marks.as_slice()))
     }
 
+    fn needs_overview_git_tick(&self) -> bool {
+        if !self.config.show_overview_ruler {
+            return false;
+        }
+        let Some(path) = self.overview_path() else {
+            return self.inline_diff.overview.active.is_some();
+        };
+        if self.inline_diff.overview.pending.is_some()
+            || self.inline_diff.overview.checked.is_some_and(|t| {
+                self.inline_diff
+                    .overview
+                    .active
+                    .as_ref()
+                    .is_some_and(|a| a.path == path)
+                    && t.elapsed() < Duration::from_secs(30)
+                    || self.inline_diff.overview.active.is_none()
+                        && t.elapsed() < Duration::from_secs(10)
+            })
+        {
+            return false;
+        }
+        self.repo_root().is_some_and(|root| path.starts_with(root))
+    }
+
+    pub(super) fn needs_inline_diff_tick(&self) -> bool {
+        if self.needs_overview_git_tick() {
+            return true;
+        }
+        let Some(path) = self.inline_path() else {
+            return false;
+        };
+        if self.inline_diff.pending.is_some()
+            || self.inline_diff.checked.is_some_and(|t| {
+                t.elapsed()
+                    < Duration::from_secs(if self.inline_active().is_some() {
+                        30
+                    } else {
+                        10
+                    })
+            })
+        {
+            return false;
+        }
+        self.repo_root().is_some_and(|root| path.starts_with(root))
+    }
+
     fn tick_overview_git(&mut self) {
         // The watcher invalidates cached Git marks when source/HEAD/index
         // changes. Disabled overview must not run an expensive file-wide diff.
@@ -396,32 +489,38 @@ impl App {
             self.inline_diff.overview.active = None;
             return;
         };
-        if self.inline_diff.overview.pending.is_some()
-            || self.inline_diff.overview.checked.is_some_and(|t| {
-                self.inline_diff.overview.active.as_ref().is_some_and(|a| a.path == path)
-                    && t.elapsed() < Duration::from_secs(30)
-                || self.inline_diff.overview.active.is_none()
-                    && t.elapsed() < Duration::from_secs(10)
-            })
-        { return; }
-        let Some(repo) = self.repo_root().filter(|root| path.starts_with(root)) else { return; };
+        if !self.needs_overview_git_tick() {
+            return;
+        }
+        let Some(repo) = self.repo_root().filter(|root| path.starts_with(root)) else {
+            return;
+        };
         let git = self.services.git;
         let query_path = path.clone();
-        let handle = self.services.jobs.spawn(JobPriority::Low,
-            Some("git:overview".into()), async move {
-                read_overview(git, repo, query_path).await
-            });
+        let handle =
+            self.services
+                .jobs
+                .spawn(JobPriority::Low, Some("git:overview".into()), async move {
+                    read_overview(git, repo, query_path).await
+                });
         self.inline_diff.overview.pending = Some((path, handle));
         self.inline_diff.overview.checked = Some(Instant::now());
     }
 
     fn poll_overview_git(&mut self) {
-        let done = self.inline_diff.overview.pending.as_mut().and_then(|(path, job)| {
-            job.try_join().map(|result| (path.clone(), result))
-        });
-        let Some((path, result)) = done else { return; };
+        let done = self
+            .inline_diff
+            .overview
+            .pending
+            .as_mut()
+            .and_then(|(path, job)| job.try_join().map(|result| (path.clone(), result)));
+        let Some((path, result)) = done else {
+            return;
+        };
         self.inline_diff.overview.pending = None;
-        if self.overview_path().as_ref() != Some(&path) { return; }
+        if self.overview_path().as_ref() != Some(&path) {
+            return;
+        }
         self.inline_diff.overview.active = result.ok().and_then(Result::ok);
     }
 
@@ -451,8 +550,12 @@ impl App {
         };
         if self.inline_diff.pending.is_some()
             || self.inline_diff.checked.is_some_and(|t| {
-                t.elapsed() < Duration::from_secs(
-                    if self.inline_active().is_some() { 30 } else { 10 })
+                t.elapsed()
+                    < Duration::from_secs(if self.inline_active().is_some() {
+                        30
+                    } else {
+                        10
+                    })
             })
         {
             return;
@@ -540,8 +643,13 @@ impl App {
     }
 
     fn selected_hunk(read: &Read, index: usize) -> Option<(&Hunk, DiffSide)> {
-        if index < read.hunks.len() { read.hunks.get(index).map(|h| (h, DiffSide::Unstaged)) }
-        else { read.staged_hunks.get(index - read.hunks.len()).map(|h| (h, DiffSide::Staged)) }
+        if index < read.hunks.len() {
+            read.hunks.get(index).map(|h| (h, DiffSide::Unstaged))
+        } else {
+            read.staged_hunks
+                .get(index - read.hunks.len())
+                .map(|h| (h, DiffSide::Staged))
+        }
     }
 
     /// Map the chosen source line into this hunk's diff rows. Scrolling a
@@ -637,8 +745,10 @@ impl App {
     }
 
     pub(super) fn inline_diff_hint(&self) -> bool {
-        self.inline_active().is_some_and(|r| (!r.hunks.is_empty() && self.layer_enabled(DiffSide::Unstaged))
-            || (!r.staged_hunks.is_empty() && self.layer_enabled(DiffSide::Staged)))
+        self.inline_active().is_some_and(|r| {
+            (!r.hunks.is_empty() && self.layer_enabled(DiffSide::Unstaged))
+                || (!r.staged_hunks.is_empty() && self.layer_enabled(DiffSide::Staged))
+        })
     }
 
     pub(super) fn inline_popup_contains(&self, column: u16, row: u16) -> bool {
@@ -683,14 +793,31 @@ impl App {
             let row = self.preview_state.preview_scroll + (mouse.row - region.y) as usize;
             let staged_column = mouse.column == region.x;
             let index = self.inline_active().and_then(|r| {
-                let matches = |h: &Hunk| h.marks.iter().any(|(n, _)|
-                    self.preview_state.text_rows.source_to_row(*n) == row);
-                let staged = || self.layer_enabled(DiffSide::Staged)
-                    .then(|| r.staged_hunks.iter().position(matches).map(|i| r.hunks.len() + i)).flatten();
-                let unstaged = || self.layer_enabled(DiffSide::Unstaged)
-                    .then(|| r.hunks.iter().position(matches)).flatten();
-                if staged_column { staged().or_else(unstaged) }
-                else { unstaged().or_else(staged) }
+                let matches = |h: &Hunk| {
+                    h.marks
+                        .iter()
+                        .any(|(n, _)| self.preview_state.text_rows.source_to_row(*n) == row)
+                };
+                let staged = || {
+                    self.layer_enabled(DiffSide::Staged)
+                        .then(|| {
+                            r.staged_hunks
+                                .iter()
+                                .position(matches)
+                                .map(|i| r.hunks.len() + i)
+                        })
+                        .flatten()
+                };
+                let unstaged = || {
+                    self.layer_enabled(DiffSide::Unstaged)
+                        .then(|| r.hunks.iter().position(matches))
+                        .flatten()
+                };
+                if staged_column {
+                    staged().or_else(unstaged)
+                } else {
+                    unstaged().or_else(staged)
+                }
             });
             if let Some(index) = index {
                 let source = self.preview_state.text_rows.source_line_at(row);
@@ -725,50 +852,72 @@ impl App {
         let show_staged = self.config.git.show_staged_gutter;
         // Unstaged keeps the existing vivid line-number decoration. Staged
         // uses a separate subdued blue lane; both remain visible on overlap.
-        if show_unstaged { for hunk in &active.hunks {
-            for (n, change) in &hunk.marks {
-                let row = self.preview_state.text_rows.source_to_row(*n);
-                if row < scroll || row >= scroll + area.height as usize { continue; }
-                let y = area.y + (row - scroll) as u16;
-                let width = n.to_string().len().max(4) as u16;
-                for x in area.x..area.x.saturating_add(width + 1).min(area.right()) {
-                    frame.buffer_mut()[(x, y)].set_style(
-                        Style::default().fg(change.color()).add_modifier(Modifier::BOLD));
-                }
-                if matches!(&active.fresh.content, PreviewContent::Text { lines, .. } if lines.is_empty()) {
-                    frame.render_widget(
-                        Paragraph::new("   1│").style(Style::default().fg(change.color())),
-                        Rect::new(area.x, y, area.width.min(5), 1),
-                    );
-                }
-            }
-        }
-        }
-        if show_staged { for hunk in &active.staged_hunks {
-            for (n, _) in &hunk.marks {
-                let row = self.preview_state.text_rows.source_to_row(*n);
-                if row < scroll || row >= scroll + area.height as usize { continue; }
-                let y = area.y + (row - scroll) as u16;
-                // One blue-background cell is reserved for staged changes.
-                // If no unstaged change overlaps, tint the line number too.
-                let has_unstaged = active.hunks.iter().any(|h| h.marks.iter().any(|(line, _)| line == n));
-                if !has_unstaged {
-                    for x in area.x..area.x.saturating_add(5).min(area.right()) {
-                        frame.buffer_mut()[(x, y)].set_style(Style::default().fg(Color::Blue)
-                            .add_modifier(Modifier::BOLD));
+        if show_unstaged {
+            for hunk in &active.hunks {
+                for (n, change) in &hunk.marks {
+                    let row = self.preview_state.text_rows.source_to_row(*n);
+                    if row < scroll || row >= scroll + area.height as usize {
+                        continue;
+                    }
+                    let y = area.y + (row - scroll) as u16;
+                    let width = n.to_string().len().max(4) as u16;
+                    for x in area.x..area.x.saturating_add(width + 1).min(area.right()) {
+                        frame.buffer_mut()[(x, y)].set_style(
+                            Style::default()
+                                .fg(change.color())
+                                .add_modifier(Modifier::BOLD),
+                        );
+                    }
+                    if matches!(&active.fresh.content, PreviewContent::Text { lines, .. } if lines.is_empty())
+                    {
+                        frame.render_widget(
+                            Paragraph::new("   1│").style(Style::default().fg(change.color())),
+                            Rect::new(area.x, y, area.width.min(5), 1),
+                        );
                     }
                 }
-                if area.x < area.right() {
-                    frame.buffer_mut()[(area.x, y)]
-                        .set_style(Style::default().fg(Color::LightBlue).bg(Color::Blue));
+            }
+        }
+        if show_staged {
+            for hunk in &active.staged_hunks {
+                for (n, _) in &hunk.marks {
+                    let row = self.preview_state.text_rows.source_to_row(*n);
+                    if row < scroll || row >= scroll + area.height as usize {
+                        continue;
+                    }
+                    let y = area.y + (row - scroll) as u16;
+                    // One blue-background cell is reserved for staged changes.
+                    // If no unstaged change overlaps, tint the line number too.
+                    let has_unstaged = active
+                        .hunks
+                        .iter()
+                        .any(|h| h.marks.iter().any(|(line, _)| line == n));
+                    if !has_unstaged {
+                        for x in area.x..area.x.saturating_add(5).min(area.right()) {
+                            frame.buffer_mut()[(x, y)].set_style(
+                                Style::default()
+                                    .fg(Color::Blue)
+                                    .add_modifier(Modifier::BOLD),
+                            );
+                        }
+                    }
+                    if area.x < area.right() {
+                        frame.buffer_mut()[(area.x, y)]
+                            .set_style(Style::default().fg(Color::LightBlue).bg(Color::Blue));
+                    }
                 }
             }
         }
-        }
-        let Some((hunk, side)) = self.inline_diff.open.and_then(|i| Self::selected_hunk(active, i)) else {
+        let Some((hunk, side)) = self
+            .inline_diff
+            .open
+            .and_then(|i| Self::selected_hunk(active, i))
+        else {
             return;
         };
-        if !self.layer_enabled(side) { return; }
+        if !self.layer_enabled(side) {
+            return;
+        }
         let visible = |n: usize| {
             let row = self.preview_state.text_rows.source_to_row(n);
             (row >= scroll && row < scroll + area.height as usize).then_some(row)
@@ -784,12 +933,19 @@ impl App {
             .or_else(|| hunk.marks.iter().find_map(|(n, _)| visible(*n)));
         let Some(anchor) = anchor else { return };
         let Some((popup, offset)) = peek_ui::draw(
-            frame, area, anchor, scroll, hunk, side,
+            frame,
+            area,
+            anchor,
+            scroll,
+            hunk,
+            side,
             self.inline_diff.open.unwrap_or(0) + 1,
             Self::visible_hunk_count(active),
             self.inline_diff.offset,
             self.inline_diff.anchor_line,
-        ) else { return; };
+        ) else {
+            return;
+        };
         self.inline_diff.offset = offset;
         self.inline_diff.popup = popup;
     }

@@ -491,7 +491,9 @@ impl CliWriteBackend {
                 format!("Published {branch} to {remote} and set upstream")
             }
             GitAction::SaveStash(_) => "Saved tracked and untracked changes to stash".into(),
-            GitAction::SaveStashUnstaged(_) => "Stashed unstaged changes; staged changes kept".into(),
+            GitAction::SaveStashUnstaged(_) => {
+                "Stashed unstaged changes; staged changes kept".into()
+            }
             GitAction::ApplyStash(_) => "Applied stash; saved stash kept".into(),
             GitAction::ApplyStashIndexed(_) => {
                 "Applied stash with original staged state; saved stash kept".into()
@@ -626,7 +628,14 @@ impl CliWriteBackend {
                 args = strings(&["stash", "push", "--include-untracked", "-m", &message])
             }
             GitAction::SaveStashUnstaged(message) => {
-                args = strings(&["stash", "push", "--keep-index", "--include-untracked", "-m", &message])
+                args = strings(&[
+                    "stash",
+                    "push",
+                    "--keep-index",
+                    "--include-untracked",
+                    "-m",
+                    &message,
+                ])
             }
             GitAction::ApplyStash(id) => args = strings(&["stash", "apply", &id]),
             GitAction::ApplyStashIndexed(id) => args = strings(&["stash", "apply", "--index", &id]),
@@ -723,10 +732,8 @@ impl CliWriteBackend {
             return Err(GitWriteError::NoHunk);
         }
         let patch = diff.hunk_patch(hunk);
-        let mut child = Command::new("git")
+        let mut child = git_command(repo)
             .args(["apply", "--reverse", "--whitespace=nowarn", "-"])
-            .current_dir(repo)
-            .env("GIT_TERMINAL_PROMPT", "0")
             .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

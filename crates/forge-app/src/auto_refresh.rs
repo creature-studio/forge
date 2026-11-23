@@ -3,8 +3,8 @@ use std::path::Path;
 
 use std::path::PathBuf;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use tokio::sync::mpsc;
 
@@ -20,7 +20,13 @@ pub(super) struct WatchMailbox {
 impl WatchMailbox {
     pub(super) fn new(capacity: usize) -> (Self, mpsc::Receiver<notify::Event>) {
         let (sender, receiver) = mpsc::channel(capacity);
-        (Self { sender, overflow: Arc::new(AtomicBool::new(false)) }, receiver)
+        (
+            Self {
+                sender,
+                overflow: Arc::new(AtomicBool::new(false)),
+            },
+            receiver,
+        )
     }
 
     pub(super) fn offer(&self, event: notify::Event) {
@@ -133,12 +139,15 @@ pub(super) fn relevant(event: &notify::Event, root: &Path) -> bool {
         // details; HEAD, refs, and index are intentionally still watched.
         let relative = path.strip_prefix(root).unwrap_or(path);
         let mut components = relative.components();
-        if components.next().is_some_and(|c| c.as_os_str() == ".git") {
-            if matches!(components.next().as_ref().map(|c| c.as_os_str()), Some(name) if name == "objects" || name == "logs") {
-                return false;
-            }
+        if components.next().is_some_and(|c| c.as_os_str() == ".git")
+            && matches!(
+                components.next().as_ref().map(|c| c.as_os_str()),
+                Some(name) if name == "objects" || name == "logs"
+            )
+        {
+            return false;
         }
-        !path.file_name().is_some_and(|name| name == "index.lock")
+        path.file_name() != Some(std::ffi::OsStr::new("index.lock"))
     })
 }
 
@@ -308,6 +317,95 @@ mod selection_tests {
         .expect("deferred status job should finish");
     }
 
+    #[tokio::test]
+    async fn ctrl_r_refreshes_workspace_but_unmodified_r_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.scm.pending_status.is_some() {
+                app.poll_pending_status();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("initial status");
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(app.scm.pending_status.is_none(), "plain r must not refresh");
+        app.handle_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL));
+        assert!(
+            app.scm.pending_status.is_some(),
+            "Ctrl+R must refresh status"
+        );
+    }
+
+    #[tokio::test]
+    async fn entering_git_sidebar_reconciles_external_edits_without_watch_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let tracked = dir.path().join("tracked.txt");
+        let git = |args: &[&str]| {
+            assert!(
+                std::process::Command::new("git")
+                    .current_dir(dir.path())
+                    .args(args)
+                    .status()
+                    .unwrap()
+                    .success(),
+                "git {args:?} failed"
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "Forge Test"]);
+        git(&["config", "user.email", "forge@example.invalid"]);
+        std::fs::write(&tracked, "original\n").unwrap();
+        git(&["add", "tracked.txt"]);
+        git(&["commit", "-qm", "baseline"]);
+
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.scm.pending_status.is_some() {
+                app.poll_pending_status();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("initial status");
+        assert!(app.scm.git_status.as_ref().unwrap().unstaged.is_empty());
+
+        // No watcher callback is delivered in this test.
+        std::fs::write(&tracked, "changed elsewhere\n").unwrap();
+        app.enter_git_sidebar();
+        assert!(
+            app.scm.pending_status.is_some(),
+            "entering Git should request status"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.scm.pending_status.is_some() {
+                app.poll_pending_status();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("status on Git entry");
+        assert_eq!(app.scm.git_status.as_ref().unwrap().unstaged.len(), 1);
+
+        app.set_sidebar_visible(false);
+        std::fs::write(&tracked, "original\n").unwrap();
+        app.set_sidebar_visible(true);
+        assert!(
+            app.scm.pending_status.is_some(),
+            "reopening Git should request status"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.scm.pending_status.is_some() {
+                app.poll_pending_status();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("status on Git reopen");
+        assert!(app.scm.git_status.as_ref().unwrap().unstaged.is_empty());
+    }
+
     async fn flush_preview(app: &mut App) {
         tokio::time::timeout(Duration::from_secs(3), async {
             loop {
@@ -333,8 +431,12 @@ mod selection_tests {
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         flush_lists(&mut app).await;
         let select = |app: &mut App, path: &Path| {
-            app.files.selected = app.files.visible.iter()
-                .position(|row| row.entry.path == path).unwrap();
+            app.files.selected = app
+                .files
+                .visible
+                .iter()
+                .position(|row| row.entry.path == path)
+                .unwrap();
             app.request_preview_for_selection();
         };
         // Multiple requests overlap in real usage; latest selected file wins.
@@ -435,7 +537,7 @@ mod selection_tests {
 
         std::fs::write(&file, new_content).unwrap();
         app.refresh_external_changes(false);
-        app.refresh_preview_if_affected(&[file.clone()]);
+        app.refresh_preview_if_affected(std::slice::from_ref(&file));
         assert!(
             !app.preview_state.preview_loading,
             "keep the previous preview on screen while reloading"
@@ -543,21 +645,33 @@ mod selection_tests {
         let folder = dir.path().join("subdir");
         std::fs::create_dir(&folder).unwrap();
         let source = dir.path().join("source.rs");
-        std::fs::write(&source,
-            (0..1000).map(|i| format!("source {i}\n")).collect::<String>()
-        ).unwrap();
+        std::fs::write(
+            &source,
+            (0..1000)
+                .map(|i| format!("source {i}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         flush_lists(&mut app).await;
-        app.files.selected = app.files.visible.iter()
-            .position(|row| row.entry.path == source).unwrap();
+        app.files.selected = app
+            .files
+            .visible
+            .iter()
+            .position(|row| row.entry.path == source)
+            .unwrap();
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
         let first = match &app.preview_state.preview.as_ref().unwrap().content {
             PreviewContent::Text { lines, .. } => lines.len(),
             _ => unreachable!(),
         };
-        app.files.selected = app.files.visible.iter()
-            .position(|row| row.entry.path == folder).unwrap();
+        app.files.selected = app
+            .files
+            .visible
+            .iter()
+            .position(|row| row.entry.path == folder)
+            .unwrap();
         app.request_preview_for_selection(); // Directory deliberately leaves previous preview intact.
         app.session.layout.preview_inner.height = 25;
         app.scroll_preview(isize::MAX - 1);
@@ -567,10 +681,14 @@ mod selection_tests {
                 app.poll_pending_page();
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert_eq!(app.preview_state.preview.as_ref().unwrap().path, source);
-        assert!(matches!(&app.preview_state.preview.as_ref().unwrap().content,
-            PreviewContent::Text { lines, .. } if lines.len() > first));
+        assert!(
+            matches!(&app.preview_state.preview.as_ref().unwrap().content,
+            PreviewContent::Text { lines, .. } if lines.len() > first)
+        );
     }
 
     #[tokio::test]
@@ -630,17 +748,28 @@ mod selection_tests {
         app.files.expanded.insert(folder.clone());
         app.request_missing_expanded();
         flush_lists(&mut app).await;
-        app.files.selected = app.files.visible.iter()
-            .position(|row| row.entry.path == target).unwrap();
+        app.files.selected = app
+            .files
+            .visible
+            .iter()
+            .position(|row| row.entry.path == target)
+            .unwrap();
         app.session.layout.list_inner.height = 14;
         app.files.scroll = app.files.selected - 5;
         let original_scroll = app.files.scroll;
         let original_count = app.files.visible.len();
 
         for manual in [false, true] {
-            if manual { app.request_list(); } else { app.refresh_external_changes(false); }
-            assert_eq!(app.files.visible.len(), original_count,
-                "a refresh must keep the old tree on screen while its jobs run");
+            if manual {
+                app.request_list();
+            } else {
+                app.refresh_external_changes(false);
+            }
+            assert_eq!(
+                app.files.visible.len(),
+                original_count,
+                "a refresh must keep the old tree on screen while its jobs run"
+            );
             assert_eq!(app.files.scroll, original_scroll);
             assert_eq!(app.selected_entry().unwrap().path, target);
             // A tree render between incoming async directory results must not
@@ -653,7 +782,9 @@ mod selection_tests {
                     assert_eq!(app.selected_entry().unwrap().path, target);
                     assert_eq!(app.files.scroll, original_scroll);
                 }
-                if app.files.pending_lists.is_empty() { break; }
+                if app.files.pending_lists.is_empty() {
+                    break;
+                }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
             assert!(rendered_during_refresh);
@@ -668,18 +799,30 @@ mod selection_tests {
     async fn changed_long_file_refresh_keeps_deep_preview_viewport() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("large.rs");
-        std::fs::write(&file,
-            (0..2800).map(|i| format!("old line {i:04} sample\n")).collect::<String>()
-        ).unwrap();
+        std::fs::write(
+            &file,
+            (0..2800)
+                .map(|i| format!("old line {i:04} sample\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         flush_lists(&mut app).await;
-        app.files.selected = app.files.visible.iter()
-            .position(|row| row.entry.path == file).unwrap();
+        app.files.selected = app
+            .files
+            .visible
+            .iter()
+            .position(|row| row.entry.path == file)
+            .unwrap();
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
         // Emulate the reader having loaded several pages as the user scrolls.
         let loaded = app.services.fs.preview_through_line(
-            &app.services.jobs, file.clone(), EntryKind::File, 2000);
+            &app.services.jobs,
+            file.clone(),
+            EntryKind::File,
+            2000,
+        );
         let preview = tokio::time::timeout(Duration::from_secs(5), async {
             let mut loaded = loaded;
             loop {
@@ -688,30 +831,42 @@ mod selection_tests {
                 }
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         assert!(matches!(&preview.content,
             PreviewContent::Text { lines, .. } if lines.len() >= 2000));
         app.preview_state.preview = Some(preview);
         app.preview_state.preview_scroll = 1580;
         app.session.layout.preview_inner.height = 25;
 
-        std::fs::write(&file,
-            (0..2800).map(|i| format!("new line {i:04} sample\n")).collect::<String>()
-        ).unwrap();
+        std::fs::write(
+            &file,
+            (0..2800)
+                .map(|i| format!("new line {i:04} sample\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
         app.refresh_external_changes(false);
-        app.refresh_preview_if_affected(&[file.clone()]);
-        assert!(!app.preview_state.preview_loading,
-            "refresh should continue displaying the old scrolled content");
+        app.refresh_preview_if_affected(std::slice::from_ref(&file));
+        assert!(
+            !app.preview_state.preview_loading,
+            "refresh should continue displaying the old scrolled content"
+        );
         assert_eq!(app.preview_state.preview_scroll, 1580);
-        assert!(matches!(&app.preview_state.preview.as_ref().unwrap().content,
-            PreviewContent::Text { lines, .. } if lines[1580].starts_with("old")));
+        assert!(
+            matches!(&app.preview_state.preview.as_ref().unwrap().content,
+            PreviewContent::Text { lines, .. } if lines[1580].starts_with("old"))
+        );
         flush_preview(&mut app).await;
         flush_lists(&mut app).await;
         assert_eq!(app.preview_state.preview_scroll, 1580);
         assert_eq!(app.selected_entry().unwrap().path, file);
-        assert!(matches!(&app.preview_state.preview.as_ref().unwrap().content,
+        assert!(
+            matches!(&app.preview_state.preview.as_ref().unwrap().content,
             PreviewContent::Text { lines, .. }
-                if lines.len() > 1605 && lines[1580].starts_with("new")));
+                if lines.len() > 1605 && lines[1580].starts_with("new"))
+        );
         // Manual refresh must also retain the same viewport.
         app.request_list();
         assert_eq!(app.preview_state.preview_scroll, 1580);

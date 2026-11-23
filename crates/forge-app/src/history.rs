@@ -240,7 +240,8 @@ impl App {
     /// Follow a path in the rendered commit details, not the current worktree.
     /// The History tree may not have fetched this commit's file list yet.
     pub(super) fn jump_commit_detail_file(&mut self, file_index: usize) {
-        let Some((oid, path)) = crate::view::commit_detail::file_link_target(self, file_index) else {
+        let Some((oid, path)) = crate::view::commit_detail::file_link_target(self, file_index)
+        else {
             return;
         };
         self.preview_state.commit_link_focus = None;
@@ -260,13 +261,21 @@ impl App {
     /// History model stores canonical new/old paths. Resolve only exact
     /// equivalents to avoid opening an unrelated file from the same commit.
     fn matches_commit_stat_path(shown: &str, change: &forge_git::CommitChange) -> bool {
-        if shown == change.path { return true; }
-        let Some(old) = change.old_path.as_deref() else { return false };
-        if shown == format!("{old} => {}", change.path) { return true; }
+        if shown == change.path {
+            return true;
+        }
+        let Some(old) = change.old_path.as_deref() else {
+            return false;
+        };
+        if shown == format!("{old} => {}", change.path) {
+            return true;
+        }
         let (Some(start), Some(end)) = (shown.find('{'), shown.rfind('}')) else {
             return false;
         };
-        if end <= start { return false; }
+        if end <= start {
+            return false;
+        }
         let Some((before, after)) = shown[start + 1..end].split_once(" => ") else {
             return false;
         };
@@ -280,7 +289,9 @@ impl App {
     /// Keeping these in sync is important: diff_matches_selection rejects
     /// stale diffs associated with another commit or file.
     fn reveal_pending_commit_link(&mut self) {
-        let Some((oid, path)) = self.history.pending_link.take() else { return };
+        let Some((oid, path)) = self.history.pending_link.take() else {
+            return;
+        };
         let selected_oid = self.history_selected_oid();
         if !self.in_git_sidebar() || selected_oid.as_deref() != Some(oid.as_str()) {
             return; // User navigated away while the file list was loading.
@@ -288,8 +299,13 @@ impl App {
         let Some(commit_index) = self.history.commits.iter().position(|c| c.id == oid) else {
             return;
         };
-        let Some(files) = self.history.files.get(&oid) else { return };
-        let Some(file_index) = files.iter().position(|entry| Self::matches_commit_stat_path(&path, entry)) else {
+        let Some(files) = self.history.files.get(&oid) else {
+            return;
+        };
+        let Some(file_index) = files
+            .iter()
+            .position(|entry| Self::matches_commit_stat_path(&path, entry))
+        else {
             self.session.status = format!("Historical file not found: {path}");
             return;
         };
@@ -297,8 +313,13 @@ impl App {
         // Expand all ancestors so compact folders and ordinary trees both
         // reveal the target. No file is created or read from the worktree.
         let mut directory = String::new();
-        for part in path.split('/').take(path.split('/').count().saturating_sub(1)) {
-            if !directory.is_empty() { directory.push('/'); }
+        for part in path
+            .split('/')
+            .take(path.split('/').count().saturating_sub(1))
+        {
+            if !directory.is_empty() {
+                directory.push('/');
+            }
             directory.push_str(part);
             self.history.expanded_dirs.insert(dir_key(&oid, &directory));
         }
@@ -319,7 +340,12 @@ impl App {
 
     pub(super) fn request_commit_details(&mut self, oid: String) {
         // A new history selection invalidates a queued link from another commit.
-        if self.history.pending_link.as_ref().is_some_and(|(id, _)| id != &oid) {
+        if self
+            .history
+            .pending_link
+            .as_ref()
+            .is_some_and(|(id, _)| id != &oid)
+        {
             self.history.pending_link = None;
         }
         self.services.jobs.cancel_key("git:commit-detail");
@@ -355,67 +381,78 @@ impl App {
     /// Apply finished history / commit-file jobs. Returns whether anything changed.
     pub(super) fn poll_history(&mut self) -> bool {
         let mut changed = false;
-        if let Some(((oid, _), result)) = pending_request::take_ready(
-            &mut self.history.pending_detail,
-            |(_, handle)| handle.try_join(),
-        ) {
-                let selected = matches!(self.selected_scm_row(), Some(ScmRow::Commit { index })
+        if let Some(((oid, _), result)) =
+            pending_request::take_ready(&mut self.history.pending_detail, |(_, handle)| {
+                handle.try_join()
+            })
+        {
+            let selected = matches!(self.selected_scm_row(), Some(ScmRow::Commit { index })
                     if self.history.commits.get(index).is_some_and(|c| c.id == oid));
-                if self.session.activity == ActivityTab::Git
-                    && (selected
-                        || (self.scm_directory_selected()
-                            && matches!(self.preview_state.preview_mode, PreviewMode::File)))
-                {
-                    let content = match result {
-                        Ok(Ok(detail)) => PreviewContent::Text {
-                            bytes_read: detail.len(),
-                            lines: detail.lines().map(str::to_owned).collect(),
-                            truncated: false,
-                        },
-                        Ok(Err(err)) => PreviewContent::Error {
-                            message: err.to_string(),
-                        },
-                        Err(_) => PreviewContent::Error {
-                            message: "Commit details read cancelled".into(),
-                        },
-                    };
-                    self.preview_state.preview_loading = false;
-                    self.preview_state.preview = Some(forge_fs::Preview {
-                        path: PathBuf::from(&oid),
-                        content,
-                    });
-                }
-                changed = true;
+            if self.session.activity == ActivityTab::Git
+                && (selected
+                    || (self.scm_directory_selected()
+                        && matches!(self.preview_state.preview_mode, PreviewMode::File)))
+            {
+                let content = match result {
+                    Ok(Ok(detail)) => PreviewContent::Text {
+                        bytes_read: detail.len(),
+                        lines: detail.lines().map(str::to_owned).collect(),
+                        truncated: false,
+                    },
+                    Ok(Err(err)) => PreviewContent::Error {
+                        message: err.to_string(),
+                    },
+                    Err(_) => PreviewContent::Error {
+                        message: "Commit details read cancelled".into(),
+                    },
+                };
+                self.preview_state.preview_loading = false;
+                self.preview_state.preview = Some(forge_fs::Preview {
+                    path: PathBuf::from(&oid),
+                    content,
+                });
+            }
+            changed = true;
         }
-        if let Some((_, result)) = pending_request::take_ready(
-            &mut self.history.pending_graph,
-            |pending| pending.handle.try_join(),
-        ) {
+        if let Some((_, result)) =
+            pending_request::take_ready(&mut self.history.pending_graph, |pending| {
+                pending.handle.try_join()
+            })
+        {
             self.apply_history_result(result);
             changed = true;
         }
 
-        let finished = pending_request::drain_ready(
-            &mut self.history.pending_files,
-            |pending| pending.handle.try_join(),
-        );
+        let finished = pending_request::drain_ready(&mut self.history.pending_files, |pending| {
+            pending.handle.try_join()
+        });
         for (pending, result) in finished {
             let oid = pending.oid;
             match result {
                 Ok(Ok(changes)) => {
                     self.history.files.insert(oid, changes);
-                    if self.history.pending_link.as_ref()
-                        .is_some_and(|(pending_oid, _)| self.history.files.contains_key(pending_oid))
+                    if self
+                        .history
+                        .pending_link
+                        .as_ref()
+                        .is_some_and(|(pending_oid, _)| {
+                            self.history.files.contains_key(pending_oid)
+                        })
                     {
                         self.reveal_pending_commit_link();
                     }
                 }
                 Ok(Err(err)) => {
-                    if self.history.pending_link.as_ref().is_some_and(|(pending_oid, _)| pending_oid == &oid) {
+                    if self
+                        .history
+                        .pending_link
+                        .as_ref()
+                        .is_some_and(|(pending_oid, _)| pending_oid == &oid)
+                    {
                         self.history.pending_link = None;
                     }
                     self.history.message = format!("commit files: {err}");
-                },
+                }
                 Err(JobError::Cancelled) | Err(JobError::Shutdown) => {}
             }
             changed = true;
@@ -902,51 +939,106 @@ mod tests {
     #[test]
     fn commit_stat_rename_links_resolve_only_the_canonical_new_path() {
         let renamed = forge_git::CommitChange {
-            path: "src/new.rs".into(), old_path: Some("src/old.rs".into()),
+            path: "src/new.rs".into(),
+            old_path: Some("src/old.rs".into()),
             kind: forge_git::CommitChangeKind::Renamed,
         };
-        assert!(App::matches_commit_stat_path("src/{old => new}.rs", &renamed));
-        assert!(App::matches_commit_stat_path("src/old.rs => src/new.rs", &renamed));
+        assert!(App::matches_commit_stat_path(
+            "src/{old => new}.rs",
+            &renamed
+        ));
+        assert!(App::matches_commit_stat_path(
+            "src/old.rs => src/new.rs",
+            &renamed
+        ));
         assert!(App::matches_commit_stat_path("src/new.rs", &renamed));
-        assert!(!App::matches_commit_stat_path("src/{notold => new}.rs", &renamed));
+        assert!(!App::matches_commit_stat_path(
+            "src/{notold => new}.rs",
+            &renamed
+        ));
         assert!(!App::matches_commit_stat_path("another/file.rs", &renamed));
         let ordinary = change("src/regular.rs");
-        assert!(!App::matches_commit_stat_path("src/{old => regular}.rs", &ordinary));
+        assert!(!App::matches_commit_stat_path(
+            "src/{old => regular}.rs",
+            &ordinary
+        ));
     }
 
     #[tokio::test]
     async fn clicking_commit_detail_link_loads_history_and_opens_the_commit_diff() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use ratatui::{backend::TestBackend, layout::Rect, Terminal};
         let dir = repo();
         let mut app = app(dir.path());
         app.show_history();
         settle(&mut app).await;
         let oid = app.history.commits[0].id.clone();
-        assert_eq!(app.preview_state.preview.as_ref().unwrap().path.to_string_lossy(), oid);
-        assert!(!app.history.files.contains_key(&oid), "test the lazy-load path");
+        assert_eq!(
+            app.preview_state
+                .preview
+                .as_ref()
+                .unwrap()
+                .path
+                .to_string_lossy(),
+            oid
+        );
+        assert!(
+            !app.history.files.contains_key(&oid),
+            "test the lazy-load path"
+        );
 
         let mut terminal = Terminal::new(TestBackend::new(110, 28)).unwrap();
         let area = Rect::new(5, 1, 100, 24);
-        terminal.draw(|frame| {
-            app.commit_file_links.clear();
-            assert!(crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette()));
-        }).unwrap();
-        let (link_area, index) = app.commit_file_links.iter().next().copied().expect("one link");
+        terminal
+            .draw(|frame| {
+                app.commit_file_links.clear();
+                assert!(crate::view::commit_detail::draw(
+                    frame,
+                    area,
+                    &mut app,
+                    crate::view::workspace_palette()
+                ));
+            })
+            .unwrap();
+        let (link_area, index) = app
+            .commit_file_links
+            .iter()
+            .next()
+            .copied()
+            .expect("one link");
         assert_eq!(index, 0);
-        assert_eq!(app.commit_file_links.action_at(link_area.x.saturating_sub(1), link_area.y), None);
-        assert_eq!(app.commit_file_links.action_at(link_area.x, link_area.y), Some(0));
+        assert_eq!(
+            app.commit_file_links
+                .action_at(link_area.x.saturating_sub(1), link_area.y),
+            None
+        );
+        assert_eq!(
+            app.commit_file_links.action_at(link_area.x, link_area.y),
+            Some(0)
+        );
         let before = terminal.backend().buffer()[(link_area.x, link_area.y)].bg;
         app.commit_file_links.hover_at(link_area.x, link_area.y);
-        terminal.draw(|frame| {
-            app.commit_file_links.clear();
-            assert!(crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette()));
-        }).unwrap();
-        assert_ne!(terminal.backend().buffer()[(link_area.x, link_area.y)].bg, before);
-        let click = MouseEvent {kind: MouseEventKind::Down(MouseButton::Left),
-            column: link_area.x, row: link_area.y, modifiers: KeyModifiers::NONE};
+        terminal
+            .draw(|frame| {
+                app.commit_file_links.clear();
+                assert!(crate::view::commit_detail::draw(
+                    frame,
+                    area,
+                    &mut app,
+                    crate::view::workspace_palette()
+                ));
+            })
+            .unwrap();
+        assert_ne!(
+            terminal.backend().buffer()[(link_area.x, link_area.y)].bg,
+            before
+        );
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: link_area.x,
+            row: link_area.y,
+            modifiers: KeyModifiers::NONE,
+        };
         app.handle_mouse_content(click);
         assert!(app.history.pending_link.is_some());
         assert!(app.history.expanded_commits.contains(&oid));
@@ -955,7 +1047,11 @@ mod tests {
         let row = app.selected_scm_row().expect("selected history row");
         assert!(matches!(row, ScmRow::CommitFile { .. }), "{row:?}");
         assert_eq!(app.session.focus, PaneFocus::Preview);
-        let diff = app.preview_state.file_diff.as_ref().expect("historical diff");
+        let diff = app
+            .preview_state
+            .file_diff
+            .as_ref()
+            .expect("historical diff");
         assert_eq!(diff.path, "src/a.rs");
         assert!(diff.lines.iter().any(|line| line.text == "+two"));
         assert!(matches!(&app.preview_state.diff_source,
@@ -975,22 +1071,34 @@ mod tests {
         assert_eq!(crate::view::commit_detail::file_link_count(&app), 1);
         let area = Rect::new(5, 1, 100, 24);
         let mut terminal = Terminal::new(TestBackend::new(110, 28)).unwrap();
-        terminal.draw(|frame| {
-            app.commit_file_links.clear();
-            crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette());
-        }).unwrap();
+        terminal
+            .draw(|frame| {
+                app.commit_file_links.clear();
+                crate::view::commit_detail::draw(
+                    frame,
+                    area,
+                    &mut app,
+                    crate::view::workspace_palette(),
+                );
+            })
+            .unwrap();
         let (link, _) = app.commit_file_links.iter().next().copied().unwrap();
         let before = terminal.backend().buffer()[(link.x, link.y)].bg;
         let key = |code, modifiers| KeyEvent::new(code, modifiers);
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(app.preview_state.commit_link_focus, Some(0));
         assert_eq!(app.session.focus, PaneFocus::Preview);
-        terminal.draw(|frame| {
-            app.commit_file_links.clear();
-            crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette());
-        }).unwrap();
+        terminal
+            .draw(|frame| {
+                app.commit_file_links.clear();
+                crate::view::commit_detail::draw(
+                    frame,
+                    area,
+                    &mut app,
+                    crate::view::workspace_palette(),
+                );
+            })
+            .unwrap();
         assert_ne!(terminal.backend().buffer()[(link.x, link.y)].bg, before);
         app.handle_key(key(KeyCode::Esc, KeyModifiers::NONE));
         assert_eq!(app.preview_state.commit_link_focus, None);
@@ -999,8 +1107,14 @@ mod tests {
         assert!(app.history.pending_link.is_some());
         assert!(app.history.expanded_commits.contains(&oid));
         settle(&mut app).await;
-        assert!(matches!(app.selected_scm_row(), Some(ScmRow::CommitFile { .. })));
-        assert_eq!(app.preview_state.file_diff.as_ref().unwrap().path, "src/a.rs");
+        assert!(matches!(
+            app.selected_scm_row(),
+            Some(ScmRow::CommitFile { .. })
+        ));
+        assert_eq!(
+            app.preview_state.file_diff.as_ref().unwrap().path,
+            "src/a.rs"
+        );
         assert_eq!(app.preview_state.commit_link_focus, None);
     }
 
@@ -1012,9 +1126,12 @@ mod tests {
         for i in 0..16 {
             std::fs::write(
                 dir.path().join(format!("item-{i:02}.txt")),
-                format!("item {i}
-"),
-            ).unwrap();
+                format!(
+                    "item {i}
+"
+                ),
+            )
+            .unwrap();
         }
         git(dir.path(), &["add", "-A"]);
         git(dir.path(), &["commit", "-qm", "multi-file navigation"]);
@@ -1032,14 +1149,24 @@ mod tests {
         // Last off-screen file gains keyboard focus and becomes visible.
         let area = Rect::new(4, 1, 74, 8);
         let mut terminal = Terminal::new(TestBackend::new(84, 16)).unwrap();
-        terminal.draw(|frame| {
-            app.commit_file_links.clear();
-            assert!(crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette()));
-        }).unwrap();
+        terminal
+            .draw(|frame| {
+                app.commit_file_links.clear();
+                assert!(crate::view::commit_detail::draw(
+                    frame,
+                    area,
+                    &mut app,
+                    crate::view::workspace_palette()
+                ));
+            })
+            .unwrap();
         assert!(app.preview_state.preview_scroll > 0);
-        assert!(app.commit_file_links.iter().any(|(_, index)| *index == count - 1),
-            "keyboard-focused offscreen commit file must be scrolled into view");
+        assert!(
+            app.commit_file_links
+                .iter()
+                .any(|(_, index)| *index == count - 1),
+            "keyboard-focused offscreen commit file must be scrolled into view"
+        );
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(app.preview_state.commit_link_focus, Some(0));
         app.handle_key(key(KeyCode::BackTab, KeyModifiers::SHIFT));
@@ -1053,11 +1180,15 @@ mod tests {
 
     #[tokio::test]
     async fn scrolled_commit_link_clicks_the_correct_file_not_its_stats() {
-        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind, KeyModifiers};
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         use ratatui::{backend::TestBackend, layout::Rect, Terminal};
         let dir = repo();
         for i in 0..30 {
-            std::fs::write(dir.path().join(format!("file-{i:02}.txt")), format!("file {i}\n")).unwrap();
+            std::fs::write(
+                dir.path().join(format!("file-{i:02}.txt")),
+                format!("file {i}\n"),
+            )
+            .unwrap();
         }
         git(dir.path(), &["add", "-A"]);
         git(dir.path(), &["commit", "-qm", "feat: many files"]);
@@ -1071,20 +1202,42 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(90, 18)).unwrap();
         term.draw(|frame| {
             app.commit_file_links.clear();
-            assert!(crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette()));
-        }).unwrap();
-        let (link, index) = app.commit_file_links.iter().next().copied().expect("scrolled link");
+            assert!(crate::view::commit_detail::draw(
+                frame,
+                area,
+                &mut app,
+                crate::view::workspace_palette()
+            ));
+        })
+        .unwrap();
+        let (link, index) = app
+            .commit_file_links
+            .iter()
+            .next()
+            .copied()
+            .expect("scrolled link");
         assert!(index > 0, "must use a file beyond the first visible entry");
-        let (oid, expected_path) = crate::view::commit_detail::file_link_target(&app, index).unwrap();
-        let click = |column| MouseEvent { kind: MouseEventKind::Down(MouseButton::Left),
-            column, row: link.y, modifiers: KeyModifiers::NONE };
+        let (oid, expected_path) =
+            crate::view::commit_detail::file_link_target(&app, index).unwrap();
+        let click = |column| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row: link.y,
+            modifiers: KeyModifiers::NONE,
+        };
         app.handle_mouse_content(click(area.right() - 2)); // +/- stat column
         assert!(app.history.pending_link.is_none());
-        assert!(matches!(app.selected_scm_row(), Some(ScmRow::Commit { .. })));
+        assert!(matches!(
+            app.selected_scm_row(),
+            Some(ScmRow::Commit { .. })
+        ));
         app.handle_mouse_content(click(link.x));
         settle(&mut app).await;
-        let diff = app.preview_state.file_diff.as_ref().expect("correct historical diff");
+        let diff = app
+            .preview_state
+            .file_diff
+            .as_ref()
+            .expect("correct historical diff");
         assert_eq!(diff.path, expected_path);
         assert!(matches!(&app.preview_state.diff_source,
             DiffSource::Commit { oid: loaded, .. } if loaded == &oid));
@@ -1101,9 +1254,14 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(90, 20)).unwrap();
         term.draw(|frame| {
             app.commit_file_links.clear();
-            assert!(crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette()));
-        }).unwrap();
+            assert!(crate::view::commit_detail::draw(
+                frame,
+                area,
+                &mut app,
+                crate::view::workspace_palette()
+            ));
+        })
+        .unwrap();
         // A short viewport scrolls the file path into view; all hit areas must
         // remain within that viewport rather than retaining unscrolled rows.
         for (region, _) in app.commit_file_links.iter() {
@@ -1113,10 +1271,18 @@ mod tests {
         app.preview_state.preview_scroll = 100;
         term.draw(|frame| {
             app.commit_file_links.clear();
-            assert!(crate::view::commit_detail::draw(frame, area, &mut app,
-                crate::view::workspace_palette()));
-        }).unwrap();
-        assert!(app.commit_file_links.iter().all(|(rect,_)| rect.y >= area.y && rect.bottom() <= area.bottom()));
+            assert!(crate::view::commit_detail::draw(
+                frame,
+                area,
+                &mut app,
+                crate::view::workspace_palette()
+            ));
+        })
+        .unwrap();
+        assert!(app
+            .commit_file_links
+            .iter()
+            .all(|(rect, _)| rect.y >= area.y && rect.bottom() <= area.bottom()));
     }
 
     #[tokio::test]
@@ -1249,31 +1415,50 @@ mod tests {
             let mut used_commit_renderer = false;
             term.draw(|frame| {
                 used_commit_renderer = crate::view::commit_detail::draw(
-                    frame, ratatui::layout::Rect::new(0, 0, 100, 30),
-                    app, crate::view::workspace_palette(),
+                    frame,
+                    ratatui::layout::Rect::new(0, 0, 100, 30),
+                    app,
+                    crate::view::workspace_palette(),
                 );
-            }).unwrap();
-            (used_commit_renderer,term.backend().buffer().content().iter()
-                .map(|cell|cell.symbol().to_owned()).collect::<Vec<_>>().join(""))
+            })
+            .unwrap();
+            (
+                used_commit_renderer,
+                term.backend()
+                    .buffer()
+                    .content()
+                    .iter()
+                    .map(|cell| cell.symbol().to_owned())
+                    .collect::<Vec<_>>()
+                    .join(""),
+            )
         };
         let (initial, initial_text) = render(&mut app);
         assert!(initial);
         assert!(initial_text.contains("CHANGED FILES"));
 
-        let folder = app.scm_rows().iter().position(|row|
-            matches!(row, ScmRow::CommitFolder { commit: 0, .. })
-        ).expect("commit folder");
+        let folder = app
+            .scm_rows()
+            .iter()
+            .position(|row| matches!(row, ScmRow::CommitFolder { commit: 0, .. }))
+            .expect("commit folder");
         app.scm.scm_selected = folder;
         app.request_diff_for_scm_selection();
-        assert_eq!(app.preview_state.preview.as_ref().unwrap().path,before_path);
+        assert_eq!(
+            app.preview_state.preview.as_ref().unwrap().path,
+            before_path
+        );
         let (folder_rendered, text) = render(&mut app);
-        assert!(folder_rendered,"folder must retain commit detail renderer");
+        assert!(folder_rendered, "folder must retain commit detail renderer");
         assert!(text.contains("CHANGED FILES"));
         assert!(text.contains("fix: add a line"));
 
         app.toggle_history_row(folder);
         let (expanded_rendered, _) = render(&mut app);
-        assert!(expanded_rendered,"expanding folder must not replace commit details");
+        assert!(
+            expanded_rendered,
+            "expanding folder must not replace commit details"
+        );
     }
 
     #[tokio::test]

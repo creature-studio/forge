@@ -169,7 +169,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                         KeyCode::Esc => {
                             d.confirming = false;
                             app.write().session.commit_confirming = false;
-                        },
+                        }
                         KeyCode::Enter => {
                             if let Some(message) = d.message() {
                                 let mut model = app.write();
@@ -311,9 +311,17 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         state.subject.value().chars().count()
     );
     let body = if state.confirming {
-        let lines = state.body.iter().map(|line| line.value())
-            .collect::<Vec<_>>().join("\n");
-        if lines.trim().is_empty() { "(no body)".to_owned() } else { lines }
+        let lines = state
+            .body
+            .iter()
+            .map(|line| line.value())
+            .collect::<Vec<_>>()
+            .join("\n");
+        if lines.trim().is_empty() {
+            "(no body)".to_owned()
+        } else {
+            lines
+        }
     } else {
         state.body_display()
     };
@@ -373,8 +381,10 @@ mod tests {
 
     #[test]
     fn body_backspace_joins_lines_at_cursor() {
-        let mut draft = Draft::default();
-        draft.field = Field::Body;
+        let mut draft = Draft {
+            field: Field::Body,
+            ..Default::default()
+        };
         draft.paste("one\ntwo");
         assert_eq!(draft.cursor_line, 1);
         draft.body[1] = tui_input::Input::new("two".into()).with_cursor(0);
@@ -386,8 +396,10 @@ mod tests {
 
     #[test]
     fn body_display_marks_true_cursor_position() {
-        let mut draft = Draft::default();
-        draft.field = Field::Body;
+        let mut draft = Draft {
+            field: Field::Body,
+            ..Default::default()
+        };
         draft.body[0] = tui_input::Input::new("中文abc".into()).with_cursor(2);
         assert!(draft.body_display().contains("中文▏abc"));
     }

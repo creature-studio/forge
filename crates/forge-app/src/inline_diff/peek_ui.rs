@@ -76,6 +76,7 @@ fn paint_row(frame: &mut Frame<'_>, rect: Rect, glyph: &str, style: Style) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -370,8 +371,10 @@ mod tests {
             .collect();
         assert!(display.contains("Changes") && display.contains("WORKTREE"));
         assert!(display.contains("Hunk 3/7") && display.contains("@@ -30,4"));
-        assert!(display.contains("new 中 文") && display.contains("+1") && display.contains("−2"),
-            "rendered peek: {display}");
+        assert!(
+            display.contains("new 中 文") && display.contains("+1") && display.contains("−2"),
+            "rendered peek: {display}"
+        );
         // The two deleted lines share source anchor 31, but only the added
         // line should receive the selected-row background emphasis.
         let first_deleted_y = popup.y + 4;

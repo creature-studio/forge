@@ -182,32 +182,46 @@ impl App {
         self.blame.cursor = None;
     }
 
+    pub(super) fn needs_blame_tick(&self) -> bool {
+        if !self.config.git.blame.show_inline && !self.config.git.blame.show_popup {
+            return false;
+        }
+        if self.blame.popup.is_some() || self.blame.pending.is_some() {
+            return false;
+        }
+        let Some(path) = self.blame_path() else {
+            return false;
+        };
+        if self.blame.checked.as_ref().is_some_and(|(p, t)| {
+            p == &path
+                && t.elapsed()
+                    < Duration::from_secs(
+                        if self
+                            .blame
+                            .active
+                            .as_ref()
+                            .is_some_and(|c| c.key.path == path)
+                        {
+                            30
+                        } else {
+                            10
+                        },
+                    )
+        }) {
+            return false;
+        }
+        self.repo_root().is_some_and(|root| path.starts_with(root))
+    }
+
     /// Called after preview completion and on the one-second background tick.
     /// Validations read bounded bytes and HEAD through gix; cache hits spawn no git.
     pub(super) fn tick_blame(&mut self) {
-        if !self.config.git.blame.show_inline && !self.config.git.blame.show_popup {
-            return;
-        }
-        if self.blame.popup.is_some() || self.blame.pending.is_some() {
+        if !self.needs_blame_tick() {
             return;
         }
         let Some(path) = self.blame_path() else {
             return;
         };
-        if self
-            .blame
-            .checked
-            .as_ref()
-            .is_some_and(|(p, t)| p == &path && t.elapsed() < Duration::from_secs(
-                if self.blame.active.as_ref().is_some_and(|c| c.key.path == path) {
-                    30
-                } else {
-                    10
-                }
-            ))
-        {
-            return;
-        }
         let Some(repo) = self.repo_root().filter(|root| path.starts_with(root)) else {
             return;
         };
@@ -248,11 +262,17 @@ impl App {
                             // or line numbers and the byte cursor become invalid.
                             let current_complete = matches!(
                                 self.preview_state.preview.as_ref().map(|p| &p.content),
-                                Some(PreviewContent::Text { truncated: false, .. })
+                                Some(PreviewContent::Text {
+                                    truncated: false,
+                                    ..
+                                })
                             );
                             let fresh_complete = matches!(
                                 &fresh.content,
-                                PreviewContent::Text { truncated: false, .. }
+                                PreviewContent::Text {
+                                    truncated: false,
+                                    ..
+                                }
                             );
                             if current_complete && fresh_complete {
                                 // Small, fully loaded files retain the existing

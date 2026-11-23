@@ -16,7 +16,6 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragr
 use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::ListViewport;
 use crate::graph::{
     change_color, flatten_changes, lane_color, ChangeRow, GraphCell, GraphLayout, LANE_WIDTH,
 };
@@ -24,6 +23,7 @@ use crate::icons::{icon_mode, IconMode, Icons};
 use crate::sticky;
 use crate::style::{self, rgb};
 use crate::tree::fit_compact_label;
+use crate::ListViewport;
 
 /// Which section a change belongs to (unstaged vs staged).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -636,7 +636,8 @@ pub fn draw_scm_sidebar(
     );
     *state.sticky_headers = viewport.pinned.clone();
     let focused = state.focused;
-    let items: Vec<ListItem<'_>> = viewport.indices()
+    let items: Vec<ListItem<'_>> = viewport
+        .indices()
         .map(|index| {
             let scm = &rows[index];
             let is_sel = index == selected;
@@ -800,6 +801,7 @@ pub fn draw_staging(
 }
 
 /// HISTORY header: chevron, count, and a loading hint.
+#[allow(clippy::too_many_arguments)]
 fn history_section_item(
     theme: &Theme,
     count: usize,
@@ -893,7 +895,7 @@ fn history_section_item(
         } else {
             status
         };
-        if used + status.width() + 1 <= width {
+        if used + status.width() < width {
             spans.push(Span::styled(
                 status,
                 Style::default().fg(rgb(fg)).bg(rgb(bg)),
@@ -938,6 +940,7 @@ fn commit_push_badge(commit: &GraphCommit, history: &HistoryView<'_>) -> Option<
 }
 
 /// One commit row: lane glyphs, short hash, push indicator, ref badge, subject.
+#[allow(clippy::too_many_arguments)]
 fn commit_item(
     theme: &Theme,
     commit: &GraphCommit,
@@ -1233,6 +1236,7 @@ fn section_item(
     .style(Style::default().bg(rgb(bg)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn folder_item(
     theme: &Theme,
     name: &str,
@@ -1588,10 +1592,11 @@ mod tests {
         for (width, height) in [(10, 3), (20, 8), (5, 2)] {
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             let theme = forge_theme::Theme::modern_ide();
-            terminal.draw(|frame| super::draw_commit_modal(frame, &theme, "tiny")).unwrap();
+            terminal
+                .draw(|frame| super::draw_commit_modal(frame, &theme, "tiny"))
+                .unwrap();
         }
     }
-
 
     use super::*;
     use forge_model::{ChangeEntry, DiffSide, GitStatus};

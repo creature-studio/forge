@@ -220,22 +220,40 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palett
     // Repaint only the file path (not its padding or +/- stats). The link's
     // interactive rectangle is clipped to the visible row after scrolling.
     for (line, index, label) in links {
-        if line < scroll || line - scroll >= area.height as usize { continue; }
+        if line < scroll || line - scroll >= area.height as usize {
+            continue;
+        }
         let width = label.width().min(area.width.saturating_sub(2) as usize) as u16;
-        if width == 0 { continue; }
-        let rect = Rect::new(area.x.saturating_add(2), area.y + (line - scroll) as u16, width, 1);
+        if width == 0 {
+            continue;
+        }
+        let rect = Rect::new(
+            area.x.saturating_add(2),
+            area.y + (line - scroll) as u16,
+            width,
+            1,
+        );
         let focused = model.session.focus == PaneFocus::Preview
             && model.preview_state.commit_link_focus == Some(index);
-        Link::new(&label, index,
+        Link::new(
+            &label,
+            index,
             if focused {
-                Style::default().fg(p.fg).bg(p.selection)
+                Style::default()
+                    .fg(p.fg)
+                    .bg(p.selection)
                     .add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
             } else {
-                Style::default().fg(p.info).add_modifier(Modifier::UNDERLINED)
+                Style::default()
+                    .fg(p.info)
+                    .add_modifier(Modifier::UNDERLINED)
             },
-            Style::default().fg(p.fg).bg(p.selection)
+            Style::default()
+                .fg(p.fg)
+                .bg(p.selection)
                 .add_modifier(Modifier::UNDERLINED | Modifier::BOLD),
-        ).draw(frame, rect, &mut model.commit_file_links);
+        )
+        .draw(frame, rect, &mut model.commit_file_links);
     }
     model.session.layout.preview_inner = area;
     true
@@ -255,10 +273,16 @@ pub(crate) fn file_link_count(model: &App) -> usize {
     let Some(preview) = model.preview_state.preview.as_ref() else {
         return 0;
     };
-    if preview.path.to_string_lossy() != oid.as_str() { return 0; }
-    let PreviewContent::Text { lines, .. } = &preview.content else { return 0; };
+    if preview.path.to_string_lossy() != oid.as_str() {
+        return 0;
+    }
+    let PreviewContent::Text { lines, .. } = &preview.content else {
+        return 0;
+    };
     let detail = parse(lines);
-    if detail.sha != *oid { return 0; }
+    if detail.sha != *oid {
+        return 0;
+    }
     detail.files.len()
 }
 
@@ -272,10 +296,16 @@ pub(crate) fn file_link_target(model: &App, index: usize) -> Option<(String, Str
     };
     let oid = &model.history.commits.get(commit_index)?.id;
     let preview = model.preview_state.preview.as_ref()?;
-    if preview.path.to_string_lossy() != oid.as_str() { return None; }
-    let PreviewContent::Text { lines, .. } = &preview.content else { return None };
+    if preview.path.to_string_lossy() != oid.as_str() {
+        return None;
+    }
+    let PreviewContent::Text { lines, .. } = &preview.content else {
+        return None;
+    };
     let detail = parse(lines);
-    if detail.sha != *oid { return None; }
+    if detail.sha != *oid {
+        return None;
+    }
     Some((oid.clone(), detail.files.get(index)?.0.clone()))
 }
 

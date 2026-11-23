@@ -43,33 +43,70 @@ const FULL_DIFF_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
 async fn bounded_text_file(bytes: Vec<u8>) -> Option<Vec<String>> {
     let source = String::from_utf8(bytes).ok()?;
-    if source.contains('\0') { return None; }
-    let lines = source.split_terminator('\n').map(|s| s.trim_end_matches('\r').to_owned()).collect();
+    if source.contains('\0') {
+        return None;
+    }
+    let lines = source
+        .split_terminator('\n')
+        .map(|s| s.trim_end_matches('\r').to_owned())
+        .collect();
     Some(lines)
+}
+
+pub(crate) fn git_command(repo: &Path) -> Command {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(repo)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("LC_ALL", "C")
+        .env("LANG", "C")
+        .env_remove("LANGUAGE");
+    cmd
 }
 
 /// Read one Git blob, not a patch. A missing blob is valid for a deleted file.
 async fn git_blob_lines(repo: &Path, spec: &str) -> Option<Vec<String>> {
-    let mut child = Command::new("git")
-        .current_dir(repo)
-        .args(["--no-optional-locks", "--literal-pathspecs", "show", "--no-ext-diff", "--no-textconv", spec])
-        .stdin(Stdio::null()).stderr(Stdio::null())
-        .stdout(Stdio::piped()).kill_on_drop(true).spawn().ok()?;
+    let mut child = git_command(repo)
+        .args([
+            "--no-optional-locks",
+            "--literal-pathspecs",
+            "show",
+            "--no-ext-diff",
+            "--no-textconv",
+            spec,
+        ])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .ok()?;
     let mut bytes = Vec::new();
     let read = async {
-        child.stdout.take()?.take(FULL_DIFF_MAX_BYTES + 1).read_to_end(&mut bytes).await.ok()?;
-        if bytes.len() as u64 > FULL_DIFF_MAX_BYTES { return None; }
+        child
+            .stdout
+            .take()?
+            .take(FULL_DIFF_MAX_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .await
+            .ok()?;
+        if bytes.len() as u64 > FULL_DIFF_MAX_BYTES {
+            return None;
+        }
         let status = child.wait().await.ok()?;
         status.success().then_some(())
     };
-    tokio::time::timeout(std::time::Duration::from_secs(3), read).await.ok()??;
+    tokio::time::timeout(std::time::Duration::from_secs(3), read)
+        .await
+        .ok()??;
     bounded_text_file(bytes).await
 }
 
 async fn worktree_lines(repo: &Path, path: &str) -> Option<Vec<String>> {
     let full = repo.join(path);
     let meta = tokio::fs::metadata(&full).await.ok()?;
-    if !meta.is_file() || meta.len() > FULL_DIFF_MAX_BYTES { return None; }
+    if !meta.is_file() || meta.len() > FULL_DIFF_MAX_BYTES {
+        return None;
+    }
     bounded_text_file(tokio::fs::read(full).await.ok()?).await
 }
 
@@ -85,19 +122,33 @@ impl CliWriteBackend {
     }
 
     /// Side-specific, bounded source-gutter query (never writes to the index).
-    pub async fn gutter_diff_side(&self, repo: &Path, path: &str, side: DiffSide) -> Result<FileDiff, GitWriteError> {
+    pub async fn gutter_diff_side(
+        &self,
+        repo: &Path,
+        path: &str,
+        side: DiffSide,
+    ) -> Result<FileDiff, GitWriteError> {
         const LIMIT: usize = 2 * 1024 * 1024;
         let read = async {
             let mut args = vec![
-                "--no-optional-locks", "--literal-pathspecs", "-c",
-                "diff.suppressBlankEmpty=false", "diff", "--no-ext-diff", "--no-textconv",
-                "--no-color", "--unified=3", "--output-indicator-new=+",
-                "--output-indicator-old=-", "--output-indicator-context= ",
+                "--no-optional-locks",
+                "--literal-pathspecs",
+                "-c",
+                "diff.suppressBlankEmpty=false",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--unified=3",
+                "--output-indicator-new=+",
+                "--output-indicator-old=-",
+                "--output-indicator-context= ",
             ];
-            if matches!(side, DiffSide::Staged) { args.push("--cached"); }
+            if matches!(side, DiffSide::Staged) {
+                args.push("--cached");
+            }
             args.extend(["--", path]);
-            let mut child = Command::new("git")
-                .current_dir(repo)
+            let mut child = git_command(repo)
                 .args(args)
                 .stdin(Stdio::null())
                 .stderr(Stdio::null())
@@ -355,10 +406,8 @@ impl CliWriteBackend {
         }
         args.push("-".into());
 
-        let mut child = Command::new("git")
+        let mut child = git_command(repo)
             .args(&args)
-            .current_dir(repo)
-            .env("GIT_TERMINAL_PROMPT", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -458,10 +507,8 @@ async fn run_git_raw(
     _op: &'static str,
     args: Vec<String>,
 ) -> Result<Output, GitWriteError> {
-    let output = Command::new("git")
+    let output = git_command(repo)
         .args(&args)
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
         .env("GIT_SEQUENCE_EDITOR", "true")
         .kill_on_drop(true)
@@ -544,7 +591,7 @@ async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, Git
         return Ok(Vec::new());
     }
     // `git diff --no-index -- /dev/null path` exits 1 with a diff.
-    let output = Command::new("git")
+    let output = git_command(repo)
         .args([
             "diff",
             "--no-color",
@@ -556,8 +603,6 @@ async fn untracked_as_diff(repo: &Path, rela: &str) -> Result<Vec<DiffLine>, Git
             "/dev/null",
             rela,
         ])
-        .current_dir(repo)
-        .env("GIT_TERMINAL_PROMPT", "0")
         .output()
         .await?;
     let code = output.status.code().unwrap_or(1);
@@ -615,14 +660,20 @@ mod tests {
             staged.lines
         );
 
-        assert_eq!(staged.full_new_lines.as_deref(), Some(&["two".to_owned()][..]));
+        assert_eq!(
+            staged.full_new_lines.as_deref(),
+            Some(&["two".to_owned()][..])
+        );
 
         cli.unstage_paths(root, &["a.txt"]).await.unwrap();
         let unstaged = cli
             .file_diff(root, "a.txt", DiffSide::Unstaged)
             .await
             .unwrap();
-        assert_eq!(unstaged.full_new_lines.as_deref(), Some(&["two".to_owned()][..]));
+        assert_eq!(
+            unstaged.full_new_lines.as_deref(),
+            Some(&["two".to_owned()][..])
+        );
         assert!(
             unstaged
                 .lines
