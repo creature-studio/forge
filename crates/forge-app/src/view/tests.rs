@@ -1663,7 +1663,7 @@ async fn command_and_confirmation_dialogs_render_including_tiny_windows() {
     let mut app = fixture(dir.path());
     app.open_tools(tools::PanelKind::Commands);
     let screen = text(&render_frames(
-        element!(Workspace(initial:Some(app))),
+        element!(Workspace(initial: Some(app))),
         100,
         30,
         3,
@@ -1675,10 +1675,10 @@ async fn command_and_confirmation_dialogs_render_including_tiny_windows() {
         app.open_tools(tools::PanelKind::Commands);
         let panel = app.tools.panel.as_mut().unwrap();
         panel.input = tui_input::Input::new("中文中文中文中文中文中文".into());
-        let _ = render_frames(element!(Workspace(initial:Some(app))), width, height, 3);
+        let _ = render_frames(element!(Workspace(initial: Some(app))), width, height, 3);
         let mut app = fixture(dir.path());
         app.run_command(tools::Command::Delete);
-        let _ = render_frames(element!(Workspace(initial:Some(app))), width, height, 3);
+        let _ = render_frames(element!(Workspace(initial: Some(app))), width, height, 3);
     }
 }
 
