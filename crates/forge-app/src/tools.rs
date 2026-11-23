@@ -1394,7 +1394,7 @@ Git Worktrees are managed separately with W."
                     let mut_count = std::sync::atomic::AtomicUsize::new(0);
                     forge_fs::workspace::search_stream(&search_root, &query, &options, &cancel, |hit| {
                         let _ = hit_tx.try_send((generation, hit.clone()));
-                        if mut_count.fetch_add(1, Ordering::Relaxed) % 64 == 0 { wake.notify_one(); }
+                        if mut_count.fetch_add(1, Ordering::Relaxed).is_multiple_of(64) { wake.notify_one(); }
                     })
                 }).await??;
                 let count = hits.len();

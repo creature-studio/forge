@@ -584,12 +584,9 @@ fn Tools(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_tools_key(key),
             Event::Mouse(mouse) => model.handle_tools_mouse(mouse),
-            Event::Paste(text) => {
-                if model.tools.panel.as_ref().is_some_and(|p| p.is_input()) {
-                    for ch in text.chars().filter(|c| !c.is_control()) {
-                        model
-                            .handle_tools_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-                    }
+            Event::Paste(text) if model.tools.panel.as_ref().is_some_and(|p| p.is_input()) => {
+                for ch in text.chars().filter(|c| !c.is_control()) {
+                    model.handle_tools_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
                 }
             }
             _ => {}

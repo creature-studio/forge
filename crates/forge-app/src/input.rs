@@ -1176,10 +1176,10 @@ impl App {
                 }
                 MouseEventKind::Drag(MouseButton::Left)
                 | MouseEventKind::ScrollUp
-                | MouseEventKind::ScrollDown => {
-                    if self.session.activity_pressed.take().is_some() {
-                        return;
-                    }
+                | MouseEventKind::ScrollDown
+                    if self.session.activity_pressed.take().is_some() =>
+                {
+                    return;
                 }
                 _ => {}
             }

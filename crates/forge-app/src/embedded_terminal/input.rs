@@ -60,13 +60,26 @@ impl InputWriter {
                 "terminal input closed",
             ));
         }
-        self.pending
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
-                pending
-                    .checked_add(bytes.len())
-                    .filter(|&size| size <= MAX_PENDING_BYTES)
-            })
-            .map_err(|_| io::Error::new(io::ErrorKind::WouldBlock, "terminal input queue full"))?;
+        // Reserve capacity atomically without relying on the newer try_update API;
+        // Forge still supports Rust 1.89, and the writer may drain concurrently.
+        let mut pending = self.pending.load(Ordering::Acquire);
+        loop {
+            let next = pending
+                .checked_add(bytes.len())
+                .filter(|&size| size <= MAX_PENDING_BYTES)
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::WouldBlock, "terminal input queue full")
+                })?;
+            match self.pending.compare_exchange_weak(
+                pending,
+                next,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(actual) => pending = actual,
+            }
+        }
         if let Err(error) = self.sender.try_send(bytes.to_vec()) {
             self.pending.fetch_sub(bytes.len(), Ordering::AcqRel);
             return Err(match error {
