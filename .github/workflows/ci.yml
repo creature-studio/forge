@@ -63,6 +63,17 @@ jobs:
       - name: Run Windows workspace tests
         run: cargo test --workspace --locked
 
+      - name: Smoke test Windows forge.exe
+        shell: pwsh
+        run: |
+          cargo build -p forge --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Forge build failed' }
+          $version = & .\target\debug\forge.exe --version
+          if ($LASTEXITCODE -ne 0 -or $version -ne 'forge 0.4.1') {
+            throw "Windows Forge executable smoke test failed: $version"
+          }
+          Write-Host "OK: $version"
+
   site:
     name: Web & SEO checks
     runs-on: ubuntu-latest

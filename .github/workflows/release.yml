@@ -104,6 +104,17 @@ jobs:
       - name: Build Windows Forge
         run: cargo build --release --locked -p forge --target x86_64-pc-windows-msvc
 
+      - name: Smoke test Windows release executable
+        shell: pwsh
+        run: |
+          $version = & .\target\x86_64-pc-windows-msvc\release\forge.exe --version
+          $versionLine = (Get-Content Cargo.toml | Select-String '^version = "' | Select-Object -First 1).Line
+          $expected = 'forge ' + [regex]::Match($versionLine, '^version = "([^"]+)"').Groups[1].Value
+          if ($LASTEXITCODE -ne 0 -or $version -ne $expected) {
+            throw "Windows Release smoke test failed: expected $expected, got $version"
+          }
+          Write-Host "OK: $version"
+
       - name: Package Windows Forge
         shell: pwsh
         run: |
