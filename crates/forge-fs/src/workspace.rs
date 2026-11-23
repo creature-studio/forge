@@ -95,19 +95,53 @@ pub enum FileOperation {
     Delete(Vec<PathBuf>),
 }
 
-/// Validate lexical boundaries and every existing parent, without following the final symlink.
+/// Canonicalization on Windows adds the verbatim path prefix, even when the
+/// caller uses a standard path from a directory listing. Strip only recognized
+/// verbatim drive/UNC prefixes for *lexical comparison*. Keep canonical paths
+/// for actual filesystem operations and containment checks.
+#[cfg(windows)]
+fn normalize_windows_prefix(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use std::path::Prefix;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let kind = match path.components().next() {
+        Some(Component::Prefix(prefix)) => prefix.kind(),
+        _ => return path.to_path_buf(),
+    };
+    let normalized = match kind {
+        Prefix::VerbatimDisk(_) if wide.starts_with(&[92, 92, 63, 92]) => wide[4..].to_vec(),
+        Prefix::VerbatimUNC(_, _) if wide.starts_with(&[92, 92, 63, 92, 85, 78, 67, 92]) => {
+            let mut result = vec![92, 92];
+            result.extend_from_slice(&wide[8..]);
+            result
+        }
+        _ => return path.to_path_buf(),
+    };
+    PathBuf::from(OsString::from_wide(&normalized))
+}
+
+#[cfg(not(windows))]
+fn normalize_windows_prefix(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+/// Validate lexical boundaries and every existing parent, without following
+/// the final symlink. Use normalized *lexical* paths for prefix checks, then
+/// canonical paths for the parent containment check.
 pub fn checked_path(root: &Path, path: &Path) -> Result<PathBuf> {
-    // Canonical Windows paths may use the extended-length \\?\ prefix,
-    // while callers usually provide ordinary C:\ paths. Strip the lexical
-    // workspace prefix before canonicalizing the root, so both spellings
-    // resolve to the same workspace without weakening the boundary check.
     let canonical_root = root.canonicalize()?;
-    let relative = if path.is_absolute() {
-        path.strip_prefix(root)
-            .or_else(|_| path.strip_prefix(&canonical_root))
+    let lexical_root = normalize_windows_prefix(root);
+    let normalized_root = normalize_windows_prefix(&canonical_root);
+    let normalized_path = normalize_windows_prefix(path);
+    let relative = if normalized_path.is_absolute() {
+        normalized_path
+            .strip_prefix(&lexical_root)
+            .or_else(|_| normalized_path.strip_prefix(&normalized_root))
             .context("path must be inside the workspace")?
     } else {
-        path
+        normalized_path.as_path()
     };
     if relative.as_os_str().is_empty()
         || relative
@@ -365,6 +399,57 @@ fn copy_directory_contents(from: &Path, to: &Path, permissions: fs::Permissions)
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_verbatim_and_standard_paths_are_equivalent_inside_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let ordinary_file = root.join("editor.txt");
+        fs::write(&ordinary_file, "editable").unwrap();
+        let canonical_root = root.canonicalize().unwrap();
+        let canonical_file = ordinary_file.canonicalize().unwrap();
+
+        for base in [root, canonical_root.as_path()] {
+            for file in [ordinary_file.as_path(), canonical_file.as_path()] {
+                let checked = checked_path(base, file).unwrap();
+                assert_eq!(checked.canonicalize().unwrap(), canonical_file);
+            }
+        }
+
+        // New files must pass the same lexical boundary check.
+        let created = checked_path(&canonical_root, &root.join("new.txt")).unwrap();
+        assert_eq!(created, canonical_root.join("new.txt"));
+        assert!(checked_path(&canonical_root, &root.join("..").join("escape.txt")).is_err());
+        assert!(checked_path(&canonical_root, &root.join(".git").join("config")).is_err());
+        assert!(checked_path(
+            &canonical_root,
+            &dir.path().parent().unwrap().join("outside.txt")
+        )
+        .is_err());
+
+        // Also exercise the full editor load path, which canonicalizes the
+        // workspace before checking a filename supplied by the file tree.
+        assert_eq!(
+            crate::text::load(root, &ordinary_file).unwrap().text,
+            "editable"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn normalizes_only_windows_verbatim_disk_and_unc_prefixes() {
+        let disk = Path::new(r"\\?\C:\Projects\Forge\main.rs");
+        assert_eq!(
+            normalize_windows_prefix(disk),
+            PathBuf::from(r"C:\Projects\Forge\main.rs")
+        );
+        let unc = Path::new(r"\\?\UNC\server\share\project\main.rs");
+        assert_eq!(
+            normalize_windows_prefix(unc),
+            PathBuf::from(r"\\server\share\project\main.rs")
+        );
+    }
 
     #[test]
     fn fuzzy_and_regex_search_respect_ignores_limits_and_filters() {
