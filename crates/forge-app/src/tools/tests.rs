@@ -499,9 +499,10 @@ async fn branch_worktree_escape_returns_to_selected_parent_without_git_writes() 
         .unwrap()
         .rows
         .iter()
-        .position(
-            |row| matches!(&row.value, RowValue::Git(item) if item.id == other.to_string_lossy()),
-        )
+        .position(|row| {
+            matches!(&row.value, RowValue::Git(item)
+                if Path::new(&item.id).canonicalize().ok() == other.canonicalize().ok())
+        })
         .expect("linked worktree exists");
     app.tools.panel.as_mut().unwrap().selected = worktree_row;
 
@@ -769,7 +770,9 @@ async fn batch_stage_and_unstage_use_marked_paths_and_include_collapsed_children
     finish(&mut app).await;
     assert!(git(root, &["diff", "--cached", "--name-only"]).is_empty());
     assert_eq!(
-        std::fs::read_to_string(root.join("folder/nested/b.rs")).unwrap(),
+        std::fs::read_to_string(root.join("folder/nested/b.rs"))
+            .unwrap()
+            .replace("\r\n", "\n"),
         "changed\n"
     );
 }

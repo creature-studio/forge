@@ -97,15 +97,18 @@ pub enum FileOperation {
 
 /// Validate lexical boundaries and every existing parent, without following the final symlink.
 pub fn checked_path(root: &Path, path: &Path) -> Result<PathBuf> {
-    let root = root.canonicalize()?;
-    let path = if path.is_absolute() {
-        path.to_owned()
+    // Canonical Windows paths may use the extended-length \\?\ prefix,
+    // while callers usually provide ordinary C:\ paths. Strip the lexical
+    // workspace prefix before canonicalizing the root, so both spellings
+    // resolve to the same workspace without weakening the boundary check.
+    let canonical_root = root.canonicalize()?;
+    let relative = if path.is_absolute() {
+        path.strip_prefix(root)
+            .or_else(|_| path.strip_prefix(&canonical_root))
+            .context("path must be inside the workspace")?
     } else {
-        root.join(path)
+        path
     };
-    let relative = path
-        .strip_prefix(&root)
-        .context("path must be inside the workspace")?;
     if relative.as_os_str().is_empty()
         || relative
             .components()
@@ -113,11 +116,12 @@ pub fn checked_path(root: &Path, path: &Path) -> Result<PathBuf> {
     {
         bail!("workspace root, parent traversal and .git are protected");
     }
+    let path = canonical_root.join(relative);
     let mut parent = path.parent().context("path has no parent")?;
     while !parent.exists() {
         parent = parent.parent().context("missing workspace parent")?;
     }
-    if !parent.canonicalize()?.starts_with(root) {
+    if !parent.canonicalize()?.starts_with(&canonical_root) {
         bail!("symlink parent leaves the workspace");
     }
     Ok(path)
