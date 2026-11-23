@@ -116,7 +116,7 @@ Git CHANGES 中的文件或目录、Files 中包含已跟踪未暂存修改的�
 
 ## Branches / Worktrees 多级弹窗返回
 
-从 `B`（Branches）或 `W`（Worktrees）列表中打开创建、重命名、切换或删除确认框时，`Esc` 只返回原列表，保留选中条目和滚动位置；再次按 `Esc` 才关闭列表。Branches 中按 `D` 查看分支 Diff 后，`Esc` 也返回分支列表。取消确认不会触发 Git 修改；在列表仍加载时打开输入框再返回，会自动恢复列表读取。
+从 `Alt+B`（Branches）或 `Alt+W`（Worktrees）列表中打开创建、重命名、切换或删除确认框时，`Esc` 只返回原列表，保留选中条目和滚动位置；再次按 `Esc` 才关闭列表。Branches 中按 `D` 查看分支 Diff 后，`Esc` 也返回分支列表。取消确认不会触发 Git 修改；在列表仍加载时打开输入框再返回，会自动恢复列表读取。
 
 ## 文件操作与 Git Worktree 可靠性
 
@@ -126,9 +126,9 @@ Git Worktree 自动刷新支持 .git 指针文件，分别监控私有 HEAD/inde
 
 ## Stash 全键盘管理
 
-在 Files 或 Git 页面按 `Z` 进入 Stashes，使用 `↑/↓` 或 `j/k` 选择条目：`Enter` 查看选中 Stash 的补丁（`PgUp/PgDn` 滚动，`Esc` 返回列表）；`A` 输入消息并保存当前已跟踪及未跟踪的修改（排除被 Git 忽略的文件）；`a` 应用并保留 Stash；`I` 应用并恢复原暂存状态（stash apply --index）；`p` Pop（成功后移除 Stash，冲突时保留）；`X` 删除 Stash。保存、应用、Pop、删除都需在确认框按 `Enter` 才执行，按 `Esc` 返回上一层而不操作。Stash 列表为空时仍可按 `A` 新建。
+在 Files 或 Git 页面按 `Alt+Z` 进入 Stashes，使用 `↑/↓` 或 `j/k` 选择条目：`Enter` 查看选中 Stash 的补丁（`PgUp/PgDn` 滚动，`Esc` 返回列表）；`A` 输入消息并保存当前已跟踪及未跟踪的修改（排除被 Git 忽略的文件）；`a` 应用并保留 Stash；`I` 应用并恢复原暂存状态（stash apply --index）；`p` Pop（成功后移除 Stash，冲突时保留）；`X` 删除 Stash。保存、应用、Pop、删除都需在确认框按 `Enter` 才执行，按 `Esc` 返回上一层而不操作。Stash 列表为空时仍可按 `A` 新建。
 
-Stash 删除是永久丢弃备份记录，不会删除已经应用到工作区的文件。应用若发生冲突将保留 Git 错误，不会把失败伪装成成功。使用原始 Stash 对象 ID 固定选中项，避免其他 Stash 导致序号变化时误操作。可以在命令面板（`:`）搜索 Stashes 打开，Stash 面板标题也显示常用按键。
+Stash 删除是永久丢弃备份记录，不会删除已经应用到工作区的文件。应用若发生冲突将保留 Git 错误，不会把失败伪装成成功。使用原始 Stash 对象 ID 固定选中项，避免其他 Stash 导致序号变化时误操作。可以在命令面板（`Ctrl+K`）搜索 Stashes 打开，Stash 面板标题也显示常用按键。
 
 ## 轻量脚本语法高亮
 
@@ -143,11 +143,11 @@ docs/syntax-highlighting.md。
 
 工具面板内，方向键选择，PageUp/PageDown 翻动列表，Home/End 定位首尾（输入框中用于文字编辑），Ctrl+PageUp/Ctrl+PageDown 滚动详情。滚轮只滚动鼠标所在的区域；单击选中、双击打开（Git 写入仍需确认）。Esc 返回上一层；在子面板按冒号打开 Commands、按 F4 打开快捷键界面后都能返回。
 
-Branches 默认定位当前分支。Ctrl+P 和 Ctrl+F 重开时保留当前 Worktree 的上次查询，内容搜索还保留正则开关。非 Git 工作区的 Commands 不显示 Git-only 操作；Stash 的 Save/Apply/Restore/Pop/Drop 提示显示在详情区域，避免窄窗口标题截断。详见 docs/tool-panel-navigation.md。
+Branches 默认定位当前分支。文件名搜索（`Ctrl+P`）和全局内容搜索（Activity Bar 搜索图标或 `Ctrl+K` → Search file contents / regex）重开时保留当前 Worktree 的上次查询，内容搜索还保留正则开关。非 Git 工作区的 Commands 不显示 Git-only 操作；Stash 的 Save/Apply/Restore/Pop/Drop 提示显示在详情区域，避免窄窗口标题截断。详见 docs/tool-panel-navigation.md。
 
 ## 文件树、Git 与 History 快捷交互
 
-在 Files/Git 文件/目录列表和 Diff 中按 `Shift+F10`（或 Menu 键）可用键盘打开上下文菜单，`j/k` 或方向键选择、`Enter` 执行、`Esc` 关闭。文件和目录上下文菜单只包含该路径相关操作；Commit、Pull 和 Push 改从 Git 操作快捷键或 `S` 同步面板执行。Branches 中对已检出的当前分支按 `Enter` 不再弹无效确认。
+在 Files/Git 文件/目录列表和 Diff 中按 `Shift+F10`（或 Menu 键）可用键盘打开上下文菜单，`j/k` 或方向键选择、`Enter` 执行、`Esc` 关闭。文件和目录上下文菜单只包含该路径相关操作；Commit、Pull 和 Push 改从 Git 操作快捷键或 `Alt+S` 同步面板执行。Branches 中对已检出的当前分支按 `Enter` 不再弹无效确认。
 
 Worktrees 切换回来时恢复该工作区的展开目录、选中文件、滚动位置、过滤条件、Git 展开分组与焦点（仅当前 Forge 运行期间保留）。Git 侧栏 HISTORY 首次读取最近 200 条提交，导航到接近底部后再异步追加 200 条，最多读取 5000 条；已有的 History 工具面板分页继续保留。文件名搜索只显示文件路径，内容搜索则显示实际行号。操作成功和失败通知约 8 秒后消失，底部分支状态保持常驻。
 
@@ -155,25 +155,25 @@ Worktrees 切换回来时恢复该工作区的展开目录、选中文件、滚�
 
 底部快捷键栏左侧常驻 Git 状态，例如 `⎇ dev ↓0 ↑1 ↻`（落后上游 0 个提交，领先上游 1 个提交）。数值来自本地 `git status --short --branch`，不会自动请求网络 Fetch；已跟踪上游但没有分叉时显示 `↓0 ↑0`，未配置上游或 detached HEAD 时不虚构领先/落后计数，上游分支已删除时提示 upstream gone。
 
-点击这个状态区域仅打开已有的 Remote synchronization 界面；再在界面内按 `F` Fetch、`p` Pull（--ff-only）、`P` Push / Publish Branch。可直接按 `S` 打开同一界面；Git 状态刷新、提交及 Pull/Push 完成后同步状态会自动更新。小终端会优先保留分支和同步入口，再按空间显示计数。状态栏点击本身不会 Push 或 Pull。
+点击这个状态区域仅打开已有的 Remote synchronization 界面；再在界面内按 `F` Fetch、`p` Pull（--ff-only）、`P` Push / Publish Branch。可直接按 `Alt+S` 打开同一界面；Git 状态刷新、提交及 Pull/Push 完成后同步状态会自动更新。小终端会优先保留分支和同步入口，再按空间显示计数。状态栏点击本身不会 Push 或 Pull。
 
-**Publish Branch（新分支发布）**：当前分支没有 upstream 时，在 `S` 同步界面按 `P`（或在 Git 侧栏聚焦时直接按 `P`）打开 remote 选择列表；上下键选择目标 remote，`Enter` 查看确认，确认后执行非强制 `git push --set-upstream -- <remote> refs/heads/<branch>:refs/heads/<branch>` 并自动设置跟踪上游。`Esc` 返回列表或取消，不执行写入。已配置 upstream 的分支仍执行普通 Push；远程已有无法快进的提交时不强制覆盖。没有 remote 会显示配置提示，尚无 Commit 时需要先提交。执行前再次验证当前分支、目标 remote 与 tracking 配置；如果中途切换分支，不会推送原选中的分支。
+**Publish Branch（新分支发布）**：当前分支没有 upstream 时，用 `Alt+S` 打开同步界面后按 `P`（或在 Git 侧栏聚焦时直接按 `Alt+P`）打开 remote 选择列表；上下键选择目标 remote，`Enter` 查看确认，确认后执行非强制 `git push --set-upstream -- <remote> refs/heads/<branch>:refs/heads/<branch>` 并自动设置跟踪上游。`Esc` 返回列表或取消，不执行写入。已配置 upstream 的分支仍执行普通 Push；远程已有无法快进的提交时不强制覆盖。没有 remote 会显示配置提示，尚无 Commit 时需要先提交。执行前再次验证当前分支、目标 remote 与 tracking 配置；如果中途切换分支，不会推送原选中的分支。
 
 ## Settings
 
-主界面 `,` 或命令面板输入 `Settings` 打开独立设置界面。上下键选择、Enter/Space 切换、Esc 退出；包含 Tree Sticky Scroll、Compact Folders、Show hidden files 和进入 F4 快捷键管理。设置写入 `~/.config/forge/config.toml`（如有 XDG_CONFIG_HOME 则使用它），修改时保留其他 TOML 字段。F4 仍单独用于键位绑定。
+主界面 `F9` 或命令面板输入 `Settings` 打开独立设置界面。上下键选择、Enter/Space 切换、Esc 退出；包含 Tree Sticky Scroll、Compact Folders、Show hidden files 和进入 F4 快捷键管理。设置写入 `~/.config/forge/config.toml`（如有 XDG_CONFIG_HOME 则使用它），修改时保留其他 TOML 字段。F4 仍单独用于键位绑定。
 
 ## 大型工作区加载
 
 Files 首次只读取工作区根目录，目录展开时才异步加载子目录。文件列表采用单个后台文件系统任务读取、分类和排序，避免在成千上万个目录项之间反复切换异步工作线程。Git 状态独立计算，不阻塞根目录显示。
 
-文件系统监听按需注册：只监听工作区根目录、已展开并加载的目录和 Git 元数据，不在启动时递归扫描整个项目（尤其是依赖目录）。这些位置发生外部编辑会自动刷新；尚未展开的深层目录不主动监听，进入该目录时会加载最新内容，必要时可按 `r` 手动刷新整个文件树与 Git 状态。
+文件系统监听按需注册：只监听工作区根目录、已展开并加载的目录和 Git 元数据，不在启动时递归扫描整个项目（尤其是依赖目录）。这些位置发生外部编辑会自动刷新；尚未展开的深层目录不主动监听，进入该目录时会加载最新内容，必要时可按 `Ctrl+R` 手动刷新整个文件树与 Git 状态。
 
 ## 紧凑文件夹（Compact Folders）
 
 Files、Git CHANGES / STAGED 和 HISTORY 默认开启 Compact Folders，连续只有一个子目录的已展开层级压缩为同一行，例如 `frontend / src / views`。遇到分叉、同级文件或尚未展开/加载的目录即停止合并；点击或 Enter 仍操作真实的最深目录，保留完整路径、Git 改动范围与 Diff。窄侧栏会优先保留首尾目录（例如 `zenk-admin / … / system`），不挤掉文件数和状态。
 
-通过 `,` → Settings → Compact Folders 或命令面板搜索 `Compact Folders` 切换。设置保存到 `~/.config/forge/config.toml`（优先 XDG_CONFIG_HOME）：
+通过 `F9` → Compact Folders 或命令面板搜索 `Compact Folders` 切换。设置保存到 `~/.config/forge/config.toml`（优先 XDG_CONFIG_HOME）：
 
     compact_folders = true
 
@@ -183,7 +183,7 @@ Files、Git CHANGES / STAGED 和 HISTORY 默认开启 Compact Folders，连续�
 
 Files、Git Changes / Staged 以及 History 的树形列表默认启用 **Tree Sticky Scroll**。向下滚动时，滑出顶部的父目录会临时固定在侧栏顶部；吸顶标题使用贯穿侧栏整行的独立主题背景和左侧细色条，区别于普通目录或选中项；最多保留 7 行、且不超过侧栏高度的 40%。点击吸附标题会跳回对应目录，不会展开/收起树或替换右侧预览。
 
-使用 `:` / `Ctrl-K` 打开命令面板，搜索 `sticky`，执行 **View: Tree Sticky Scroll [On/Off] · toggle**。设置立即生效并写入 `~/.config/forge/config.toml`（设置 XDG_CONFIG_HOME 时遵循该位置）：
+使用 `Ctrl+K` 打开命令面板，搜索 `sticky`，执行 **View: Tree Sticky Scroll [On/Off] · toggle**。设置立即生效并写入 `~/.config/forge/config.toml`（设置 XDG_CONFIG_HOME 时遵循该位置）：
 
     tree_sticky_scroll = true
 
@@ -191,7 +191,7 @@ Files、Git Changes / Staged 以及 History 的树形列表默认启用 **Tree S
 
 设置为 `false` 可恢复普通滚动。配置重启后保留，不影响真实树结构、Git 操作或原本的“选中目录不更新右侧内容”行为。
 
-## 键位（Forge v0.3.3）
+## 键位（Forge v0.3.4）
 
 以 [Astro 网站的 Markdown 图文指南](https://creature-studio.github.io/forge/guide/) 为主要操作说明（对应源码 `web/src/content/guide.zh.md`，配有 19 张真实界面截图）。以下是当前实际绑定的速查；用户自定义键位以 `F4` 列表为准。
 
@@ -200,9 +200,11 @@ Files、Git Changes / Staged 以及 History 的树形列表默认启用 **Tree S
 | `F1` / `F2` | Files / Git 工作区 |
 | `F3` | Markdown Preview / Code 切换 |
 | `F4` / `F5` / `F9` | 键位设置 / Help / Settings |
+| `Ctrl+R` | 刷新文件树、Git 状态与提交历史 |
 | `Ctrl+P` | 模糊文件名查找 |
-| `Ctrl+F`（预览焦点） | 文件内搜索；全局内容搜索通过搜索图标或命令面板进入 |
-| `Ctrl+K` | Commands 命令面板 |
+| `Ctrl+F`（预览焦点） | 文件内搜索；`Ctrl+Shift+F` 或搜索图标进入全局内容搜索 |
+| `Alt+R`（搜索框内） | 切换正则；全局搜索框内的 `Ctrl+R` 刷新结果 |
+| `Ctrl+K` / `Ctrl+Shift+P` | Commands 命令面板 |
 | `Ctrl+E` | 内置文件编辑器 |
 | `Tab` / `Shift+Tab` | 切换焦点 |
 | `j/k`、`Enter`、`h/l` | 上下移动、展开、折叠 |
@@ -218,4 +220,4 @@ Files、Git Changes / Staged 以及 History 的树形列表默认启用 **Tree S
 | `Shift+F8` / `Alt+1..8` | 新 Shell 标签 / 标签切换 |
 | `Esc` | 返回或关闭当前弹窗；Terminal 焦点下交给 Shell |
 
-**旧键位注意：** `?`、`,`、`s/u` 不再是目前的默认 Help、Settings 和 Stage/Unstage 入口。查看 `F4` 而非沿用旧文档或网络上的历史截图。更完整的键盘映射与兼容旧键的行为见 [keyboard-shortcuts.md](keyboard-shortcuts.md)。
+**旧键位注意：** `?`、`,`、`s/u` 不再是目前的默认 Help、Settings 和 Stage/Unstage 入口。查看 `F4` 而非沿用旧文档或网络上的历史截图。更完整的键盘映射与旧键迁移说明见 [keyboard-shortcuts.md](keyboard-shortcuts.md)。

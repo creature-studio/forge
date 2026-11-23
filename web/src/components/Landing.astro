@@ -1,185 +1,558 @@
 ---
 import Preview from './Preview.astro';
-import '../styles/home-proof.css';
+import '../styles/landing.css';
 import faqZh from '../legacy/faq-zh.html?raw';
-import { Download, BookOpen, FolderOpen, GitBranch, Search, CodeXml, Zap, ArrowUpRight, ChevronRight, ArrowRight, Monitor, Apple, Terminal, Keyboard, FileCode, CircleCheck, Clock, GitCompareArrows, HardDrive, PanelLeft, MousePointer2, Layers3, Cpu } from '@lucide/astro';
+import { FORGE_TAG } from '../utils/version';
+import {
+  Download,
+  BookOpen,
+  ArrowUpRight,
+  ArrowRight,
+  ChevronRight,
+  Copy,
+  Check,
+} from '@lucide/astro';
+
+interface Props {
+  english?: boolean;
+}
 const { english = false } = Astro.props;
 const base = english ? '/forge/en/' : '/forge/';
-const data = english ? {
-  eyebrow:'OPEN SOURCE · RUST TUI',headline:'Files. Git. One terminal workspace.',
-  description:'Not a full IDE squeezed into a terminal. A native Rust workspace for files, code and Git—with complete mouse interactions alongside keyboard shortcuts, over SSH, in WSL or at your desk.',
-  download:'Get Forge v0.3.3',guide:'Explore docs',
-  features:[['File management','Browse, preview and edit with ease'],['Git workflow','Diff · Commit · Stash · History'],['Smart search','Find files and source instantly'],['Code insights','Git Blame · Change Peek · Focus'],['Lightweight','Native Rust, fast to launch']],
-  start:'Quick start',startDesc:'From installation to your first review in three steps.',
-  steps:[['Install Forge','Download and add to your PATH'],['Open your project','Run forge /path/to/project'],['Start working','Browse, edit, search and review Git changes']],
-  docs:'Documentation',docsDesc:'A practical guide to the tools and shortcuts.',
-  docRows:[['Quick start','Install, launch and basic usage','1-install-and-launch'],['Core features','File tree, editing, search and Git','2-workspace-layout-and-navigation'],['Git workflow','Review changes, stage and commit','6-git-changes-and-full-file-diff'],['Shortcuts & settings','Keyboard reference and preferences','12-commands-help-and-settings']],
-  full:'Browse all docs',release:'What’s new in v0.3.3',releaseDesc:'Clickable terminal tabs, focus-aware shortcuts and clearer Git history.',releaseLink:'Read release notes',
-  signals:['Native Rust','Full mouse support','Keyboard-first, not keyboard-only'],
-  proofEyebrow:'WHY FORGE / BUILT FOR THE TERMINAL',
-  proofTitle:'Less overhead. More flow.',
-  proofDescription:'Start fast, stay lightweight, and keep file and Git workflows in the same place. These measurements are a reproducible local sample, not a performance guarantee.',
-  benchmarkEyebrow:'MEASURED · LINUX x86_64',
-  benchmarkNote:'Local v0.3.3 Release build · warm file cache · 1,200 tracked source files in a collapsed folder · median of 3 runs. Startup = tmux launch to root listing; RSS sampled after 0.5 s. Hardware and workloads will vary.',
-  benchmarkLink:'Benchmark method',
-  benchmarkStats:[['≈39','ms','Root view ready'],['≈14.3','MiB','Idle memory (RSS)'],['≈17.2','MB','Release binary']],
-  values:[
-    ['Native, not Electron','Single compiled executable, without a browser engine or bundled web UI.'],
-    ['Load what you need','Background tasks, shallow folder watching and lazy previews keep large workspaces navigable.'],
-    ['Full mouse interaction','Click, double-click, right-click, drag, scroll, select and copy—not just keyboard shortcuts.'],
-    ['Made for the workflow','File tree, diffs, staging, history and an embedded shell. Not a replacement for an IDE.'],
-  ],
-  mouseEyebrow:'TUI / MOUSE INTERACTION',
-  mouseTitle:'A terminal app you can actually use with a mouse.',
-  mouseDescription:'Keyboard-first does not mean keyboard-only. Navigate and manage a real workspace with familiar pointer interactions, while keeping every shortcut close at hand.',
-  mousePoints:['Click & double-click to navigate','Right-click file actions','Drag panels & scrollbars','Wheel scrolling throughout','Select & copy source text','Hover hints & terminal tabs'],
-  mouseCaption:'Real Forge Activity Bar hover tooltip · click to inspect the full screenshot',
-  mouseLink:'Explore mouse interactions',
-  faq:'Frequently asked questions',faqIntro:'Answers to common questions about Forge.',
-} : {
-  eyebrow:'OPEN SOURCE · RUST TUI',headline:'文件与 Git，回到终端本身。',
-  description:'不是又一个塞进终端的重型 IDE。Forge 用原生 Rust 把文件、搜索和 Git 串成轻巧工作台，除了键盘快捷键，还支持完整的鼠标操作，让 TUI 也能直观地点击、拖动与选择。',
-  download:'立即下载 v0.3.3',guide:'查看文档',
-  features:[['文件管理','快速浏览与定位项目文件'],['Git 全流程','Diff · Commit · Stash · History'],['智能搜索','项目搜索与文件内搜索'],['代码洞察','Git Blame · 变更预览 · 关注点'],['轻量高效','Rust 构建，启动快，资源占用低']],
-  start:'快速上手',startDesc:'从安装到上手，只需要三个步骤。',
-  steps:[['安装 Forge','下载并添加到 PATH'],['打开项目','forge /path/to/project'],['开始使用','浏览文件、编辑代码、查看 Git 变更']],
-  docs:'文档导航',docsDesc:'快速找到对应功能的使用说明。',
-  docRows:[['快速开始','安装、启动与基本使用','1-安装更新与启动'],['核心功能','文件管理、编辑、搜索、Git 工作流','3-文件浏览目录与预览'],['Git 工作流','变更预览、暂存与提交','7-git-changes-与完整文件-diff'],['快捷键与设置','完整快捷键与操作说明','16-settings主题与快捷键']],
-  full:'查看完整文档',release:'v0.3.3 更新说明',releaseDesc:'可点击的终端标签、焦点快捷键提示及更清晰的 Git 提交详情。',releaseLink:'查看发布说明',
-  signals:['原生 Rust','完整鼠标交互','键盘优先，但不限键盘'],
-  proofEyebrow:'WHY FORGE / 为终端而设计',
-  proofTitle:'把精力留给代码，把负担留在外面。',
-  proofDescription:'不追求把 IDE 的所有功能搬进 TUI，而是把文件与 Git 的高频操作做到足够快、足够轻、足够顺手。性能数据来自可复核的本地样例测试。',
-  benchmarkEyebrow:'实测样例 · LINUX x86_64',
-  benchmarkNote:'本地 v0.3.3 Release 构建；文件系统缓存已预热；1,200 个被 Git 跟踪的源码文件位于未展开目录；3 次运行中位数。启动指 tmux 启动到根目录可见；RSS 在启动后约 0.5 秒采样。不同硬件和负载结果会变化。',
-  benchmarkLink:'查看测试方法',
-  benchmarkStats:[['≈39','ms','根目录首次可见'],['≈14.3','MiB','空闲内存 RSS'],['≈17.2','MB','Release 可执行文件']],
-  values:[
-    ['原生运行，无需 Electron','单个编译后的可执行文件，无需附带浏览器引擎或 Web UI 服务。'],
-    ['按需加载，减少等待','后台任务、浅层目录监听与按需预览，避免启动时无差别扫描整棵项目树。'],
-    ['全面的鼠标操作','点击、双击、右键菜单、拖动、滚轮、文字选择复制，配合焦点感知快捷键。'],
-    ['聚焦文件与 Git 工作流','文件树、Diff、暂存、历史和内嵌 Shell 紧密衔接，不取代 IDE。'],
-  ],
-  mouseEyebrow:'TUI / MOUSE INTERACTION',
-  mouseTitle:'不只是能点，而是完整的鼠标交互。',
-  mouseDescription:'键盘优先，不代表只能靠键盘。Forge 为常见开发操作提供完整的鼠标交互路径，用熟悉的点击、拖动和选择方式操作终端工作台。',
-  mousePoints:['点击 / 双击浏览文件','右键菜单与文件操作','拖动面板与滚动条','滚轮浏览文件和 Diff','选择代码并复制','悬停说明与终端标签操作'],
-  mouseCaption:'真实 Forge 界面 · Activity Bar 鼠标悬停说明，点击查看高清截图',
-  mouseLink:'查看鼠标交互说明',
-  faq:'常见问题',faqIntro:'关于安装、Git 工作流、字体与配置。',
-};
-const featureIcons = [FolderOpen, GitBranch, Search, CodeXml, Zap];
-const docsIcons = [BookOpen, FileCode, GitCompareArrows, Keyboard];
-const valueIcons = [Cpu, Layers3, MousePointer2, PanelLeft];
+const installCmd = 'curl -fsSL https://creature-studio.github.io/forge/install.sh | sh';
+
+const copy = english
+  ? {
+      kicker: 'OPEN SOURCE · NATIVE RUST TUI',
+      headline: 'Files and Git, unified in one terminal.',
+      summary:
+        'Browse project trees, inspect full-file diffs, search code, and run persistent shells in one lightweight workspace—built with full mouse control alongside keyboard speed.',
+      copyBtn: 'Copy',
+      copiedBtn: 'Copied',
+      download: `Download ${FORGE_TAG}`,
+      guide: 'Read Guide',
+      platforms: ['Linux (x64 / ARM64)', 'macOS (Intel / Apple Silicon)', 'WSL', 'MIT'],
+
+      ledgerKicker: 'ENGINEERING & TELEMETRY',
+      ledgerTitle: 'Zero runtime bloat. Instant terminal flow.',
+      ledgerLead:
+        'Forge skips embedded browsers and heavy background daemons, focusing purely on fast everyday file and Git operations. Sample figures below are reproducible local measurements.',
+      benchHeader: 'MEASURED SAMPLE · LINUX x86_64 RELEASE',
+      benchStats: [
+        ['≈39', 'ms', 'Root listing ready'],
+        ['≈14.3', 'MiB', 'Idle memory (RSS)'],
+        ['≈17.2', 'MB', 'Single binary'],
+      ],
+      benchNote:
+        'Measured on a local Release build with warm filesystem cache across 1,200 tracked files in a collapsed tree (median of 3 runs; RSS sampled at 0.5 s). Results vary by hardware and repository size.',
+      benchLink: 'Read benchmark method',
+      principles: [
+        [
+          'Single native executable',
+          'Compiled Rust binary with tree-sitter/Sublime syntax highlighting—no Electron, Node, or local web server.',
+        ],
+        [
+          'On-demand workspace loading',
+          'Shallow directory watching, cancellable background jobs, and paged previews keep large repositories responsive.',
+        ],
+        [
+          'Pointer + keyboard parity',
+          'Click, double-click, right-click menus, draggable splitters, scrollbars, and text selection work out of the box.',
+        ],
+        [
+          'Connected file & Git loop',
+          'Move from file tree to side-by-side diffs, hunk staging, blame, stashes, and shell tabs without context switching.',
+        ],
+      ],
+
+      mouseKicker: 'DUAL-MODALITY TUI',
+      mouseTitle: 'Keyboard-first never meant mouse-hostile.',
+      mouseLead:
+        'Use intuitive pointer gestures over SSH, in WSL, or locally while keeping every context-aware shortcut visible in the footer.',
+      mousePoints: [
+        'Click & double-click navigation',
+        'Right-click file & Git menus',
+        'Draggable panes & scrollbars',
+        'Smooth wheel scrolling in diffs',
+        'Select & copy source or shell text',
+        'Hover tooltips & clickable shell tabs',
+      ],
+      mouseCaption: 'Real Forge TUI · Activity Bar hover tooltip & contextual footer',
+      mouseRaw: 'Inspect full-size capture',
+      mouseLink: 'Explore mouse & compact layout guide',
+      mouseAnchor: '13-mouse-hover-and-compact-layout',
+
+      startKicker: '01 / QUICK START',
+      startTitle: 'Up and running in seconds.',
+      startDesc: 'Prebuilt SHA-256 verified archives for Linux and macOS—no Rust toolchain required.',
+      steps: [
+        ['Install binary', 'Run the official installer script or download a release archive into ~/.local/bin.'],
+        ['Launch in any folder', 'Execute forge in a Git repository or plain directory to open the workspace.'],
+        ['Navigate & review', 'Switch between Files, Git Diff, Search, and Shell tabs via shortcuts or mouse clicks.'],
+      ],
+      keys: [
+        ['F1', 'Files'],
+        ['F2', 'Git'],
+        ['Ctrl+P', 'Find'],
+        ['Ctrl+K', 'Palette'],
+        ['F8', 'Shell'],
+        ['F4', 'Keys'],
+      ],
+      fullGuide: 'Installation & launch reference',
+      startAnchor: '1-install-and-launch',
+
+      docsKicker: '02 / DOCUMENTATION',
+      docsTitle: 'Practical workflow guide.',
+      docsDesc: 'Step-by-step documentation illustrated with 19 real Forge TUI screenshots.',
+      docRows: [
+        ['01', 'Install & launch', 'Prebuilt binaries, updates, and building from source', '1-install-and-launch'],
+        ['02', 'Workspace & navigation', 'Activity Bar, sidebar, preview pane, and focus switching', '2-workspace-layout-and-navigation'],
+        ['03', 'Git changes & full-file diff', 'Side-by-side diffs, Focus Overview, staging, and commits', '6-git-changes-and-full-file-diff'],
+        ['04', 'Commands, themes & keys', 'Command palette, 5 built-in themes, and keybinding manager', '12-commands-help-and-settings'],
+      ],
+      releaseSummary: 'Responsive dialogs, focus-aware footer, TUI mouse forwarding & multi-tab shell refinements.',
+      releaseCta: 'Release notes',
+
+      faqKicker: 'FAQ',
+      faqTitle: 'Common questions.',
+      faqLead: 'Scope, environment requirements, safety boundaries, and customization.',
+      faqs: [
+        [
+          'How is Forge different from lazygit or ranger?',
+          'lazygit focuses on Git; ranger and yazi focus on files. Forge connects both into a single TUI workspace—file tree, syntax preview, full-file diffs, staging, and persistent shell tabs—without trying to replace your full IDE.',
+        ],
+        [
+          'What do I need to run Forge?',
+          'Git and a modern terminal supporting ANSI colors, mouse reporting, and clipboard access. Prebuilt binaries target Linux (x86_64 / aarch64 glibc) and macOS (Intel / Apple Silicon); Windows works smoothly via WSL.',
+        ],
+        [
+          'Do I need a Nerd Font installed?',
+          'No. Forge uses crisp built-in Unicode icons by default. You can opt into Nerd Font glyphs with FORGE_ICONS=nerd or pure ASCII with FORGE_ICONS=ascii.',
+        ],
+        [
+          'Will Forge ever overwrite my repository automatically?',
+          'Write operations have strict boundaries: staging never discards working-tree edits, destructive actions (discard/delete) require explicit confirmation, and Forge never force-pushes or auto-commits merges.',
+        ],
+      ],
+
+      ctaTitle: 'Bring calm back to your terminal.',
+      ctaDesc: 'Free, MIT-licensed, and built in native Rust. Install in one command or inspect the source on GitHub.',
+    }
+  : {
+      kicker: 'OPEN SOURCE · NATIVE RUST TUI',
+      headline: '文件与 Git，合一于终端。',
+      summary:
+        '原生 Rust 打造的轻量终端工作台。在同一个界面完成目录浏览、完整文件 Diff、全局搜索与多标签 Shell，兼顾全键盘效率与完整鼠标交互。',
+      copyBtn: '复制',
+      copiedBtn: '已复制',
+      download: `下载 ${FORGE_TAG}`,
+      guide: '阅读指南',
+      platforms: ['Linux (x64 / ARM64)', 'macOS (Intel / Apple Silicon)', 'WSL', 'MIT 开源'],
+
+      ledgerKicker: 'ENGINEERING & TELEMETRY',
+      ledgerTitle: '克制架构，把速度还给终端。',
+      ledgerLead:
+        '不塞入浏览器引擎与冗余守护进程，专注于把文件浏览与 Git 审查的高频回路做到极快、极稳、极顺手。以下为可复核的本地实测样例。',
+      benchHeader: '实测样例 · LINUX x86_64 RELEASE',
+      benchStats: [
+        ['≈39', 'ms', '根目录首次就绪'],
+        ['≈14.3', 'MiB', '空闲内存占用 RSS'],
+        ['≈17.2', 'MB', '单一可执行文件'],
+      ],
+      benchNote:
+        '基于本地 Release 构建实测：文件系统缓存预热，含 1,200 个受跟踪源码文件的折叠目录，取 3 次运行中位数；RSS 于启动后 0.5 秒采样。不同硬件与仓库规模会有差异。',
+      benchLink: '查看测试方法说明',
+      principles: [
+        [
+          '原生单文件，零 Electron 负担',
+          '编译为独立原生二进制，内置 20+ 语言语法高亮与 Markdown 渲染，无需运行时或本地 Web 服务。',
+        ],
+        [
+          '按需加载与后台异步调度',
+          '浅层目录监听、可取消异步任务与分页预览机制，避免启动时阻塞式扫描整棵大型代码树。',
+        ],
+        [
+          '鼠标与键盘双模态同权',
+          '点击、双击、右键菜单、拖拽分栏与滚动条、框选复制开箱即用，配合底部焦点感知快捷键提示。',
+        ],
+        [
+          '文件树与 Git 审查闭环',
+          '从代码预览无缝切入完整文件并排 Diff、Hunk 暂存、Blame、Stash 与内嵌终端，告别工具间频繁跳转。',
+        ],
+      ],
+
+      mouseKicker: 'DUAL-MODALITY TUI',
+      mouseTitle: '键盘优先，但绝不只靠死记键位。',
+      mouseLead:
+        '无论在本地终端、WSL 还是远程 SSH 会话中，都能用直观的点击、拖拽和滚轮操作整个工作区，同时让每一个高频快捷键触手可及。',
+      mousePoints: [
+        '点击与双击展开目录和文件',
+        '右键上下文菜单执行文件与 Git 操作',
+        '鼠标拖拽分栏宽度与独立滚动条',
+        '滚轮顺滑浏览长文件与并排 Diff',
+        '直接框选源码或终端输出并复制',
+        'Activity Bar 悬停提示与可点击终端标签',
+      ],
+      mouseCaption: '真实 Forge 界面 · Activity Bar 悬停提示与底部焦点状态栏',
+      mouseRaw: '查看高清原图',
+      mouseLink: '阅读鼠标与窄屏布局说明',
+      mouseAnchor: '17-鼠标hover-与窄屏布局',
+
+      startKicker: '01 / QUICK START',
+      startTitle: '三步进入工作状态。',
+      startDesc: '官方为 Linux 与 macOS 提供附带 SHA-256 校验的预编译包，无需安装 Rust 工具链。',
+      steps: [
+        ['安装可执行文件', '执行上方一行安装脚本自动校验并装入 ~/.local/bin，或从 GitHub Releases 下载。'],
+        ['在项目目录启动', '进入任意 Git 仓库或普通目录执行 forge，即刻打开工作台。'],
+        ['浏览、搜索与提交', '用 F1/F2 或左侧图标切换文件与 Git，审阅完整 Diff、暂存改动并完成提交。'],
+      ],
+      keys: [
+        ['F1', '文件'],
+        ['F2', 'Git'],
+        ['Ctrl+P', '找文件'],
+        ['Ctrl+K', '命令/搜索'],
+        ['F8', '终端'],
+        ['F4', '键位'],
+      ],
+      fullGuide: '查看完整安装与更新指南',
+      startAnchor: '1-安装更新与启动',
+
+      docsKicker: '02 / DOCUMENTATION',
+      docsTitle: '图文操作文档导航。',
+      docsDesc: '基于真实运行环境截取的 19 张高清配图，覆盖从日常浏览到分支、Stash 与自定义主题。',
+      docRows: [
+        ['01', '安装、更新与启动', '脚本安装、自更新 forge update 与源码构建说明', '1-安装更新与启动'],
+        ['02', '文件浏览、目录与预览', '目录树导航、语法高亮、内置编辑与批量文件操作', '3-文件浏览目录与预览'],
+        ['03', 'Git Changes 与完整文件 Diff', '并排差异对比、Focus Overview 导航、暂存与 Commit', '7-git-changes-与完整文件-diff'],
+        ['04', 'Settings、主题与快捷键', '五套内置暗色主题、图标模式与 F4 键位管理器', '16-settings主题与快捷键'],
+      ],
+      releaseSummary: '响应式统一弹窗、焦点感知状态栏、终端鼠标手势透传与多标签交互升级。',
+      releaseCta: '查看发布说明',
+
+      faqKicker: 'FAQ',
+      faqTitle: '常见问题解答。',
+      faqLead: '关于工具定位、终端环境、字体图标、语法高亮与仓库安全边界。',
+      faqs: [],
+
+      ctaTitle: '让终端工作流回归利落。',
+      ctaDesc: 'MIT 开源协议，原生 Rust 构建。一行命令即可体验，或在 GitHub 查看完整源码。',
+    };
 ---
-<main id="main" class="landing-green">
-  <section class="hero shell" aria-labelledby="hero-title">
-    <div class="hero-grid">
-      <div class="hero-copy">
-        <div class="hero-eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>{data.eyebrow}</div>
-        <h1 id="hero-title">Forge</h1>
-        <h2>{data.headline}</h2>
-        <p class="summary">{data.description}</p>
-        <div class="hero-signals" aria-label={english ? 'Design principles' : '产品特点'}>
-          {data.signals.map((signal) => <span><CircleCheck size={14} strokeWidth={1.9} aria-hidden="true" />{signal}</span>)}
+<main id="main">
+  <!-- 1. Full-Bleed Poster Hero -->
+  <section class="hero-plane" aria-labelledby="hero-title">
+    <div class="shell hero-layout">
+      <div class="hero-column">
+        <div class="hero-kicker hero-stagger-1">
+          <span class="hero-kicker-dot" aria-hidden="true"></span>
+          <span>{copy.kicker}</span>
         </div>
-        <div class="actions">
-          <a class="btn btn-primary hero-download" href="https://github.com/creature-studio/forge/releases/latest"><Download size={19} strokeWidth={2} aria-hidden="true" />{data.download}</a>
-          <a class="btn btn-secondary hero-docs" href={`${base}guide/`}><BookOpen size={19} strokeWidth={1.9} aria-hidden="true" />{data.guide}</a>
-        </div>
-        <div class="hero-meta" aria-label={english ? 'Supported platforms' : '支持的平台'}>
-          <span><Monitor size={15} aria-hidden="true" />WSL</span>
-          <span><Apple size={15} aria-hidden="true" />macOS</span>
-          <span><Terminal size={15} aria-hidden="true" />Linux</span>
-          <i aria-hidden="true"></i><span><CircleCheck size={15} aria-hidden="true" />Rust · MIT</span>
-        </div>
-      </div>
-      <Preview />
-    </div>
-  </section>
-  <section class="proof" id="why-forge" aria-labelledby="proof-title">
-    <div class="shell">
-      <header class="proof-intro">
-        <div>
-          <span class="proof-kicker"><span class="proof-kicker-rule" aria-hidden="true"></span>{data.proofEyebrow}</span>
-          <h2 id="proof-title">{data.proofTitle}</h2>
-        </div>
-        <p>{data.proofDescription}</p>
-      </header>
-      <div class="proof-grid">
-        <article class="benchmark-panel" aria-label={english ? 'Local performance measurements' : '本地性能实测'}>
-          <div class="benchmark-header"><span class="benchmark-live-dot" aria-hidden="true"></span>{data.benchmarkEyebrow}</div>
-          <div class="benchmark-values">
-            {data.benchmarkStats.map(([value, unit, label]) =>
-              <div class="benchmark-item"><div class="benchmark-number">{value}<span>{unit}</span></div><p>{label}</p></div>
-            )}
+        <h1 id="hero-title" class="hero-brand hero-stagger-1">Forge</h1>
+        <h2 class="hero-headline hero-stagger-2">{copy.headline}</h2>
+        <p class="hero-summary hero-stagger-2">{copy.summary}</p>
+
+        <div class="cli-install hero-stagger-3" data-cli-box data-cmd={installCmd}>
+          <div class="cli-code-wrap">
+            <span class="cli-prompt" aria-hidden="true">$</span>
+            <code class="cli-command">{installCmd}</code>
           </div>
-          <p class="benchmark-disclaimer">{data.benchmarkNote}</p>
-          <a class="benchmark-link" href="https://github.com/creature-studio/forge/blob/master/docs/performance.md">{data.benchmarkLink}<ArrowUpRight size={15} aria-hidden="true" /></a>
-        </article>
-        <div class="value-grid" aria-label={english ? 'Product advantages' : '产品设计原则'}>
-          {data.values.map(([title, description], i) => {
-            const Icon = valueIcons[i];
-            return <article class="value-card"><span class="value-icon"><Icon size={21} strokeWidth={1.8} aria-hidden="true" /></span><span class="value-index">0{i+1}</span><h3>{title}</h3><p>{description}</p></article>
-          })}
+          <button
+            type="button"
+            class="cli-copy-btn"
+            data-cli-copy
+            data-label-default={copy.copyBtn}
+            data-label-copied={copy.copiedBtn}
+            aria-label={english ? 'Copy install command' : '复制安装命令'}
+          >
+            <Copy size={12} strokeWidth={2} class="copy-icon-default" aria-hidden="true" />
+            <Check size={12} strokeWidth={2.4} class="copy-icon-done" style="display:none" aria-hidden="true" />
+            <span data-cli-copy-text>{copy.copyBtn}</span>
+          </button>
+        </div>
+
+        <div class="hero-actions hero-stagger-3">
+          <a class="btn btn-primary" href="https://github.com/creature-studio/forge/releases/latest">
+            <Download size={16} strokeWidth={2.2} aria-hidden="true" />
+            <span>{copy.download}</span>
+          </a>
+          <a class="btn btn-secondary" href={`${base}guide/`}>
+            <BookOpen size={16} strokeWidth={2} aria-hidden="true" />
+            <span>{copy.guide}</span>
+          </a>
+        </div>
+
+        <div class="hero-platforms hero-stagger-3" aria-label={english ? 'Supported platforms' : '支持平台'}>
+          {copy.platforms.map((item, idx) => (
+            <>
+              {idx > 0 && <span class="sep" aria-hidden="true">·</span>}
+              <span>{item}</span>
+            </>
+          ))}
+        </div>
+      </div>
+
+      <Preview english={english} />
+    </div>
+  </section>
+
+  <!-- 2. Telemetry & Engineering Ledger (Cardless Architectural Layout) -->
+  <section class="editorial-section reveal-section" id="why-forge" aria-labelledby="ledger-title">
+    <div class="shell">
+      <header class="section-header-split">
+        <div>
+          <div class="section-kicker">{copy.ledgerKicker}</div>
+          <h2 id="ledger-title" class="section-title">{copy.ledgerTitle}</h2>
+        </div>
+        <p class="section-lead">{copy.ledgerLead}</p>
+      </header>
+
+      <div class="ledger-frame">
+        <div class="telemetry-column" aria-label={english ? 'Local benchmark sample' : '本地性能实测样例'}>
+          <div>
+            <div class="telemetry-eyebrow">
+              <span>{copy.benchHeader}</span>
+              <span>{FORGE_TAG}</span>
+            </div>
+            <div class="telemetry-metrics">
+              {copy.benchStats.map(([num, unit, label]) => (
+                <div class="metric-cell">
+                  <div class="metric-value">
+                    <span>{num}</span>
+                    <span class="metric-unit">{unit}</span>
+                  </div>
+                  <p class="metric-label">{label}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p class="telemetry-footnote">{copy.benchNote}</p>
+            <a class="inline-arrow-link" style="margin-top: 14px;" href="https://github.com/creature-studio/forge/blob/master/docs/performance.md">
+              <span>{copy.benchLink}</span>
+              <ArrowUpRight size={14} strokeWidth={2} aria-hidden="true" />
+            </a>
+          </div>
+        </div>
+
+        <div class="principles-column" aria-label={english ? 'Architecture principles' : '工程设计原则'}>
+          {copy.principles.map(([title, desc], idx) => (
+            <div class="principle-row">
+              <span class="principle-index">0{idx + 1}</span>
+              <div class="principle-body">
+                <h3>{title}</h3>
+                <p>{desc}</p>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   </section>
-  <section class="mouse-spotlight shell" aria-labelledby="mouse-spotlight-title">
-    <div class="mouse-spotlight-copy">
-      <span class="mouse-spotlight-kicker"><MousePointer2 size={16} strokeWidth={1.8} aria-hidden="true" />{data.mouseEyebrow}</span>
-      <h2 id="mouse-spotlight-title">{data.mouseTitle}</h2>
-      <p>{data.mouseDescription}</p>
-      <ul class="mouse-capabilities">
-        {data.mousePoints.map((point) => <li><CircleCheck size={15} strokeWidth={2} aria-hidden="true" />{point}</li>)}
-      </ul>
-      <a class="mouse-spotlight-link" href={`${base}guide/#${english?'13-mouse-hover-and-compact-layout':'17-鼠标hover-与窄屏布局'}`}>
-        {data.mouseLink}<ArrowRight size={16} strokeWidth={1.8} aria-hidden="true" />
-      </a>
+
+  <!-- 3. Dual-Modality Spotlight (Mouse + Keyboard) -->
+  <section class="editorial-section reveal-section" id="features" aria-labelledby="modality-title">
+    <div class="shell modality-grid">
+      <div class="modality-copy">
+        <div class="section-kicker">{copy.mouseKicker}</div>
+        <h2 id="modality-title" class="section-title">{copy.mouseTitle}</h2>
+        <p class="section-lead">{copy.mouseLead}</p>
+
+        <ul class="modality-matrix">
+          {copy.mousePoints.map((point) => (
+            <li>
+              <span class="modality-bullet" aria-hidden="true"></span>
+              <span>{point}</span>
+            </li>
+          ))}
+        </ul>
+
+        <a class="inline-arrow-link" href={`${base}guide/#${copy.mouseAnchor}`}>
+          <span>{copy.mouseLink}</span>
+          <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
+        </a>
+      </div>
+
+      <figure class="modality-visual">
+        <a class="modality-frame" href="/forge/assets/guide/hover.webp" target="_blank" rel="noopener" aria-label={copy.mouseCaption}>
+          <img
+            src="/forge/assets/guide/hover.webp"
+            width="1366"
+            height="837"
+            loading="lazy"
+            decoding="async"
+            alt={copy.mouseCaption}
+          />
+        </a>
+        <figcaption class="modality-caption">
+          <span>{copy.mouseCaption}</span>
+          <span>{copy.mouseRaw} ↗</span>
+        </figcaption>
+      </figure>
     </div>
-    <figure class="mouse-spotlight-visual">
-      <a href="/forge/assets/guide/hover.webp" aria-label={data.mouseCaption}>
-        <img src="/forge/assets/guide/hover.webp" width="1366" height="837" loading="lazy" decoding="async" alt={data.mouseCaption} />
-      </a>
-      <figcaption><span class="mouse-preview-dot" aria-hidden="true"></span>{data.mouseCaption}</figcaption>
-    </figure>
   </section>
-  <section class="highlights" aria-label={english ? 'Core features' : '核心功能'}>
-    <div class="shell highlight-grid">
-      {data.features.map(([title, description],i) => {
-        const Icon = featureIcons[i];
-        return <div class="highlight"><Icon size={28} strokeWidth={1.9} aria-hidden="true"/><h3>{title}</h3><p>{description}</p></div>
-      })}
-    </div>
-  </section>
-  <section class="resources shell" aria-label={english ? 'Get started and documentation' : '快速开始与文档导航'}>
-    <div class="resources-grid">
-      <article class="resource resource-card quickstart-card">
-        <div class="resource-heading"><div><span class="card-overline">01 / GET STARTED</span><h2>{data.start}</h2></div><Terminal size={23} strokeWidth={1.9} class="card-heading-icon" aria-hidden="true" /></div>
-        <p>{data.startDesc}</p>
-        <ol class="quick-steps">
-          {data.steps.map(([title, description],i) => <li><span class="step-number">{i+1}</span><strong>{title}</strong><span class="step-description">{description}</span></li>)}
+
+  <!-- 4. Quickstart & Documentation Index -->
+  <section class="editorial-section reveal-section" aria-label={english ? 'Quick start and documentation' : '快速上手与文档导航'}>
+    <div class="shell workflow-split">
+      <div>
+        <div class="workflow-col-kicker">{copy.startKicker}</div>
+        <h2 class="workflow-col-title">{copy.startTitle}</h2>
+        <p class="workflow-col-desc">{copy.startDesc}</p>
+
+        <ol class="step-stream">
+          {copy.steps.map(([title, desc], idx) => (
+            <li>
+              <span class="step-idx">0{idx + 1}</span>
+              <div class="step-body">
+                <strong>{title}</strong>
+                <span>{desc}</span>
+              </div>
+            </li>
+          ))}
         </ol>
-        <a class="card-bottom-link" href={`${base}guide/#${english?'1-install-and-launch':'1-安装更新与启动'}`}>{data.full}<ArrowRight size={16} aria-hidden="true" /></a>
-      </article>
-      <article class="resource resource-card doc-card">
-        <div class="resource-heading"><div><span class="card-overline">02 / DOCUMENTATION</span><h2>{data.docs}</h2></div><BookOpen size={23} strokeWidth={1.9} class="card-heading-icon" aria-hidden="true" /></div>
-        <p>{data.docsDesc}</p>
-        <div class="doc-links">
-          {data.docRows.map(([title, description, anchor],i) => {
-            const Icon=docsIcons[i];
-            return <a class="doc-link-row" href={`${base}guide/#${anchor}`}><Icon size={18} strokeWidth={1.9} class="doc-row-icon" aria-hidden="true" /><span class="doc-link-title">{title}</span><span class="doc-link-summary">{description}</span><ChevronRight size={17} strokeWidth={1.9} aria-hidden="true" /></a>
-          })}
+
+        <div class="keybinding-strip" aria-label={english ? 'Essential shortcuts' : '核心快捷键'}>
+          {copy.keys.map(([key, action]) => (
+            <span class="keybinding-item">
+              <kbd>{key}</kbd>
+              <span>{action}</span>
+            </span>
+          ))}
         </div>
-      </article>
+
+        <a class="inline-arrow-link" href={`${base}guide/#${copy.startAnchor}`}>
+          <span>{copy.fullGuide}</span>
+          <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
+        </a>
+      </div>
+
+      <div>
+        <div class="workflow-col-kicker">{copy.docsKicker}</div>
+        <h2 class="workflow-col-title">{copy.docsTitle}</h2>
+        <p class="workflow-col-desc">{copy.docsDesc}</p>
+
+        <div class="docs-ledger">
+          {copy.docRows.map(([num, title, summary, anchor]) => (
+            <a class="docs-ledger-row" href={`${base}guide/#${anchor}`}>
+              <span class="docs-ledger-num">{num}</span>
+              <span class="docs-ledger-text">
+                <strong>{title}</strong>
+                <span>{summary}</span>
+              </span>
+              <ChevronRight size={16} strokeWidth={2} class="docs-ledger-arrow" aria-hidden="true" />
+            </a>
+          ))}
+        </div>
+
+        <a class="release-banner" href={`${base}releases/#v034`}>
+          <span class="release-banner-left">
+            <span class="release-banner-tag">{FORGE_TAG}</span>
+            <span class="release-banner-text">{copy.releaseSummary}</span>
+          </span>
+          <span class="release-banner-cta">
+            <span>{copy.releaseCta}</span>
+            <ArrowUpRight size={14} strokeWidth={2} aria-hidden="true" />
+          </span>
+        </a>
+      </div>
     </div>
-    <a class="release-note-strip" href={`${base}releases/#v030`}>
-      <span class="release-badge"><Clock size={16} strokeWidth={1.9} aria-hidden="true" />v0.3.3</span>
-      <span class="release-headline">{data.release}</span>
-      <span class="release-excerpt">{data.releaseDesc}</span>
-      <span class="release-more">{data.releaseLink}<ArrowUpRight size={16} aria-hidden="true" /></span>
-    </a>
   </section>
-  {!english && <section class="faq shell" aria-labelledby="faq-title"><div class="faq-heading"><h2 id="faq-title">{data.faq}</h2><p>{data.faqIntro}</p></div><div class="faq-list"><Fragment set:html={faqZh} /></div></section>}
+
+  <!-- 5. FAQ -->
+  <section class="editorial-section reveal-section" aria-labelledby="faq-title">
+    <div class="shell faq-layout">
+      <div>
+        <div class="section-kicker">{copy.faqKicker}</div>
+        <h2 id="faq-title" class="section-title">{copy.faqTitle}</h2>
+        <p class="section-lead" style="margin-top: 14px;">{copy.faqLead}</p>
+      </div>
+      <div class="faq-list">
+        {english ? (
+          copy.faqs.map(([q, a], idx) => (
+            <details open={idx === 0}>
+              <summary>{q}</summary>
+              <p>{a}</p>
+            </details>
+          ))
+        ) : (
+          <Fragment set:html={faqZh} />
+        )}
+      </div>
+    </div>
+  </section>
+
+  <!-- 6. Final CTA -->
+  <section class="final-cta reveal-section" aria-labelledby="final-cta-title">
+    <div class="shell final-cta-inner">
+      <div class="final-cta-copy">
+        <div class="section-kicker">GET FORGE</div>
+        <h2 id="final-cta-title">{copy.ctaTitle}</h2>
+        <p>{copy.ctaDesc}</p>
+      </div>
+      <div class="final-cta-actions">
+        <a class="btn btn-primary" href="https://github.com/creature-studio/forge/releases/latest">
+          <Download size={16} strokeWidth={2.2} aria-hidden="true" />
+          <span>{copy.download}</span>
+        </a>
+        <a class="btn btn-secondary" href={`${base}guide/`}>
+          <BookOpen size={16} strokeWidth={2} aria-hidden="true" />
+          <span>{copy.guide}</span>
+        </a>
+      </div>
+    </div>
+  </section>
 </main>
+
+<script>
+  document.documentElement.classList.add('js-ready');
+
+  // Scroll-linked section reveal
+  const revealTargets = document.querySelectorAll<HTMLElement>('.reveal-section');
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add('is-visible');
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.08, rootMargin: '0px 0px -40px 0px' }
+    );
+    revealTargets.forEach((el) => observer.observe(el));
+  } else {
+    revealTargets.forEach((el) => el.classList.add('is-visible'));
+  }
+
+  // One-click CLI install command copy
+  document.querySelectorAll<HTMLElement>('[data-cli-box]').forEach((box) => {
+    const btn = box.querySelector<HTMLButtonElement>('[data-cli-copy]');
+    const textSpan = box.querySelector<HTMLElement>('[data-cli-copy-text]');
+    const iconDefault = box.querySelector<HTMLElement>('.copy-icon-default');
+    const iconDone = box.querySelector<HTMLElement>('.copy-icon-done');
+    const cmd = box.dataset.cmd || '';
+    if (!btn || !textSpan) return;
+
+    let timer: number | undefined;
+    const triggerCopy = async () => {
+      try {
+        await navigator.clipboard.writeText(cmd);
+        box.classList.add('is-copied');
+        textSpan.textContent = btn.dataset.labelCopied || 'Copied';
+        if (iconDefault) iconDefault.style.display = 'none';
+        if (iconDone) iconDone.style.display = 'inline-block';
+        window.clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          box.classList.remove('is-copied');
+          textSpan.textContent = btn.dataset.labelDefault || 'Copy';
+          if (iconDefault) iconDefault.style.display = 'inline-block';
+          if (iconDone) iconDone.style.display = 'none';
+        }, 1800);
+      } catch {
+        // Fallback selection
+      }
+    };
+
+    btn.addEventListener('click', triggerCopy);
+  });
+</script>

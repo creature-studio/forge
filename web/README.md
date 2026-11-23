@@ -5,7 +5,7 @@ The official Forge site is statically generated with Astro and published at
 
 ## Local development
 
-Requires Node.js 22.22+ and npm.
+Requires Node.js 22+ and npm.
 
 ```sh
 cd web
@@ -19,29 +19,28 @@ python3 scripts/check-site-seo.py
 `web/dist/` is the production output and is the only directory deployed.
 `web/public/` contains the real terminal screenshots and icons. The root
 `install.sh` is copied to `web/public/install.sh` before each production build,
-so the download stays in sync. The public directory also contains robots.txt.
+so the download stays in sync. The public directory also contains `robots.txt`.
 Astro's sitemap integration generates `sitemap-index.xml` and
 `sitemap-0.xml`. All links preserve the `/forge/` base path.
 
 - `src/pages/` owns `/`, `/en/`, `/guide/`, `/en/guide/`, `/releases/`, and `/en/releases/`.
 - `src/layouts/Base.astro` provides shared navigation, SEO metadata, canonical
-  and language alternatives. `src/components/Landing.astro` implements the
-  minimal white-and-blue landing-page design.
-- `src/legacy/` holds the previously published documentation and release
-  content, preserved as editable HTML until converted to Markdown.
-- `src/styles/main.css` contains responsive styles and accessible focus rules.
-- `scripts/check-site-seo.py` validates the built output, not the source files.
-
-The site is content-first and ships without a client-side framework or
-required JavaScript. Do not replace genuine Forge screenshots with a generated
-concept image. Keep GitHub release matrix and download links accurate.
+  and language alternatives, syncing the software version directly from the
+  workspace `Cargo.toml`.
+- `src/components/Landing.astro` and `src/components/Preview.astro` implement
+  the full-bleed poster hero, interactive TUI workspace switcher, and cardless
+  architectural ledger.
+- `src/components/DocsLayout.astro` and `src/components/ReleasesPage.astro`
+  power the two-column documentation workspace and changelog timeline.
+- `src/styles/main.css` and `src/styles/landing.css` hold the design tokens,
+  editorial grid, responsive rules, and accessible focus styles.
+- `scripts/check-site-seo.py` validates the built output, links, schema, and
+  sitemap.
 
 ## Visual identity
 
-The homepage uses a restrained white-and-jade palette (`#087c48`), real Forge
-terminal screenshots, and tree-shaken **@lucide/astro** SVG components. Icons
-are imported as Astro components at build time; no client-side icon font,
-external image CDN, or JavaScript icon runtime is required. Global green
-styles in `src/styles/green.css` extend the existing base styles and apply to
-both language editions, the two-column guides and versioned release notes.
-Keep icons consistent, use actual screenshots, and maintain phone-width layouts.
+The site uses a dark obsidian-and-phosphor-emerald terminal aesthetic
+(`#07090d` canvas, `#2ee59d` accent), genuine Forge TUI screenshots, and
+tree-shaken **@lucide/astro** SVG components. Do not replace real Forge
+screenshots with synthetic mockups. Keep the GitHub release matrix and download
+links accurate, and preserve phone-width usability across both languages.

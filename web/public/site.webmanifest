@@ -1,12 +1,12 @@
 {
-  "name": "Forge — 终端里的 Git 工作台",
+  "name": "Forge — 终端里的文件与 Git 工作台",
   "short_name": "Forge",
-  "description": "文件树、Diff、历史、搜索和预览，一个终端完成整套 Git 工作流。",
+  "description": "文件树、Diff、历史、搜索和内嵌终端，一个工作区完成整套文件与 Git 工作流。",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#087c48",
+  "background_color": "#07090d",
+  "theme_color": "#07090d",
   "lang": "zh-CN",
   "icons": [
     {

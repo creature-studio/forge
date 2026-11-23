@@ -20,15 +20,20 @@ switches close an active search and drop the snapshot. Closing and reopening
 Ctrl-P can reuse a completed snapshot; closing an unfinished build cancels it.
 If filesystem notifications are unavailable, explicitly refresh the listing.
 
-Ctrl-P and Ctrl-F both apply a 150 ms trailing-edge debounce to non-empty input.
+Open filename search with Ctrl-P. Open global content search from the Activity
+Bar's Search button, Ctrl-Shift-F where supported, or Ctrl-K → Search file
+contents / regex. Ctrl-F searches within the current file when its preview has
+focus; from the file list it opens global content search.
+
+Filename and global content search both apply a 150 ms trailing-edge debounce
+to non-empty input.
 Typing again restarts the delay and cancels the previous query generation;
 initial empty filename results and empty content queries do not wait.
-Ctrl-F uses
-the existing Rust `regex` engine and parallel `ignore` walker as the offline
-fallback: `grep-searcher` and `grep-regex` sources were absent from this
-environment's Cargo cache. No dependency or lockfile changes and no external
-`rg` executable are required. Literal search remains case sensitive; Ctrl-R
-switches to regex. Empty content queries return no results without scanning.
+Global content search uses the Rust `regex` engine and parallel `ignore` walker;
+no external `rg` executable is required. Literal search remains case sensitive;
+Alt-R switches to regex inside the content search panel. Ctrl-R refreshes files,
+Git status and the current search results by default. Refresh can be rebound in
+F4. Empty content queries return no results without scanning.
 
 Each worker reuses a buffer bounded to 2 MiB plus one byte and skips oversized,
 NUL-containing, and invalid UTF-8 files. Metadata checks avoid reading known
@@ -53,10 +58,9 @@ scheduler job. Blocking workers check cancellation between entries and lines
 a fresh bounded channel and a generation token. Stale streams and completions
 cannot publish into a newer query. Workers notify the existing UI completion
 signal on the first hit and every 64 hits, so partial results can render before
-the scan completes. Previous rows remain visible with `Searching…` until the
-first new batch or final reply; selection is preserved by file and line when
-possible. Esc cancels work, drops streams, and closes the panel. Opening another
-mode starts with empty rows.
+the scan completes. Query changes clear previous rows immediately so Enter
+cannot open a result from an older query. Esc cancels work, drops streams, and
+closes the panel. Opening another mode starts with empty rows.
 
 ## Selecting content results
 

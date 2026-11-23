@@ -1,0 +1,273 @@
+---
+import { ArrowUpRight, Download } from '@lucide/astro';
+import { FORGE_TAG } from '../utils/version';
+
+interface Props {
+  english?: boolean;
+}
+const { english = false } = Astro.props;
+
+const entries = english
+  ? [
+      {
+        id: 'v040',
+        tag: 'v0.4.0',
+        date: '2026-11-23',
+        latest: true,
+        title: 'Fast editing, resilient terminals and a refined workspace',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.4.0',
+        bullets: [
+          'Responsive large-file editing with bounded highlighting, optimized undo and wheel scrolling that does not select text.',
+          'Reliable terminal TUI mouse input, text selection, synchronized output and multi-tab controls.',
+          'Draggable panes, refined scrollbars, shortcuts and workspace focus hints.',
+          'Updated Git review, bilingual site, automated CI and installer regression checks.',
+        ],
+      },
+      {
+        id: 'v034',
+        tag: 'v0.3.4',
+        date: '2026-11-19',
+        title: 'Responsive dialogs, pointer gestures & Git review polish',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.4',
+        bullets: [
+          'Unified responsive dialogs and a context-aware footer that adapts dynamically to active panels and narrow terminals.',
+          'Activity Bar navigation with hover tooltips, reusable hover controls, and interactive scrollbar gestures.',
+          'Centralized keyboard ownership and pointer state, forwarding negotiated TUI mouse gestures cleanly inside embedded terminals.',
+          'Improved Git Change Peek, commit history navigation, and structured commit detail views.',
+        ],
+      },
+      {
+        id: 'v033',
+        tag: 'v0.3.3',
+        date: '2026-11-16',
+        title: 'Multi-tab Shell interaction, focus-aware hints & Git History',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.3',
+        bullets: [
+          'Up to eight independent local PTY Shell tabs with clickable selection, close/new buttons, Alt+1–8 direct jump, and F12 cycling.',
+          'Terminal scrollback, mouse text selection & copy, bracketed paste, and dedicated Terminal help via F4 or ?.',
+          'Theme-aware Git History commit details with green additions and red deletions while preserving summary state when expanding folders.',
+        ],
+        note: 'Scope: Local PTY sessions only; no integrated tmux persistence.',
+      },
+      {
+        id: 'v032',
+        tag: 'v0.3.2',
+        date: '2026-11-16',
+        title: 'Workspace switcher & async watcher stability',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.2',
+        bullets: [
+          'Alt+O recent workspace switcher (up to 12 roots) and improved Files/Git list viewport navigation.',
+          'Hardened request cancellation, bounded filesystem-watch notifications, and embedded Terminal rendering under heavy output.',
+        ],
+      },
+      {
+        id: 'v031',
+        tag: 'v0.3.1',
+        date: '2026-11-16',
+        title: 'Embedded Terminal & maximize/restore',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.1',
+        bullets: [
+          'Lightweight embedded Shell: press F8 to toggle visibility while keeping the session running in the background.',
+          'Press F11 to maximize or restore the Terminal without restarting the shell; supports PTY resize, keyboard input, and paste.',
+          'Dedicated preview scrollbar column with higher track contrast so code is never obscured.',
+        ],
+      },
+      {
+        id: 'v030',
+        tag: 'v0.3.0',
+        date: '2026-11-16',
+        title: 'Focus Overview & bounded long-file Git review',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.0',
+        bullets: [
+          'Focus Overview: three-column clickable navigation for search hits, staged/unstaged changes, and viewport position.',
+          'Whole-file Git markers for paged files, bounded long-file Git Change Peek, and calmer full-row red/green diff styling.',
+          'Persistent selected-line Git Blame attribution across redraws and reduced idle background Git polling.',
+        ],
+        note: 'Limitations: Git Change Peek renders as a floating overlay rather than shifting surrounding lines.',
+      },
+      {
+        id: 'v020',
+        tag: 'v0.2.0',
+        date: '2026-10',
+        title: 'Theme presets, broader syntax highlighting & commit workflow',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.2.0',
+        bullets: [
+          'Built-in dark theme presets and expanded syntax highlighting across 20+ languages.',
+          'Refined commit message composer and unified file/Git workspace controls.',
+        ],
+      },
+    ]
+  : [
+      {
+        id: 'v040',
+        tag: 'v0.4.0',
+        date: '2026-11-23',
+        latest: true,
+        title: '大文件编辑优化、可靠的终端交互与更灵活的工作区',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.4.0',
+        bullets: [
+          '优化大文件编辑、语法高亮与撤销记录；鼠标滚轮只滚动内容，不会意外选中文字。',
+          '完善内嵌终端的 TUI 鼠标事件、文本选取、同步输出与多标签控制。',
+          '支持拖动分割线、滚动条与更直观的快捷键和动态焦点提示。',
+          '改善 Git 刷新与变更审阅，更新双语官网并补齐持续集成和安装器回归测试。',
+        ],
+      },
+      {
+        id: 'v034',
+        tag: 'v0.3.4',
+        date: '2026-11-19',
+        title: '统一响应式弹窗、Activity Bar 悬停与终端鼠标手势透传',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.4',
+        bullets: [
+          '统一响应式弹窗尺寸与动态感知当前焦点的底部状态栏，窄窗口下保持清晰可读。',
+          '新增 Activity Bar 侧边导航、悬停文字提示（Hover Tooltips）以及可拖动滚动条手势。',
+          '集中管理键盘归属与指针状态，在内嵌终端运行子 TUI 程序时准确透传协商后的鼠标手势而不再误拦截。',
+          '持续打磨 Git Change Peek、提交历史浏览与提交详情展示。',
+        ],
+      },
+      {
+        id: 'v033',
+        tag: 'v0.3.3',
+        date: '2026-11-16',
+        title: '多标签终端交互、焦点快捷键提示与 Git History 体验',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.3',
+        bullets: [
+          '最多八个独立本地终端标签，支持鼠标点击切换、新建/关闭按钮、Alt+1–8 直达与 F12 循环切换。',
+          '支持终端滚动历史、文本框选复制、Bracketed Paste 以及更完整的 xterm 鼠标与键盘交互。',
+          'Git History 提交详情按主题着色（新增绿、删除红），展开提交内目录时保持详情摘要稳定可见。',
+        ],
+        note: '范围：Terminal 为本地 PTY 会话，不集成 tmux 跨进程持久化。',
+      },
+      {
+        id: 'v032',
+        tag: 'v0.3.2',
+        date: '2026-11-16',
+        title: '工作区快速切换、响应式列表与稳定性加固',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.2',
+        bullets: [
+          '新增 Alt+O 最近工作区切换器（记录最近 12 个目录），统一文件与 Git 列表视口和滚动条交互。',
+          '改进过期异步请求取消、文件监控通知限流恢复与高吞吐 PTY 输出下的绘制稳定性。',
+        ],
+      },
+      {
+        id: 'v031',
+        tag: 'v0.3.1',
+        date: '2026-11-16',
+        title: '内嵌 Terminal 与一键最大化',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.1',
+        bullets: [
+          '新增轻量内嵌 Shell：按 F8 打开或隐藏底部面板，隐藏后会话在后台持续保留。',
+          '按 F11 最大化或还原 Terminal，Shell 进程不重启；支持 PTY 自适应缩放、命令输入与粘贴。',
+          '文件预览滚动条独立占用一列并提升轨道对比度，避免遮挡源码字符。',
+        ],
+      },
+      {
+        id: 'v030',
+        tag: 'v0.3.0',
+        date: '2026-11-16',
+        title: 'Focus Overview 关注点导航与 Git 审查体验',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.3.0',
+        bullets: [
+          '新增三列宽 Focus Overview 导航尺：标记搜索命中、已暂存/未暂存改动与当前视口，支持鼠标点击跳转。',
+          '支持分页长文件的全文件改动标记与有界 Git Change Peek，采用更柔和的整行红绿差异配色。',
+          '修复重绘时 Blame 选中行重置问题，降低空闲状态下的后台重复 Git 扫描开销。',
+        ],
+        note: '已知边界：Git Change Peek 为浮动覆盖面板，不会将下方源码向下推开。',
+      },
+      {
+        id: 'v020',
+        tag: 'v0.2.0',
+        date: '2026-10',
+        title: '多套配色主题、扩展语法高亮与提交流程优化',
+        url: 'https://github.com/creature-studio/forge/releases/tag/v0.2.0',
+        bullets: [
+          '新增多套暗色主题预设，扩展 20+ 种常见编程语言与配置文件语法高亮。',
+          '改进提交信息撰写面板与文件/Git 协同操作体验。',
+        ],
+      },
+    ];
+---
+<main id="main" class="releases-page">
+  <header class="releases-hero">
+    <div>
+      <div class="releases-kicker">FORGE / {english ? 'CHANGELOG' : '版本历史'}</div>
+      <h1>{english ? 'Release notes' : 'Forge 发布说明'}</h1>
+      <p class="releases-lead">
+        {english
+          ? 'Versioned capabilities, architectural improvements, known boundaries, and verified binary downloads.'
+          : '按版本查看核心功能演进、交互改进、已知操作边界以及官方预编译安装包。'}
+      </p>
+    </div>
+    <a class="btn btn-primary" href="https://github.com/creature-studio/forge/releases/latest">
+      <Download size={16} strokeWidth={2.2} aria-hidden="true" />
+      <span>{english ? `Download ${FORGE_TAG}` : `下载最新 ${FORGE_TAG}`}</span>
+    </a>
+  </header>
+
+  <nav class="releases-jump" aria-label={english ? 'Version navigation' : '版本目录'}>
+    {entries.map((entry) => (
+      <a href={`#${entry.id}`}>{entry.tag}</a>
+    ))}
+    <a href="#history">{english ? 'Install & History' : '升级与全部历史'}</a>
+  </nav>
+
+  <div class="release-stream">
+    {entries.map((entry) => (
+      <section id={entry.id} class="release-entry">
+        <div class="release-meta">
+          <div class="release-tag">
+            <span>{entry.tag}</span>
+            {entry.latest && <span class="release-latest-badge">{english ? 'Latest' : '最新'}</span>}
+          </div>
+          <span class="release-date">{entry.date}</span>
+          <a class="release-gh-link" href={entry.url}>
+            <span>{english ? 'GitHub Release' : 'GitHub 发布页'}</span>
+            <ArrowUpRight size={13} strokeWidth={2} aria-hidden="true" />
+          </a>
+        </div>
+
+        <div class="release-content">
+          <h2>{entry.title}</h2>
+          <ul>
+            {entry.bullets.map((b) => (
+              <li>{b}</li>
+            ))}
+          </ul>
+          {entry.note && <p class="release-note-box">{entry.note}</p>}
+        </div>
+      </section>
+    ))}
+
+    <section id="history" class="release-entry">
+      <div class="release-meta">
+        <div class="release-tag">{english ? 'Upgrades' : '安装与升级'}</div>
+        <span class="release-date">Linux · macOS · WSL</span>
+      </div>
+      <div class="release-content">
+        <h2>{english ? 'Self-update and full release archive' : '命令行自更新与完整归档'}</h2>
+        <p>
+          {english ? (
+            <>
+              Check for updates or upgrade an existing installation in place, or inspect every platform archive and SHA-256 checksum on{' '}
+              <a href="https://github.com/creature-studio/forge/releases">GitHub Releases</a> and{' '}
+              <a href="https://github.com/creature-studio/forge/blob/master/CHANGELOG.md">CHANGELOG.md</a>.
+            </>
+          ) : (
+            <>
+              已安装的 Forge 支持直接在终端检查并升级至最新版本；完整跨平台归档与 SHA-256 校验文件请查阅{' '}
+              <a href="https://github.com/creature-studio/forge/releases">GitHub Releases</a> 与仓库内的{' '}
+              <a href="https://github.com/creature-studio/forge/blob/master/CHANGELOG.md">CHANGELOG.md</a>。
+            </>
+          )}
+        </p>
+        <pre><code>forge update --check
+forge update</code></pre>
+        <p class="release-note-box">
+          {english
+            ? 'Official prebuilt binaries target glibc Linux (x86_64 / aarch64) and macOS (Intel / Apple Silicon). Windows users can run Forge inside WSL or build from source.'
+            : '官方预编译包支持 Linux glibc（x86_64 / aarch64）与 macOS（Intel / Apple Silicon）；Windows 用户推荐在 WSL 中运行或从源码编译。'}
+        </p>
+      </div>
+    </section>
+  </div>
+</main>

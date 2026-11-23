@@ -1,32 +1,44 @@
 # Keyboard shortcut conventions
 
-Forge now avoids uppercase/lowercase-only distinctions in its **advertised**
-workspace shortcuts. A capital letter in an older shortcut was produced by
-Shift+letter, which was easy to overlook. The new defaults use explicit
-Alt+letter combinations for the secondary action:
+Forge uses explicit modifier keys for workspace actions. Press F4 to see the
+effective bindings, including any user overrides. The following are defaults;
+the focused editor, search panel, terminal or dialog may own a key instead.
 
-| Action | New shortcut | Previous (still supported) |
-|---|---|---|
-| Push | Alt+p | Shift+p (P) |
-| Git history | Alt+g | Shift+g (G) |
-| File history | Alt+h | Shift+h (H) |
-| Commit history dialog | Alt+l | Shift+l (L) |
-| External editor | Alt+e | Shift+e (E) |
-| Filters | Alt+f | Shift+f (F) |
-| Branches | Alt+b | Shift+b (B) |
-| Stashes | Alt+z | Shift+z (Z) |
-| Synchronization | Alt+s | Shift+s (S) |
-| Worktrees | Alt+w | Shift+w (W) |
-| Diff line actions | Alt+i | Shift+i (I) |
-| Select visible files | Alt+v | Shift+v (V) |
-| Previous Diff hunk | Alt+n | Shift+n (N) |
+| Action | Default shortcut |
+| --- | --- |
+| Command palette | Ctrl+k / Ctrl+Shift+p |
+| Refresh workspace | Ctrl+r |
+| Edit file | Ctrl+e |
+| Stage / unstage in Git | Alt+a / Alt+u |
+| Push / pull | Alt+p / Alt+r |
+| Git history | Alt+g |
+| File history | Alt+h |
+| Commit history dialog | Alt+l |
+| External editor | Alt+e |
+| Filters | Alt+f |
+| Branches | Alt+b |
+| Stashes | Alt+z |
+| Synchronization | Alt+s |
+| Worktrees | Alt+w |
+| Diff line actions | Alt+i |
+| Select visible files | Alt+v |
+| Previous Diff hunk | Alt+n |
 
-Plain `p`, `g`, `e`, `v`, `n`, etc. retain their existing actions and
-meaning. F4 lists these new defaults and permits reassigning non-fixed
-shortcuts to Ctrl/Alt combinations or F5–F12. Legacy uppercase aliases remain
-available **unless that action has a user-defined override**; explicit user
-bindings always take priority. The terminal must deliver Alt-modified key
-sequences; modern Windows Terminal, xterm, and most terminal emulators do.
+F4 permits reassigning non-fixed shortcuts to Ctrl/Alt combinations or F6–F12,
+subject to conflicts and reserved host shortcuts. Explicit user bindings take
+priority. Plain uppercase workspace aliases such as `B`, `E`, `G` and `P` are
+not implicit alternatives to the Alt bindings. Bare `r` does not refresh with
+the default bindings; `?`, `,` and plain `s/u` are not the default Help,
+Settings and Stage/Unstage shortcuts.
+
+Dialogs retain their own local keys. For example, `r` renames a branch in the
+Branches dialog, and `s/u` stage/unstage a line in Diff line actions. In global
+content search, Alt+r toggles regex while Ctrl+r refreshes the workspace and
+search results by default. In-file search also uses Alt+r to toggle regex.
+
+Terminal focus sends normal keys to the child shell or TUI. Use F8 to hide the
+terminal or Ctrl+Shift+Tab to return keyboard focus to the workspace. Modifier
+combinations depend on what the outer terminal can deliver.
 
 Case-sensitive editing and text input are unaffected. This is only the
 workspace shortcut mapping, not a transformation of typed text.
@@ -35,6 +47,5 @@ workspace shortcut mapping, not a transformation of typed text.
 
 Press **F9** to open Settings directly. The `F9 Settings` footer hint is
 visible on the workspace screen, and the command palette also lists Settings.
-`Alt+,` is an alternative, and the old bare `,` shortcut remains supported.
-`Ctrl+,` is not the default because many terminal keyboard protocols cannot
-distinguish Ctrl+comma from comma. F4 still opens the shortcut editor.
+F5 opens workspace Help. F4 opens the shortcut editor in the workspace and
+editor; when the embedded terminal has focus, F4 opens Terminal help instead.

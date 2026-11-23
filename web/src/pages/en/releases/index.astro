@@ -1,7 +1,13 @@
 ---
 import Base from '../../../layouts/Base.astro';
-import content from '../../../legacy/en-releases.html?raw';
+import ReleasesPage from '../../../components/ReleasesPage.astro';
+import { FORGE_TAG } from '../../../utils/version';
 ---
-<Base title="Forge Release Notes — Changelog and Downloads" description="Forge release notes including v0.3.3 improvements, Git review features, Blame fixes, performance and download links." path="/en/releases/" lang="en">
-  <Fragment set:html={content} />
+<Base
+  title={`Forge Release Notes (${FORGE_TAG}) — Changelog and Downloads`}
+  description={`Forge ${FORGE_TAG} release notes including responsive dialogs, mouse gestures, multi-tab terminal, Git review features and downloads.`}
+  path="/en/releases/"
+  lang="en"
+>
+  <ReleasesPage english />
 </Base>

@@ -1,7 +1,13 @@
 ---
 import Base from '../../layouts/Base.astro';
-import content from '../../legacy/releases.html?raw';
+import ReleasesPage from '../../components/ReleasesPage.astro';
+import { FORGE_TAG } from '../../utils/version';
 ---
-<Base title="Forge 发布说明 — 版本历史与更新日志" description="Forge v0.3.3、v0.2.0 发布说明，涵盖功能更新、性能、Git Change Peek、Blame 和下载入口。" path="/releases/" lang="zh-CN">
-  <Fragment set:html={content} />
+<Base
+  title={`Forge 发布说明 (${FORGE_TAG}) — 版本历史与更新日志`}
+  description={`Forge ${FORGE_TAG} 及历次版本发布说明，涵盖终端多标签、鼠标交互、Git Change Peek、Blame 与官方安装包入口。`}
+  path="/releases/"
+  lang="zh-CN"
+>
+  <ReleasesPage />
 </Base>

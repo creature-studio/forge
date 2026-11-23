@@ -2,8 +2,13 @@
 import Base from '../../../layouts/Base.astro';
 import DocsLayout from '../../../components/DocsLayout.astro';
 import { Content, getHeadings } from '../../../content/guide.en.md';
+import { FORGE_TAG } from '../../../utils/version';
 ---
-<Base title="Forge TUI Guide — Files, Git Diff and Keyboard Navigation" description="Forge v0.3.3 screenshot-based guide: files, search, code preview, Git diffs, staging, commits, branches, stashes, editor, terminal and keyboard shortcuts." path="/en/guide/" lang="en">
-  <div class="subpage-links"><a href="/forge/guide/">中文操作文档</a> · <a href="/forge/en/releases/">Release notes</a></div>
+<Base
+  title={`Forge TUI Guide (${FORGE_TAG}) — Files, Git Diff and Navigation`}
+  description={`Forge ${FORGE_TAG} screenshot-based guide: files, search, code preview, Git diffs, staging, commits, branches, stashes, editor, terminal and keyboard shortcuts.`}
+  path="/en/guide/"
+  lang="en"
+>
   <DocsLayout headings={getHeadings()} english><Content /></DocsLayout>
 </Base>

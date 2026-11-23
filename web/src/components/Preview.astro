@@ -1,14 +1,195 @@
 ---
-import { GitBranch } from '@lucide/astro';
+import { ArrowUpRight } from '@lucide/astro';
+
+interface Props {
+  english?: boolean;
+}
+const { english = false } = Astro.props;
+
+const views = english
+  ? [
+      {
+        id: 'files',
+        key: 'F1',
+        label: 'Files',
+        src: '/forge/assets/guide/files.webp',
+        alt: 'Real Forge TUI showing file tree with Git status badges and syntax-highlighted Rust code preview',
+        caption: 'Browse the repository tree with live Git badges and instant syntax-highlighted preview.',
+      },
+      {
+        id: 'diff',
+        key: 'F2',
+        label: 'Git Diff',
+        src: '/forge/assets/guide/git-diff.webp',
+        alt: 'Real Forge TUI showing full-file side-by-side Git diff and changed file list',
+        caption: 'Inspect full-file diffs with surrounding context, hunk markers, and clickable Focus Overview.',
+      },
+      {
+        id: 'search',
+        key: 'Ctrl+K',
+        label: 'Search',
+        src: '/forge/assets/guide/search-global.webp',
+        alt: 'Real Forge TUI global content search modal with live source context',
+        caption: 'Search across the entire workspace with instant code context and keyboard or mouse jump.',
+      },
+      {
+        id: 'commit',
+        key: 'c',
+        label: 'Commit',
+        src: '/forge/assets/guide/commit.webp',
+        alt: 'Real Forge TUI commit composer with staged files',
+        caption: 'Stage files or ranges, compose your commit message, and review indexed changes before committing.',
+      },
+      {
+        id: 'terminal',
+        key: 'F8',
+        label: 'Shell',
+        src: '/forge/assets/guide/terminal.webp',
+        alt: 'Real Forge TUI embedded terminal pane with persistent shell tabs',
+        caption: 'Open up to 8 persistent local PTY shell tabs without leaving your file and Git workspace.',
+      },
+    ]
+  : [
+      {
+        id: 'files',
+        key: 'F1',
+        label: '文件树',
+        src: '/forge/assets/guide/files.webp',
+        alt: '真实 Forge TUI 界面：左侧带 Git 状态的文件目录树与右侧语法高亮源码预览',
+        caption: '在同一视图浏览项目目录树、实时 Git 修改状态与语法高亮代码预览。',
+      },
+      {
+        id: 'diff',
+        key: 'F2',
+        label: 'Git Diff',
+        src: '/forge/assets/guide/git-diff.webp',
+        alt: '真实 Forge TUI 界面：Git 变更列表与完整文件上下文差异对比',
+        caption: '查看完整文件上下文 Diff、改动位置导航条，按文件或范围快速暂存。',
+      },
+      {
+        id: 'search',
+        key: 'Ctrl+K',
+        label: '全局搜索',
+        src: '/forge/assets/guide/search-global.webp',
+        alt: '真实 Forge TUI 界面：全局内容搜索与代码上下文预览',
+        caption: '毫秒级检索全库代码与文件名，实时联动上下文预览并一键定位。',
+      },
+      {
+        id: 'commit',
+        key: 'c',
+        label: '暂存提交',
+        src: '/forge/assets/guide/commit.webp',
+        alt: '真实 Forge TUI 界面：Commit 撰写面板与已暂存变更',
+        caption: '清晰区分已暂存与工作区改动，在弹窗内撰写并复核每一次 Git 提交。',
+      },
+      {
+        id: 'terminal',
+        key: 'F8',
+        label: '内嵌终端',
+        src: '/forge/assets/guide/terminal.webp',
+        alt: '真实 Forge TUI 界面：底部多标签持久化本地 Shell 会话',
+        caption: '内置最多 8 个独立本地 PTY 终端标签，隐藏面板不断连，点击或快捷键即刻切换。',
+      },
+    ];
 ---
-<div class="terminal-shot" aria-label="Forge terminal screenshot">
-  <div class="terminal-toolbar" aria-hidden="true">
-    <span class="traffic-dots"><i></i><i></i><i></i></span>
-    <span class="terminal-toolbar-title">Forge — ~/projects/forge</span>
-    <span class="terminal-toolbar-branch"><GitBranch size={13} strokeWidth={1.7}/> main</span>
+<div class="workspace-stage hero-stagger-3" data-workspace-stage aria-label={english ? 'Interactive Forge TUI screenshots' : '真实 Forge TUI 交互截图预览'}>
+  <div class="stage-chrome">
+    <span class="stage-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+    <div class="stage-tabs" role="tablist" aria-label={english ? 'Forge views' : 'Forge 工作区视图'}>
+      {views.map((view, index) => (
+        <button
+          type="button"
+          role="tab"
+          id={`stage-tab-${view.id}`}
+          aria-controls={`stage-panel-${view.id}`}
+          aria-selected={index === 0 ? 'true' : 'false'}
+          tabindex={index === 0 ? 0 : -1}
+          class="stage-tab"
+          data-stage-index={index}
+          data-stage-caption={view.caption}
+          data-stage-src={view.src}
+        >
+          <span class="stage-tab-key">{view.key}</span>
+          <span>{view.label}</span>
+        </button>
+      ))}
+    </div>
   </div>
-  <picture>
-    <source srcset="/forge/assets/forge-diff-900.webp 900w, /forge/assets/forge-diff-1800.webp 1800w" sizes="(max-width: 960px) 100vw, 55vw" type="image/webp" />
-    <img src="/forge/assets/forge-diff.png" width="1800" height="882" alt="Forge 真实 TUI 界面：文件目录树和并排 Git 差异对比" decoding="async" fetchpriority="high" />
-  </picture>
+
+  <div class="stage-viewport">
+    {views.map((view, index) => (
+      <figure
+        id={`stage-panel-${view.id}`}
+        role="tabpanel"
+        aria-labelledby={`stage-tab-${view.id}`}
+        class={`stage-panel ${index === 0 ? 'is-active' : ''}`}
+        data-stage-panel={index}
+      >
+        <a href={view.src} target="_blank" rel="noopener" aria-label={english ? `Open full-resolution screenshot: ${view.label}` : `在新窗口打开高清原图：${view.label}`}>
+          <img
+            src={view.src}
+            width="1366"
+            height="837"
+            alt={view.alt}
+            loading={index === 0 ? 'eager' : 'lazy'}
+            fetchpriority={index === 0 ? 'high' : 'auto'}
+            decoding="async"
+          />
+        </a>
+      </figure>
+    ))}
+  </div>
+
+  <div class="stage-statusbar">
+    <div class="stage-caption">
+      <span class="stage-live-indicator" aria-hidden="true"></span>
+      <span class="stage-caption-text" data-stage-caption-target>{views[0].caption}</span>
+    </div>
+    <a class="stage-inspect-link" href={views[0].src} target="_blank" rel="noopener" data-stage-link-target>
+      <span>{english ? '1366×837 raw' : '查看高清原图'}</span>
+      <ArrowUpRight size={12} strokeWidth={2} aria-hidden="true" />
+    </a>
+  </div>
 </div>
+
+<script>
+  const stages = document.querySelectorAll<HTMLElement>('[data-workspace-stage]');
+  stages.forEach((stage) => {
+    const tabs = Array.from(stage.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const panels = Array.from(stage.querySelectorAll<HTMLElement>('[role="tabpanel"]'));
+    const captionEl = stage.querySelector<HTMLElement>('[data-stage-caption-target]');
+    const linkEl = stage.querySelector<HTMLAnchorElement>('[data-stage-link-target]');
+
+    const activate = (nextIndex: number, focusTab = false) => {
+      tabs.forEach((tab, idx) => {
+        const selected = idx === nextIndex;
+        tab.setAttribute('aria-selected', String(selected));
+        tab.tabIndex = selected ? 0 : -1;
+        if (selected && focusTab) tab.focus();
+      });
+      panels.forEach((panel, idx) => {
+        panel.classList.toggle('is-active', idx === nextIndex);
+      });
+      const activeTab = tabs[nextIndex];
+      if (activeTab && captionEl) {
+        captionEl.textContent = activeTab.dataset.stageCaption || '';
+      }
+      if (activeTab && linkEl && activeTab.dataset.stageSrc) {
+        linkEl.href = activeTab.dataset.stageSrc;
+      }
+    };
+
+    tabs.forEach((tab, idx) => {
+      tab.addEventListener('click', () => activate(idx));
+      tab.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          activate((idx + 1) % tabs.length, true);
+        } else if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          activate((idx - 1 + tabs.length) % tabs.length, true);
+        }
+      });
+    });
+  });
+</script>

@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
     paths:
+      - 'Cargo.toml'
       - 'web/**'
       - 'scripts/check-site-seo.py'
       - 'install.sh'

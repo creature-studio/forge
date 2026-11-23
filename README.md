@@ -58,7 +58,7 @@ Every image below was captured from a **running Forge TUI**, using an isolated d
 | **Embedded terminal** | **Settings** |
 | ![Shell tabs within Forge](web/public/assets/guide/terminal.webp) | ![Settings panel](web/public/assets/guide/settings.webp) |
 
-## Key capabilities in v0.3.3
+## Key capabilities
 
 - **Files and Git in one workspace:** folder navigation, fuzzy file finding, Markdown/source previews, full-file diffs and staged/unstaged views.
 - **Integrated development controls:** lightweight text editor, real Shell tabs with persistent sessions when hidden, in-file and global search.
@@ -73,6 +73,8 @@ Every image below was captured from a **running Forge TUI**, using an isolated d
 | `Ctrl+P` | Find files by name |
 | `Ctrl+F` (preview focused) | Search inside the current file |
 | `Ctrl+K` | Command palette, including global content search |
+| `Ctrl+R` | Refresh files and Git status |
+| `Alt+R` (content search panel) | Toggle regular expressions |
 | `F3` | Toggle Markdown preview and source |
 | `F6` / `F7` | Blame details / Git Change Peek (source mode) |
 | `Ctrl+E` | Edit selected file |

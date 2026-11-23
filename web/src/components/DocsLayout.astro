@@ -1,13 +1,19 @@
 ---
 import { ArrowUpRight, ChevronDown } from '@lucide/astro';
-interface MarkdownHeading { depth: number; slug: string; text: string; }
+import { FORGE_TAG } from '../utils/version';
+
+interface MarkdownHeading {
+  depth: number;
+  slug: string;
+  text: string;
+}
 interface Props {
   content?: string;
   headings?: MarkdownHeading[];
   english?: boolean;
 }
 const { content, headings = [], english = false } = Astro.props;
-// Older English guide stays HTML-backed. The Chinese guide renders native Astro Markdown.
+
 const navigation = content?.match(/<nav\s+class="guide-toc"[^>]*>([\s\S]*?)<\/nav>/);
 if (content && !navigation) throw new Error('Guide content is missing its section navigation');
 const navigationHtml = navigation?.[1].replace(/<strong>[\s\S]*?<\/strong>/, '') ?? '';
@@ -15,65 +21,145 @@ const bodyHtml = content
   ?.replace(navigation![0], '')
   .replace(/^\s*<main\b[^>]*>/, '')
   .replace(/<\/main>\s*$/, '') ?? '';
+
 const sections = headings.filter((heading) => heading.depth === 2);
-const tocTitle = english ? 'On this page' : '文档目录';
-const menuTitle = english ? 'Browse sections' : '查看文档目录';
+const tocTitle = english ? 'On this page' : '章节目录';
+const menuTitle = english ? 'Jump to section' : '浏览章节目录';
 ---
-<main id="main" class="docs-layout">
+<main id="main" class="docs-shell">
   <aside class="docs-sidebar" aria-label={tocTitle}>
-    <div class="docs-sidebar-inner">
-      <div class="docs-sidebar-title">{tocTitle}</div>
-      <nav class="docs-section-nav" aria-label={tocTitle}>
-        {content ? <Fragment set:html={navigationHtml} /> : sections.map((heading) =>
-          <a href={`#${heading.slug}`}>{heading.text}</a>
-        )}
-      </nav>
-      <div class="docs-sidebar-bottom">
-        <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>{english ? 'Release notes' : '发布说明'} <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" /></a>
-        <a href="https://github.com/creature-studio/forge">GitHub <ArrowUpRight size={14} strokeWidth={1.8} aria-hidden="true" /></a>
-      </div>
+    <div class="docs-sidebar-header">
+      <span>{tocTitle}</span>
+      <span>{FORGE_TAG}</span>
+    </div>
+    <nav class="docs-section-nav" aria-label={tocTitle}>
+      {content ? <Fragment set:html={navigationHtml} /> : sections.map((heading) => (
+        <a href={`#${heading.slug}`}>{heading.text}</a>
+      ))}
+    </nav>
+    <div class="docs-sidebar-footer">
+      <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>
+        <span>{english ? 'Release notes' : '版本发布说明'}</span>
+        <ArrowUpRight size={13} strokeWidth={1.9} aria-hidden="true" />
+      </a>
+      <a href={english ? '/forge/guide/' : '/forge/en/guide/'} lang={english ? 'zh-CN' : 'en'}>
+        <span>{english ? '中文操作文档' : 'English Guide'}</span>
+        <ArrowUpRight size={13} strokeWidth={1.9} aria-hidden="true" />
+      </a>
+      <a href="https://github.com/creature-studio/forge">
+        <span>GitHub</span>
+        <ArrowUpRight size={13} strokeWidth={1.9} aria-hidden="true" />
+      </a>
     </div>
   </aside>
-  <details class="docs-mobile-navigation">
-    <summary>{menuTitle} <ChevronDown size={18} strokeWidth={1.8} aria-hidden="true" /></summary>
-    <nav class="docs-section-nav" aria-label={tocTitle}>
-        {content ? <Fragment set:html={navigationHtml} /> : sections.map((heading) =>
-          <a href={`#${heading.slug}`}>{heading.text}</a>
-        )}
-      </nav>
-  </details>
-  {content ? <div class="docs-main" set:html={bodyHtml} /> :
-    <div class="docs-main"><article class="guide-body guide-markdown"><slot /></article></div>}
 
+  <details class="docs-mobile-navigation">
+    <summary>
+      <span>{menuTitle}</span>
+      <ChevronDown size={17} strokeWidth={2} aria-hidden="true" />
+    </summary>
+    <nav class="docs-section-nav" aria-label={tocTitle}>
+      {content ? <Fragment set:html={navigationHtml} /> : sections.map((heading) => (
+        <a href={`#${heading.slug}`}>{heading.text}</a>
+      ))}
+    </nav>
+  </details>
+
+  <div class="docs-main" data-copy-label={english ? 'Copy' : '复制'} data-copied-label={english ? 'Copied' : '已复制'}>
+    <div class="docs-topbar">
+      <span class="docs-breadcrumb">FORGE / {english ? 'USER GUIDE' : '使用指南'} · {FORGE_TAG}</span>
+      <div class="docs-topbar-links">
+        <a href={english ? '/forge/guide/' : '/forge/en/guide/'} lang={english ? 'zh-CN' : 'en'}>
+          {english ? '阅读中文版' : 'Read in English'}
+        </a>
+        <span>·</span>
+        <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>
+          {english ? 'Changelog' : '更新日志'}
+        </a>
+      </div>
+    </div>
+
+    {content ? (
+      <div set:html={bodyHtml} />
+    ) : (
+      <article class="guide-body guide-markdown">
+        <slot />
+      </article>
+    )}
+  </div>
 </main>
+
 <script>
-  const navigation = document.querySelector('.docs-layout');
-  if (navigation) {
-    const links = Array.from(navigation.querySelectorAll<HTMLAnchorElement>('.docs-section-nav a[href^="#"]'));
-    const sections = links.map(link => document.getElementById(link.hash.slice(1))).filter((element): element is HTMLElement => !!element);
+  const container = document.querySelector<HTMLElement>('.docs-shell');
+  if (container) {
+    const links = Array.from(container.querySelectorAll<HTMLAnchorElement>('.docs-section-nav a[href^="#"]'));
+    const uniqueIds = Array.from(new Set(links.map((l) => decodeURIComponent(l.hash.slice(1)))));
+    const sections = uniqueIds
+      .map((id) => document.getElementById(id))
+      .filter((el): el is HTMLElement => !!el);
+
     const updateCurrent = (id: string) => {
       for (const link of links) {
-        if (link.hash === `#${id}`) link.setAttribute('aria-current', 'location');
-        else link.removeAttribute('aria-current');
+        const linkId = decodeURIComponent(link.hash.slice(1));
+        if (linkId === id) {
+          link.setAttribute('aria-current', 'location');
+        } else {
+          link.removeAttribute('aria-current');
+        }
       }
     };
+
     if (sections.length) {
       const syncCurrent = () => {
-        const current = sections.filter(section => section.getBoundingClientRect().top <= 150).at(-1) || sections[0];
+        const current = sections.filter((section) => section.getBoundingClientRect().top <= 140).at(-1) || sections[0];
         updateCurrent(current.id);
       };
       let scheduled = false;
-      window.addEventListener('scroll', () => {
-        if (scheduled) return;
-        scheduled = true;
-        requestAnimationFrame(() => { scheduled = false; syncCurrent(); });
-      }, { passive: true });
+      window.addEventListener(
+        'scroll',
+        () => {
+          if (scheduled) return;
+          scheduled = true;
+          requestAnimationFrame(() => {
+            scheduled = false;
+            syncCurrent();
+          });
+        },
+        { passive: true }
+      );
       window.addEventListener('hashchange', syncCurrent);
       syncCurrent();
     }
-    const mobileMenu = navigation.querySelector<HTMLDetailsElement>('.docs-mobile-navigation');
-    mobileMenu?.querySelectorAll<HTMLAnchorElement>('a[href^="#"]').forEach(link => {
-      link.addEventListener('click', () => { mobileMenu.open = false; });
+
+    const mobileMenu = container.querySelector<HTMLDetailsElement>('.docs-mobile-navigation');
+    mobileMenu?.querySelectorAll<HTMLAnchorElement>('a[href^="#"]').forEach((link) => {
+      link.addEventListener('click', () => {
+        mobileMenu.open = false;
+      });
+    });
+
+    const docsMain = container.querySelector<HTMLElement>('.docs-main');
+    const copyLabel = docsMain?.dataset.copyLabel || 'Copy';
+    const copiedLabel = docsMain?.dataset.copiedLabel || 'Copied';
+    container.querySelectorAll<HTMLPreElement>('pre').forEach((pre) => {
+      const code = pre.querySelector('code');
+      if (!code) return;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'code-copy-btn';
+      btn.textContent = copyLabel;
+      btn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(code.textContent?.trim() || '');
+          btn.textContent = copiedLabel;
+          setTimeout(() => {
+            btn.textContent = copyLabel;
+          }, 1600);
+        } catch {
+          // Ignore clipboard errors in restricted contexts
+        }
+      });
+      pre.appendChild(btn);
     });
   }
 </script>

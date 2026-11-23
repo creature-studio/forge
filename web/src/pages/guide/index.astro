@@ -2,7 +2,13 @@
 import Base from '../../layouts/Base.astro';
 import DocsLayout from '../../components/DocsLayout.astro';
 import { Content, getHeadings } from '../../content/guide.zh.md';
+import { FORGE_TAG } from '../../utils/version';
 ---
-<Base title="Forge 操作文档 — 文件浏览、Git 与快捷键" description="Forge v0.3.3 中文图文教程：安装、文件浏览、代码预览、Git Diff、暂存与提交、搜索、编辑器、终端、分支、Stash、快捷键和设置。" path="/guide/" lang="zh-CN">
+<Base
+  title={`Forge 操作文档 (${FORGE_TAG}) — 文件浏览、Git 与快捷键`}
+  description={`Forge ${FORGE_TAG} 中文图文教程：安装、文件浏览、代码预览、Git Diff、暂存与提交、搜索、编辑器、终端、分支、Stash、快捷键和设置。`}
+  path="/guide/"
+  lang="zh-CN"
+>
   <DocsLayout headings={getHeadings()}><Content /></DocsLayout>
 </Base>

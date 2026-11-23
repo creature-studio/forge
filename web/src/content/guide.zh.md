@@ -1,11 +1,11 @@
 ---
 title: Forge 使用指南
-description: Forge v0.3.3 中文图文教程，基于真实运行界面、实际快捷键和工具操作。
+description: Forge v0.4.0 中文图文教程，基于真实运行界面、实际快捷键和工具操作。
 ---
 
 # Forge 使用指南
 
-从打开文件、检查代码到完成一次 Git 提交：这里按实际操作流程介绍 Forge 当前的 Files、Git、搜索、编辑器、终端和工作区工具。**所有配图均来自真实运行的 Forge TUI**，使用独立演示仓库截取，不是产品概念图。**点击截图可查看原始高清尺寸**，手机端也能放大查看代码。适用于 Forge v0.3.3 的当前开发版本；快捷键可在 `F4` 中查看及调整。
+从打开文件、检查代码到完成一次 Git 提交：这里按实际操作流程介绍 Forge 当前的 Files、Git、搜索、编辑器、终端和工作区工具。**所有配图均来自真实运行的 Forge TUI**，使用独立演示仓库截取，不是产品概念图。**点击截图可查看原始高清尺寸**，手机端也能放大查看代码。适用于 Forge v0.4.0 的当前开发版本；快捷键可在 `F4` 中查看及调整。
 
 > **先记住：** `F1` 文件、`F2` Git、`Ctrl+P` 找文件、`Ctrl+K` 命令面板、`F4` 快捷键、`F5` 帮助、`F8` 终端、`F9` 设置。当前版本不应再用旧文档中的 `?`、`,` 或单字母 `s/u` 作为默认全局快捷键。
 
@@ -21,7 +21,7 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 
 ```bash
 FORGE_INSTALL_DIR="$HOME/bin" sh install.sh
-FORGE_VERSION=v0.3.3 sh install.sh
+FORGE_VERSION=v0.4.0 sh install.sh
 ```
 
 上述环境变量也可以与在线安装脚本组合使用；已有本地脚本时从项目根目录执行。安装后，在仓库或普通文件夹中启动：
@@ -85,7 +85,7 @@ cargo run -p forge
 
 [![Forge 全局搜索结果和右侧代码上下文](/forge/assets/guide/search-global.webp)](/forge/assets/guide/search-global.webp "打开高清截图")
 
-点击 Activity Bar 的搜索图标，或者 `Ctrl+K` 搜索并执行 **Search file contents / regex**；若终端能区分 `Ctrl+Shift+F`，也可使用该组合键。输入关键字后左侧展示文件和命中位置，右侧展示上下文。`↑/↓` 选择结果、`Enter` 跳到对应文件及行。搜索框内 `Ctrl+R` 可切换正则表达式。
+点击 Activity Bar 的搜索图标，或者 `Ctrl+K` 搜索并执行 **Search file contents / regex**；若终端能区分 `Ctrl+Shift+F`，也可使用该组合键。输入关键字后左侧展示文件和命中位置，右侧展示上下文。`↑/↓` 选择结果、`Enter` 跳到对应文件及行。搜索框内 `Alt+R` 切换正则表达式；`Ctrl+R` 默认刷新文件、Git 状态和当前搜索结果。如果重绑过刷新操作，请以 `F4` 显示的按键为准。
 
 **区别：** `Ctrl+P` 搜的是文件名；全局搜索匹配的是文件内容。搜索具有后台取消与增量更新能力，大型仓库可通过过滤配置减少不必要的目录扫描。
 
@@ -283,6 +283,7 @@ Terminal 有焦点时，普通按键以及 `Esc` 通常先交给 Shell 或 Shell
 | 导航 | `Ctrl+B` | 收起 / 展开 Sidebar |
 | 文件 | `Ctrl+P` | 模糊搜索文件名 |
 | 搜索 | 搜索图标 / `Ctrl+K` | 全局搜索入口 |
+| 搜索 | `Alt+R`（全局搜索框内） | 切换正则表达式 |
 | 文件 | `Ctrl+F` | 当前代码预览内查找（需预览焦点） |
 | 文件 | `Ctrl+E` | 内置编辑器 |
 | 文件 | `F3` | Markdown Preview / Code |
@@ -296,6 +297,7 @@ Terminal 有焦点时，普通按键以及 `Esc` 通常先交给 Shell 或 Shell
 | 终端 | `F8` / `F11` | 显示 / 最大化终端 |
 | 工具 | `Ctrl+K` | 命令面板 |
 | 工具 | `F4` / `F5` / `F9` | 快捷键 / 帮助 / 设置 |
+| 通用 | `Ctrl+R` | 刷新文件与 Git 状态 |
 | 通用 | `Esc` | 退出当前弹窗/返回（终端焦点除外） |
 
 ## 20. 常见问题与操作边界

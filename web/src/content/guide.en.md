@@ -5,7 +5,7 @@ description: Real screenshots, installation, file navigation, source preview, Gi
 
 # Forge TUI User Guide
 
-A practical, screenshot-driven guide to the **current Forge v0.3.3 development version**. All screenshots come from a real running Forge terminal session with an isolated sample Git repository, not mockups. **Click any screenshot to open its original full-resolution image.** Check `F4` for your effective key bindings—custom bindings and terminal input capabilities can differ.
+A practical, screenshot-driven guide to the **current Forge v0.4.0 development version**. All screenshots come from a real running Forge terminal session with an isolated sample Git repository, not mockups. **Click any screenshot to open its original full-resolution image.** Check `F4` for your effective key bindings—custom bindings and terminal input capabilities can differ.
 
 > **Start here:** `F1` Files · `F2` Git · `Ctrl+P` Find file · `Ctrl+K` Commands · `F4` Shortcuts · `F5` Help · `F8` Terminal · `F9` Settings. Old shortcuts such as `?`, `,`, and plain `s/u` are no longer the defaults for Help, Settings, and Stage/Unstage.
 
@@ -42,7 +42,7 @@ In a file tree, use `j/k` or arrow keys to move, `Enter` / `l` to open or expand
 
 [![Global content search with file results and matching context](/forge/assets/guide/search-global.webp)](/forge/assets/guide/search-global.webp "View full-size screenshot")
 
-For **global content search**, click Search in the Activity Bar, or press `Ctrl+K` and select **Search file contents / regex**. Some terminals can send `Ctrl+Shift+F` directly. Search results list file paths and matching lines; selecting a result previews its context, and `Enter` opens the exact line. Toggle regular expressions with `Ctrl+R` inside the search panel. File-name search and content search are separate operations.
+For **global content search**, click Search in the Activity Bar, or press `Ctrl+K` and select **Search file contents / regex**. Some terminals can send `Ctrl+Shift+F` directly. Search results list file paths and matching lines; selecting a result previews its context, and `Enter` opens the exact line. Toggle regular expressions with `Alt+R` inside the search panel. `Ctrl+R` refreshes files, Git status and the current search results by default; check `F4` if you have rebound Refresh. File-name search and content search are separate operations.
 
 ## 4. Search within the current file
 
