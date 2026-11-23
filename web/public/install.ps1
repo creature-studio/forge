@@ -1,5 +1,5 @@
 # Install or update the Windows x64 release of Forge.
-# Usage: irm https://creature-studio.github.io/forge/install.ps1 | iex
+# Usage: irm https://creature-studio.github.io/forge/install.txt | iex
 # Overrides: FORGE_VERSION=v0.4.0, FORGE_INSTALL_DIR=C:\path\to\bin
 $ErrorActionPreference = 'Stop'
 

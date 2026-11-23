@@ -33,7 +33,7 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 **Windows 10/11 x64** (PowerShell or Windows Terminal):
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.ps1 | iex
+irm https://creature-studio.github.io/forge/install.txt | iex
 ```
 
 The Windows installer verifies the ZIP checksum and installs `forge.exe` to `%LOCALAPPDATA%\Programs\Forge\bin`, adding it to your user PATH. Open a new terminal and run `forge` from a project directory. Windows upgrades use the same installer (close Forge before reinstalling); `forge update` remains Linux/macOS-only. Requires Git for Git actions. To inspect the installer, see [install.ps1](install.ps1).

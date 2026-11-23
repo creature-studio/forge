@@ -9,7 +9,7 @@
 Windows 10/11 x64（PowerShell）同样提供原生预编译发布目标：
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.ps1 | iex
+irm https://creature-studio.github.io/forge/install.txt | iex
 ```
 
 Windows 安装器校验 SHA-256 后写入当前用户的 `%LOCALAPPDATA%\Programs\Forge\bin`；升级需要关闭 Forge 并重新执行脚本，`forge update` 暂不支持 Windows。

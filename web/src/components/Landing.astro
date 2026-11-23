@@ -19,7 +19,7 @@ interface Props {
 const { english = false } = Astro.props;
 const base = english ? '/forge/en/' : '/forge/';
 const installCmd = 'curl -fsSL https://creature-studio.github.io/forge/install.sh | sh';
-const windowsInstallCmd = 'irm https://creature-studio.github.io/forge/install.ps1 | iex';
+const windowsInstallCmd = 'irm https://creature-studio.github.io/forge/install.txt | iex';
 
 const copy = english
   ? {
