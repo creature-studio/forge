@@ -57,6 +57,9 @@ jobs:
         shell: powershell
         run: .\scripts\test-install-windows.ps1
 
+      - name: Verify Git for Windows staging and stash tests
+        run: cargo test -p forge-git-cli --lib --locked
+
       - name: Run Windows workspace tests
         run: cargo test --workspace --locked
 

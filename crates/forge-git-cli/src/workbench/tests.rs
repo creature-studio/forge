@@ -19,6 +19,9 @@ fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-q", "-b", "main"]);
+    // Git for Windows defaults to CRLF checkout on some runners. These
+    // byte-exact staging, discard and stash tests use LF fixture contents.
+    git(root, &["config", "core.autocrlf", "false"]);
     git(root, &["config", "user.name", "Test"]);
     git(root, &["config", "user.email", "test@example.test"]);
     fs::write(root.join("a.txt"), "alpha\nbeta\ngamma\ndelta\n").unwrap();
