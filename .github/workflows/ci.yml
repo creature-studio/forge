@@ -75,7 +75,8 @@ jobs:
           cargo build -p forge --locked
           if ($LASTEXITCODE -ne 0) { throw 'Windows Forge build failed' }
           $version = & .\target\debug\forge.exe --version
-          if ($LASTEXITCODE -ne 0 -or $version -ne 'forge 0.4.1') {
+          $workspaceVersion = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($LASTEXITCODE -ne 0 -or $version -ne "forge $workspaceVersion") {
             throw "Windows Forge executable smoke test failed: $version"
           }
           Write-Host "OK: $version"
