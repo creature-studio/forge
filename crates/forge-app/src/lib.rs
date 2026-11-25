@@ -680,16 +680,16 @@ impl KeyboardEnhancement {
     pub(crate) fn enable(&self) {
         use crossterm::event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
         use std::sync::atomic::Ordering;
-        if self.supported && !self.enabled.load(Ordering::Relaxed) {
-            if crossterm::execute!(
+        if self.supported
+            && !self.enabled.load(Ordering::Relaxed)
+            && crossterm::execute!(
                 io::stdout(),
                 PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
             )
             .is_ok()
-            {
-                self.enabled.store(true, Ordering::Relaxed);
-                input_trace::log("keyboard enhancement: enabled");
-            }
+        {
+            self.enabled.store(true, Ordering::Relaxed);
+            input_trace::log("keyboard enhancement: enabled");
         }
     }
 

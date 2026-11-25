@@ -112,7 +112,7 @@ impl Config {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
-            .or_else(|| {
+            .or({
                 #[cfg(windows)]
                 {
                     std::env::var_os("APPDATA").map(PathBuf::from)

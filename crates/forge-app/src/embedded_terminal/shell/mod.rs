@@ -157,7 +157,10 @@ mod tests {
         let config = TerminalConfig::default();
         let p = ShellProfile::new("a", "A", PathBuf::from("shell"), &["-i"]);
         assert_eq!(
-            resolve_default(&config, &[p.clone()]).unwrap().unwrap().id,
+            resolve_default(&config, std::slice::from_ref(&p))
+                .unwrap()
+                .unwrap()
+                .id,
             "a"
         );
         let config = TerminalConfig {

@@ -29,6 +29,8 @@ pub(super) struct PendingCommitFiles {
     handle: JobHandle<Result<Vec<CommitChange>, GitReadError>>,
 }
 
+type CommitDetail = (String, Vec<forge_git::CommitFileStat>);
+
 pub(super) struct HistoryState {
     /// The HISTORY accordion itself (independent of per-commit expansion).
     pub expanded: bool,
@@ -46,10 +48,7 @@ pub(super) struct HistoryState {
     pub ahead: usize,
     pub behind: usize,
     pub counts_truncated: bool,
-    pending_detail: Option<(
-        String,
-        JobHandle<Result<(String, Vec<forge_git::CommitFileStat>)>>,
-    )>,
+    pending_detail: Option<(String, JobHandle<Result<CommitDetail>>)>,
     pub detail_files: Option<(String, Vec<forge_git::CommitFileStat>)>,
     pending_graph: Option<PendingHistory>,
     pending_files: Vec<PendingCommitFiles>,
