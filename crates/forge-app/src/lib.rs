@@ -856,6 +856,17 @@ impl App {
                 self.toggle_scm_expand_at(self.scm.scm_selected);
             }
             Some(ScmRow::Change { .. }) => {
+                if let Some(entry) = self.selected_scm_entry() {
+                    if entry.status == forge_git::GitStatus::Conflicted {
+                        if let Some(root) = self.repo_root() {
+                            let path = root.join(&entry.path);
+                            if path.is_file() {
+                                self.open_conflict_editor(path);
+                                return;
+                            }
+                        }
+                    }
+                }
                 self.request_diff_for_scm_selection();
                 self.session.focus = PaneFocus::Preview;
             }
@@ -2020,7 +2031,9 @@ impl App {
                         self.open_tools(tools::PanelKind::Text);
                         if let Some(panel) = &mut self.tools.panel {
                             panel.title = "Remote operation failed".into();
-                            panel.detail=format!("{message}\n\nUse Ctrl+K Commands → Conflicts to resolve conflicts. Pull uses --ff-only and refuses divergent histories.");
+                            panel.detail = format!(
+                                "{message}\n\nUse Ctrl+K Commands → Conflicts to resolve conflicts. Pull uses --ff-only and refuses divergent histories."
+                            );
                         }
                         self.request_status();
                     }

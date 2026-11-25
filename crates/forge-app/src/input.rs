@@ -1540,7 +1540,13 @@ impl App {
                                 self.scm.last_scm_click =
                                     if double { None } else { Some((now, flat)) };
                                 if double {
-                                    self.open_selected_worktree_file();
+                                    if self.selected_scm_entry().is_some_and(|entry| {
+                                        entry.status == forge_git::GitStatus::Conflicted
+                                    }) {
+                                        self.scm_open_or_expand();
+                                    } else {
+                                        self.open_selected_worktree_file();
+                                    }
                                 } else {
                                     self.request_diff_for_scm_selection();
                                 }

@@ -152,7 +152,7 @@ B: branches. Enter switch, A create, r rename, X delete, D compare to HEAD.
 Z: stashes. Enter diff, A save, a apply, X drop. Save includes untracked files.
 S: ahead/behind and remote results. F fetch, p pull --ff-only, P push.
 W: worktrees. Enter switch workspace, A create, X remove clean worktree.
-Commands → Conflicts lists conflicts: e editor, o ours, t theirs, s mark resolved.
+Commands → Conflicts: Enter/e opens the merge editor. Alt+Up/Down navigate blocks; Alt+1/2/3 accept current/incoming/both. o/t resolves entire files; s marks resolved after saving.
 Commands also includes continue/abort for cherry-pick and revert, and abort merge.
 Dialogs capture shortcuts. Esc closes; PgUp/PgDn scrolls details.
 
