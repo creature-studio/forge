@@ -18,6 +18,7 @@ pub(super) struct EditingState {
     pending_save: Option<JobHandle<Result<TextDocument>>>,
     return_focus: Option<PaneFocus>,
     close_after_save: bool,
+    terminal_config: bool,
     clipboard: String,
     clipboard_line: bool,
     system_clipboard: Option<arboard::Clipboard>,
@@ -682,7 +683,25 @@ impl App {
         }
         self.editing.return_focus = Some(self.session.focus);
         let root = self.files.tree_root.clone();
+        self.editing.terminal_config = false;
         self.load_editor_document(root, path, line, conflict);
+    }
+
+    // Configuration is a single explicitly selected file outside the workspace.
+    // Use its parent as the editor's containment root; do not switch workspace
+    // or suspend Forge, so every existing PTY remains alive.
+    pub(super) fn open_terminal_config_editor(&mut self, path: PathBuf) {
+        if self.editing.active() || self.write_busy() {
+            return;
+        }
+        let Some(root) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        self.close_tools();
+        self.dismiss_menu();
+        self.editing.return_focus = Some(self.session.focus);
+        self.editing.terminal_config = true;
+        self.load_editor_document(root, path, 1, false);
     }
 
     fn load_editor_document(&mut self, root: PathBuf, path: PathBuf, line: usize, conflict: bool) {
@@ -710,6 +729,7 @@ impl App {
         self.services.jobs.cancel_key("editor:syntax");
         self.editing.pending_load = None;
         self.editing.view = None;
+        self.editing.terminal_config = false;
         if let Some(focus) = self.editing.return_focus.take() {
             self.session.focus = focus;
         }
@@ -731,6 +751,13 @@ impl App {
         }
         let document = view.document.clone();
         let value = view.value();
+        if self.editing.terminal_config {
+            if let Err(error) = Config::parse(&value) {
+                view.message = format!("Invalid config: {error}");
+                view.confirm_close = false;
+                return;
+            }
+        }
         view.message = "Saving…".into();
         self.editing.close_after_save = close;
         self.editing.pending_save = Some(self.services.jobs.spawn(
@@ -782,13 +809,25 @@ impl App {
                         view.message = "Saved".into();
                     }
                     self.session.status = format!("Saved {}", path.display());
-                    self.request_status();
-                    if self.in_git_sidebar() {
-                        self.request_diff_for_scm_selection();
+                    if self.editing.terminal_config {
+                        match Config::load_checked() {
+                            Ok(config) => {
+                                self.config.terminal = config.terminal;
+                                self.shell_profiles = None;
+                                self.shell_discovery = None;
+                                self.session.status = "Shell profiles reloaded".into();
+                            }
+                            Err(error) => self.session.status = error,
+                        }
                     } else {
-                        self.tools.reveal = Some((path, self.preview_source_line()));
-                        self.tools.return_focus = Some(self.session.focus);
-                        self.request_preview_for_selection();
+                        self.request_status();
+                        if self.in_git_sidebar() {
+                            self.request_diff_for_scm_selection();
+                        } else {
+                            self.tools.reveal = Some((path, self.preview_source_line()));
+                            self.tools.return_focus = Some(self.session.focus);
+                            self.request_preview_for_selection();
+                        }
                     }
                     if self.editing.close_after_save {
                         self.close_text_editor();

@@ -61,6 +61,20 @@ pub(super) fn event(event: &Event, before: NavState, after: NavState) {
     }
     let kind = match event {
         Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            KeyCode::Char('c' | 'C')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT)
+                {
+                    "key:Ctrl+Shift+C"
+                } else {
+                    "key:Ctrl+C"
+                }
+            }
             KeyCode::Esc => "key:Esc",
             KeyCode::F(1) => "key:F1",
             KeyCode::F(2) => "key:F2",

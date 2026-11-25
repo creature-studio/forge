@@ -15,6 +15,10 @@ use crate::style::rgb;
 /// Action ids emitted when the user confirms a menu item.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ContextAction {
+    ShellProfile(usize),
+    ShellDefaultMenu,
+    ShellConfigure,
+    ShellLoading,
     Open,
     OpenFile,
     DiscardChanges,
@@ -49,6 +53,10 @@ pub enum ContextAction {
 impl ContextAction {
     pub fn label(self) -> &'static str {
         match self {
+            Self::ShellProfile(_) => "Shell",
+            Self::ShellDefaultMenu => "Select Default Profile…",
+            Self::ShellConfigure => "Configure Profiles…",
+            Self::ShellLoading => "Discovering shells…",
             ContextAction::Open => "Open",
             ContextAction::OpenFile => "Open file in Files",
             ContextAction::DiscardChanges => "Discard changes…",
@@ -85,6 +93,7 @@ impl ContextAction {
 /// Where the menu was opened from (app uses this to resolve the target).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextTarget {
+    TerminalProfiles { set_default: bool },
     FileList { path: PathBuf },
     FileRoot { path: PathBuf },
     Staging { column: StagingColumn, index: usize },
@@ -104,6 +113,7 @@ pub struct ContextMenuItem {
 #[derive(Debug, Clone)]
 pub struct ContextMenu {
     pub items: Vec<ContextMenuItem>,
+    pub labels: std::collections::HashMap<ContextAction, String>,
     pub selected: usize,
     pub scroll: usize,
     pub anchor_x: u16,
@@ -126,6 +136,7 @@ impl ContextMenu {
         let selected = items.iter().position(|i| i.enabled).unwrap_or(0);
         Some(Self {
             items,
+            labels: Default::default(),
             selected,
             scroll: 0,
             anchor_x,
@@ -309,7 +320,14 @@ pub fn draw_context_menu(frame: &mut Frame<'_>, theme: &Theme, menu: &mut Contex
     let label_w = menu
         .items
         .iter()
-        .map(|i| i.action.label().chars().count() + 4)
+        .map(|i| {
+            unicode_width::UnicodeWidthStr::width(
+                menu.labels
+                    .get(&i.action)
+                    .map(String::as_str)
+                    .unwrap_or_else(|| i.action.label()),
+            ) + 4
+        })
         .max()
         .unwrap_or(12)
         .clamp(12, 30) as u16;
@@ -379,7 +397,13 @@ pub fn draw_context_menu(frame: &mut Frame<'_>, theme: &Theme, menu: &mut Contex
         .take(inner.height as usize)
     {
         // Edit File menu: solid cyan selected row, no `>` gutter.
-        let label = format!(" {} ", item.action.label());
+        let label = format!(
+            " {} ",
+            menu.labels
+                .get(&item.action)
+                .map(String::as_str)
+                .unwrap_or_else(|| item.action.label())
+        );
         let style = if !item.enabled {
             Style::default().fg(rgb(theme.muted)).bg(rgb(theme.menu_bg))
         } else if i == menu.selected {
