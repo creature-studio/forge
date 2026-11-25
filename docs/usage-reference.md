@@ -9,7 +9,7 @@
 Windows 10/11 x64（PowerShell）同样提供原生预编译发布目标：
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.ps1 | iex
+irm https://creature-studio.github.io/forge/install.txt | iex
 ```
 
 Windows 安装器校验 SHA-256 后写入当前用户的 `%LOCALAPPDATA%\Programs\Forge\bin`；升级需要关闭 Forge 并重新执行脚本，`forge update` 暂不支持 Windows。
@@ -41,11 +41,32 @@ Forge 使用 `portable-pty + vt100` 提供最多八个本地终端会话。按 `
 | `Ctrl+Shift+C` | 复制当前选择 |
 | `Ctrl+Shift+V` | 粘贴系统剪贴板内容 |
 
-Terminal 顶部有可点击的标签栏：点击标签切换 Shell，点击标签右侧的 `×` 或鼠标中键关闭该会话；右侧的 `+` 新建本地 Shell、`‹/›` 切换会话、`□` 最大化/恢复、`?` 显示操作指南、`−` 隐藏面板。鼠标在标签栏上滚动也能切换会话。Terminal 获取焦点后，底部快捷键提示区自动显示新建、切换、关闭、帮助等操作；最大化模式下仍可通过标签栏的 `?` 或 `F4` 查看操作指南。标签栏与 PTY 内容区独立，前台 TUI 的鼠标事件不会吞掉标签点击。窄窗口优先展示活动标签，部分次要按钮会隐藏，可继续使用功能键操作。
+Terminal 顶部有可点击的标签栏：点击标签切换 Shell，点击标签右侧的 `×` 或鼠标中键关闭该会话；右侧的 `+` 新建默认 Shell、`▾` 选择其他 Shell、`‹/›` 切换会话、`□` 最大化/恢复、`?` 显示操作指南、`−` 隐藏面板。鼠标在标签栏上滚动也能切换会话。Terminal 获取焦点后，底部快捷键提示区自动显示新建、切换、关闭、帮助等操作；最大化模式下仍可通过标签栏的 `?` 或 `F4` 查看操作指南。标签栏与 PTY 内容区独立，前台 TUI 的鼠标事件不会吞掉标签点击。窄窗口优先展示活动标签，部分次要按钮会隐藏，可继续使用功能键操作。
 
 终端历史默认最多 2,000 行；支持鼠标滚轮、拖拽选择复制、OSC 52 剪贴板回退。前台程序启用 xterm 鼠标模式时会接收鼠标事件，按住 Shift 可绕过前台程序进行宿主选择。粘贴会尊重前台程序协商的 Bracketed Paste 模式；在未启用该模式的程序中，多行粘贴仍可能被逐行执行。
 
 键盘输入支持传统 xterm/VT 修饰键、功能键与 Application Cursor 模式，但**尚未实现 Kitty Keyboard Protocol**；某些终端不能传递所有 Ctrl+Shift 组合，建议使用对应的功能键替代。全屏 TUI 程序在不同终端模拟器中仍需兼容性测试。
+
+### Shell Profiles
+
+点击终端工具栏的下拉箭头（或 Ctrl+Shift+F8）打开 Shell 列表，方向键/鼠标选择，Enter 创建对应会话，Esc 取消。点击 `+` 或 Shift+F8 仍创建默认 Shell。Select Default Profile 保存默认选择，Configure Profiles 打开 Forge 内置配置编辑器，保存后重新发现，不关闭已有会话。
+
+Windows 自动发现 PowerShell 7、Windows PowerShell、CMD、Git Bash、常见 MSYS2/Cygwin 安装和 WSL 发行版；Unix 系统使用登录 Shell、/etc/shells 与 PATH，macOS 额外检查常用 Homebrew 目录。Windows 优先 PowerShell 7，其次 Windows PowerShell 和 CMD；Linux/macOS 默认使用登录 Shell。只显示发现的可执行程序。自定义配置示例（Linux/macOS）：
+
+```toml
+[terminal]
+default_profile = "work"
+
+[terminal.profiles.work]
+name = "Work Bash"
+command = "/bin/bash"
+args = ["-i"]
+# cwd = "/path/to/workspace"
+# [terminal.profiles.work.env]
+# MY_ENV = "value"
+```
+
+Windows 的 command 可使用 TOML 单引号表示原生路径，例如 `'C:\Program Files\Git\bin\bash.exe'`。
 
 所有 Terminal Tab 都是 Forge 管理的本地 PTY Shell；隐藏面板不会终止会话，关闭 Tab 或退出 Forge 会结束对应 Shell，不提供跨进程持久会话。
 

@@ -21,20 +21,103 @@ use vt100::{MouseProtocolEncoding, MouseProtocolMode};
 
 mod input;
 mod protocol;
+pub(crate) mod shell;
 use input::InputWriter;
 use protocol::InputProtocol;
 
 static NEXT_TERMINAL_ID: AtomicU64 = AtomicU64::new(1);
 
-// Forward the application's clipboard *request*, not the Ctrl+C keystroke.
-// vt100 already parses OSC 52 across arbitrary PTY read boundaries. Its
-// default no-op callback silently discards a TUI's native copy result.
-#[derive(Clone)]
-struct ClipboardCallbacks {
-    pending: Arc<Mutex<Option<Vec<u8>>>>,
+// Windows cmd.exe executes registry AutoRun scripts before displaying its
+// prompt. Those scripts may assume a normal console, block on initialization,
+// or start another shell. A fresh embedded ConPTY must start independently.
+#[cfg(windows)]
+fn interactive_shell() -> CommandBuilder {
+    let shell = std::env::var_os("ComSpec")
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "cmd.exe".into());
+    let mut cmd = CommandBuilder::new(shell);
+    cmd.args(["/D", "/K"]);
+    cmd
 }
 
-impl vt100::Callbacks for ClipboardCallbacks {
+#[cfg(not(windows))]
+fn interactive_shell() -> CommandBuilder {
+    match std::env::var_os("SHELL").filter(|value| !value.is_empty()) {
+        Some(shell) => CommandBuilder::new(shell),
+        None => CommandBuilder::new_default_prog(),
+    }
+}
+
+// Keep title state separate from the parser lock so drawing background tabs
+// does not wait for their PTY screen processing.
+#[derive(Default)]
+struct TabTitle {
+    value: Option<String>,
+    dirty: bool,
+}
+
+#[derive(Clone)]
+struct TerminalCallbacks {
+    reply_writer: std::sync::Weak<InputWriter>,
+    pending: Arc<Mutex<Option<Vec<u8>>>>,
+    title: Arc<Mutex<TabTitle>>,
+    discarded_rows: i64,
+}
+
+impl vt100::Callbacks for TerminalCallbacks {
+    fn on_scroll(&mut self, _: vt100::capture::RowContents<'_>, alternate_screen: bool) {
+        if !alternate_screen {
+            self.discarded_rows += 1;
+        }
+    }
+
+    // ConPTY and other terminal applications may block until the host
+    // answers Device Status Report (DSR). Reply through the same ordered,
+    // bounded PTY input queue as keyboard input, never through the UI.
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        i1: Option<u8>,
+        i2: Option<u8>,
+        params: &[&[u16]],
+        c: char,
+    ) {
+        if c != 'n' || i2.is_some() {
+            return;
+        }
+        let response = match (i1, params) {
+            (None, p) if p == [&[5u16][..]] => "\x1b[0n".to_owned(),
+            (None | Some(b'?'), p) if p == [&[6u16][..]] => {
+                let (row, col) = screen.cursor_position();
+                let prefix = if i1.is_some() { "?" } else { "" };
+                format!("\x1b[{prefix}{};{}R", row + 1, col + 1)
+            }
+            _ => return,
+        };
+        if let Some(writer) = self.reply_writer.upgrade() {
+            let _ = writer.send(response.as_bytes());
+        }
+    }
+
+    fn set_window_title(&mut self, _: &mut vt100::Screen, title: &[u8]) {
+        // OSC 0 and 2 arrive here via vt100; OSC 1 is icon-only.
+        // Never let a child inject control characters into the tab strip.
+        let title: String = String::from_utf8_lossy(title)
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(512)
+            .collect();
+        let title = title.trim();
+        let value = (!title.is_empty()).then(|| title.to_owned());
+        if let Ok(mut state) = self.title.lock() {
+            if state.value != value {
+                state.value = value;
+                state.dirty = true;
+            }
+        }
+    }
+
+    // Forward the application's clipboard request, not the Ctrl+C keystroke.
     fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, selection: &[u8], data: &[u8]) {
         // Only expose the standard system clipboard (not the primary X11
         // selection); bound the payload to roughly 256 KiB of decoded text.
@@ -50,7 +133,7 @@ impl vt100::Callbacks for ClipboardCallbacks {
     }
 }
 
-type TerminalParser = vt100::Parser<ClipboardCallbacks>;
+type TerminalParser = vt100::Parser<TerminalCallbacks>;
 
 // DECSET 2026 (synchronized updates) makes multi-chunk TUI redraws atomic.
 // vt100 0.18 tracks cells but does not track this display protocol. Parsing
@@ -175,6 +258,7 @@ struct RenderSnapshot {
     cursor: (u16, u16),
     hide_cursor: bool,
     scrolled_back: bool,
+    first_row: i64,
 }
 
 // A child TUI owns its negotiated mouse events by default. When no child
@@ -189,7 +273,7 @@ pub(super) enum MouseRouting {
 // Pin ownership from the first press to release, including modifier changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LeftGesture {
-    PendingClick(MouseEvent),
+    PendingClick(MouseEvent, (u16, i64)),
     HostSelection,
     ChildMouse,
 }
@@ -224,19 +308,22 @@ pub struct EmbeddedTerminal {
     parser_revision: Arc<AtomicU64>,
     protocol: Arc<Mutex<InputProtocol>>,
     master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    writer: InputWriter,
+    writer: Arc<InputWriter>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     size: (u16, u16),
     pub area: Rect,
-    selection: Option<((u16, u16), (u16, u16))>,
+    // Logical buffer rows, not viewport rows.
+    selection: Option<((u16, i64), (u16, i64))>,
+    selection_edge: Option<(u16, isize)>,
     // Display-only drag feedback when a child TUI owns mouse input. Never
     // used for copy or key routing: the child retains its native selection.
     native_highlight: Option<((u16, u16), (u16, u16))>,
     native_press: Option<(u16, u16)>,
     left_gesture: Option<LeftGesture>,
     pub(super) mouse_routing: MouseRouting,
-    /// Human readable tab title.
+    /// Fallback tab title (initial working directory).
     pub name: String,
+    tab_title: Arc<Mutex<TabTitle>>,
 }
 
 impl EmbeddedTerminal {
@@ -246,6 +333,16 @@ impl EmbeddedTerminal {
         height: u16,
         notify: Arc<tokio::sync::Notify>,
     ) -> anyhow::Result<Self> {
+        Self::start_with_profile(cwd, width, height, notify, None)
+    }
+
+    pub(crate) fn start_with_profile(
+        cwd: &Path,
+        width: u16,
+        height: u16,
+        notify: Arc<tokio::sync::Notify>,
+        profile: Option<&shell::ShellProfile>,
+    ) -> anyhow::Result<Self> {
         let cols = width.max(1);
         let rows = height.max(1);
         let pty = native_pty_system().openpty(PtySize {
@@ -254,24 +351,29 @@ impl EmbeddedTerminal {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        // portable-pty chooses an OS-appropriate shell when SHELL is unset.
-        let mut cmd = match std::env::var("SHELL") {
-            Ok(shell) if !shell.is_empty() => CommandBuilder::new(shell),
-            _ => CommandBuilder::new_default_prog(),
+        let mut cmd = if let Some(profile) = profile {
+            profile.builder(cwd)
+        } else {
+            let mut cmd = interactive_shell();
+            cmd.cwd(cwd);
+            cmd
         };
-        cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         let child = pty.slave.spawn_command(cmd)?;
         drop(pty.slave);
-        let writer = InputWriter::new(pty.master.take_writer()?)?;
+        let writer = Arc::new(InputWriter::new(pty.master.take_writer()?)?);
         let mut reader = pty.master.try_clone_reader()?;
         let pending_clipboard = Arc::new(Mutex::new(None));
+        let tab_title = Arc::new(Mutex::new(TabTitle::default()));
         let parser = Arc::new(Mutex::new(TerminalParser::new_with_callbacks(
             NonZeroU16::new(rows).unwrap(),
             NonZeroU16::new(cols).unwrap(),
             2000,
-            ClipboardCallbacks {
+            TerminalCallbacks {
+                reply_writer: Arc::downgrade(&writer),
                 pending: pending_clipboard.clone(),
+                title: tab_title.clone(),
+                discarded_rows: 0,
             },
         )));
         let revision = Arc::new(AtomicU64::new(0));
@@ -387,21 +489,56 @@ impl EmbeddedTerminal {
             size: (cols, rows),
             area: Rect::default(),
             selection: None,
+            selection_edge: None,
             native_highlight: None,
             native_press: None,
             left_gesture: None,
             mouse_routing: MouseRouting::Native,
-            name: cwd
-                .file_name()
-                .map(|s| s.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "Shell".into()),
+            name: profile.map(|p| p.name.clone()).unwrap_or_else(|| {
+                cwd.file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Shell".into())
+            }),
+            tab_title,
         })
+    }
+
+    pub fn display_title(&self) -> String {
+        self.tab_title
+            .lock()
+            .ok()
+            .and_then(|state| state.value.clone())
+            .unwrap_or_else(|| self.name.clone())
+    }
+
+    /// Read the title and acknowledge it atomically when drawing the tab bar.
+    pub fn draw_tab_title(&self) -> String {
+        self.tab_title
+            .lock()
+            .ok()
+            .and_then(|mut state| {
+                state.dirty = false;
+                state.value.clone()
+            })
+            .unwrap_or_else(|| self.name.clone())
+    }
+
+    pub fn tab_title_changed(&self) -> bool {
+        self.tab_title.lock().is_ok_and(|state| state.dirty)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
         let new_size = (cols.max(1), rows.max(1));
         if self.size == new_size {
             return;
+        }
+        self.selection = None;
+        self.selection_edge = None;
+        if matches!(
+            self.left_gesture,
+            Some(LeftGesture::HostSelection | LeftGesture::PendingClick(..))
+        ) {
+            self.left_gesture = None;
         }
         self.native_highlight = None;
         self.native_press = None;
@@ -461,6 +598,7 @@ impl EmbeddedTerminal {
         };
         self.scroll_to_bottom(); // any input returns to the live viewport
         self.selection = None;
+        self.selection_edge = None;
         self.native_highlight = None;
         self.native_press = None;
         self.write_input(&data)
@@ -482,6 +620,75 @@ impl EmbeddedTerminal {
             screen.set_scrollback(next);
             self.parser_revision.fetch_add(1, Ordering::Release);
             self.revision.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    fn first_buffer_row(parser: &TerminalParser) -> i64 {
+        let screen = parser.screen();
+        if screen.alternate_screen() {
+            0
+        } else {
+            parser.callbacks().discarded_rows + screen.scrollback_len() as i64
+                - screen.scrollback() as i64
+        }
+    }
+
+    fn buffer_point(&self, x: u16, y: u16) -> (u16, i64) {
+        let first = self
+            .parser
+            .lock()
+            .map(|p| Self::first_buffer_row(&p))
+            .unwrap_or(0);
+        (x, first + i64::from(y))
+    }
+
+    fn extend_selection(&mut self, x: u16, y: u16) {
+        if let Some((start, _)) = self.selection {
+            self.selection = Some((start, self.buffer_point(x, y)));
+            self.revision.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    fn track_selection_edge(&mut self, x: u16, y: u16) {
+        self.selection_edge = if y == 0 {
+            Some((x, -1))
+        } else if y == self.area.height.saturating_sub(1) {
+            Some((x, 1))
+        } else {
+            None
+        };
+    }
+
+    pub(super) fn captures_host_selection(&self) -> bool {
+        self.left_gesture == Some(LeftGesture::HostSelection)
+    }
+
+    pub(super) fn selection_autoscroll_active(&self) -> bool {
+        self.visible
+            && self.left_gesture == Some(LeftGesture::HostSelection)
+            && self.selection_edge.is_some()
+            && self.parser.lock().is_ok_and(|p| {
+                let screen = p.screen();
+                match self.selection_edge {
+                    Some((_, -1)) => screen.scrollback() < screen.scrollback_len(),
+                    Some(_) => screen.scrollback() > 0,
+                    None => false,
+                }
+            })
+    }
+
+    pub(super) fn tick_selection_autoscroll(&mut self) {
+        if !self.selection_autoscroll_active() {
+            return;
+        }
+        if let Some((x, direction)) = self.selection_edge {
+            self.scroll(direction);
+            let y = if direction < 0 {
+                0
+            } else {
+                self.area.height.saturating_sub(1)
+            };
+            self.extend_selection(x, y);
         }
     }
 
@@ -576,37 +783,23 @@ impl EmbeddedTerminal {
         let x = event.column.saturating_sub(self.area.x);
         let y = event.row.saturating_sub(self.area.y);
 
-        if let Some(LeftGesture::PendingClick(down)) = self.left_gesture {
+        if let Some(LeftGesture::PendingClick(down, start)) = self.left_gesture {
             match event.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     self.left_gesture = Some(LeftGesture::HostSelection);
-                    let start = (
-                        down.column
-                            .saturating_sub(self.area.x)
-                            .min(self.area.width - 1),
-                        down.row
-                            .saturating_sub(self.area.y)
-                            .min(self.area.height - 1),
-                    );
-                    self.selection = Some((start, (x, y)));
+                    self.selection = Some((start, self.buffer_point(x, y)));
+                    self.track_selection_edge(x, y);
                     self.revision.fetch_add(1, Ordering::Release);
                     return Ok(None);
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
                     self.left_gesture = None;
-                    let start = (
-                        down.column
-                            .saturating_sub(self.area.x)
-                            .min(self.area.width - 1),
-                        down.row
-                            .saturating_sub(self.area.y)
-                            .min(self.area.height - 1),
-                    );
                     // Some hosts omit an intermediate Drag at low pointer
                     // sampling rates. Different release coordinates are still
                     // a text selection, not a click.
-                    if start != (x, y) {
-                        self.selection = Some((start, (x, y)));
+                    let end = self.buffer_point(x, y);
+                    if start != end {
+                        self.selection = Some((start, end));
                         self.revision.fetch_add(1, Ordering::Release);
                         return Ok(self.selected_text());
                     }
@@ -646,20 +839,24 @@ impl EmbeddedTerminal {
         if self.left_gesture == Some(LeftGesture::HostSelection) {
             match event.kind {
                 MouseEventKind::Drag(MouseButton::Left) => {
-                    if let Some((start, _)) = self.selection {
-                        self.selection = Some((start, (x, y)));
-                        self.revision.fetch_add(1, Ordering::Release);
-                    }
+                    self.track_selection_edge(x, y);
+                    self.extend_selection(x, y);
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
                     self.left_gesture = None;
-                    if let Some((start, _)) = self.selection {
-                        self.selection = Some((start, (x, y)));
-                        self.revision.fetch_add(1, Ordering::Release);
-                        if start != (x, y) {
-                            return Ok(self.selected_text());
-                        }
+                    self.selection_edge = None;
+                    self.extend_selection(x, y);
+                    if self.selection.is_some_and(|(start, end)| start != end) {
+                        return Ok(self.selected_text());
                     }
+                }
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                    self.scroll(if event.kind == MouseEventKind::ScrollUp {
+                        -3
+                    } else {
+                        3
+                    });
+                    self.extend_selection(x, y);
                 }
                 _ => {}
             }
@@ -727,13 +924,14 @@ impl EmbeddedTerminal {
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
             self.focused = true;
             self.selection = None;
+            self.selection_edge = None;
             self.native_highlight = None;
             self.native_press = None;
             if child_mouse.is_some()
                 && self.mouse_routing == MouseRouting::SelectText
                 && !event.modifiers.contains(KeyModifiers::CONTROL)
             {
-                self.left_gesture = Some(LeftGesture::PendingClick(event));
+                self.left_gesture = Some(LeftGesture::PendingClick(event, self.buffer_point(x, y)));
                 self.revision.fetch_add(1, Ordering::Release);
                 return Ok(None);
             }
@@ -742,10 +940,19 @@ impl EmbeddedTerminal {
                 self.native_press = Some((x, y));
             } else {
                 self.left_gesture = Some(LeftGesture::HostSelection);
-                self.selection = Some(((x, y), (x, y)));
+                let point = self.buffer_point(x, y);
+                self.selection = Some((point, point));
                 self.revision.fetch_add(1, Ordering::Release);
                 return Ok(None);
             }
+            self.revision.fetch_add(1, Ordering::Release);
+        }
+        if matches!(
+            event.kind,
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+        ) {
+            self.native_highlight = None;
+            self.native_press = None;
             self.revision.fetch_add(1, Ordering::Release);
         }
         if let Some((mode, encoding)) = child_mouse {
@@ -769,7 +976,15 @@ impl EmbeddedTerminal {
     pub fn selected_text(&self) -> Option<String> {
         let (start, end) = self.selection?;
         let parser = self.parser.lock().ok()?;
-        let screen = parser.screen();
+        // Copy via a private viewport without changing the displayed scrollback.
+        let mut screen = parser.screen().clone();
+        let base = if screen.alternate_screen() {
+            0
+        } else {
+            parser.callbacks().discarded_rows
+        };
+        let live = base + screen.scrollback_len() as i64;
+        let height = i64::from(screen.size().0.get());
         let width = self.area.width;
         let (a, b) = if (start.1, start.0) <= (end.1, end.0) {
             (start, end)
@@ -777,7 +992,13 @@ impl EmbeddedTerminal {
             (end, start)
         };
         let mut lines = Vec::new();
+        // Evicted rows must not be replaced with unrelated content.
+        if a.1 < base || b.1 >= live + height {
+            return None;
+        }
         for y in a.1..=b.1 {
+            screen.set_scrollback((live - y).max(0) as usize);
+            let row = (y - live).max(0) as u16;
             let left = if y == a.1 { a.0 } else { 0 };
             let right = if y == b.1 {
                 b.0
@@ -786,7 +1007,7 @@ impl EmbeddedTerminal {
             };
             let mut line = String::new();
             for x in left..=right {
-                if let Some(cell) = screen.cell(y, x) {
+                if let Some(cell) = screen.cell(row, x) {
                     line.push_str(cell.contents());
                 }
             }
@@ -795,7 +1016,14 @@ impl EmbeddedTerminal {
         Some(lines.join("\n"))
     }
 
-    pub fn render(&mut self, frame: &mut Frame<'_>, area: Rect, bg: Color, fg: Color) {
+    pub fn render(
+        &mut self,
+        frame: &mut Frame<'_>,
+        area: Rect,
+        bg: Color,
+        fg: Color,
+        owns_keyboard: bool,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -837,6 +1065,7 @@ impl EmbeddedTerminal {
                     cursor: screen.cursor_position(),
                     hide_cursor: screen.hide_cursor(),
                     scrolled_back: screen.scrollback() != 0,
+                    first_row: Self::first_buffer_row(&parser),
                 });
             } else if !waiting_for_frame {
                 self.last_complete_frame.as_mut().unwrap().revision =
@@ -868,6 +1097,7 @@ impl EmbeddedTerminal {
                 cursor: (0, 0),
                 hide_cursor: true,
                 scrolled_back: false,
+                first_row: previous.as_ref().map_or(0, |s| s.first_row),
             });
         }
         let snapshot = self
@@ -876,12 +1106,33 @@ impl EmbeddedTerminal {
             .expect("a snapshot was just built");
         let cells = &snapshot.cells;
         let cursor = snapshot.cursor;
-        let draw_cursor = self.focused && !snapshot.hide_cursor && !snapshot.scrolled_back;
+        // IMEs (including browser terminal IMEs) anchor composition to the
+        // real outer cursor, not to an inverse-video cell in the PTY grid.
+        // Use the same committed snapshot as the displayed cells, and let
+        // the outer terminal draw its own cursor rather than double-inverting.
+        if owns_keyboard
+            && self.visible
+            && self.focused
+            && !self.ended.load(Ordering::Acquire)
+            && !snapshot.hide_cursor
+            && !snapshot.scrolled_back
+            && cursor.0 < area.height
+        {
+            // vt100 may report the pending-wrap column just beyond the last cell.
+            frame.set_cursor_position((area.x + cursor.1.min(area.width - 1), area.y + cursor.0));
+        }
         // APP mode's native drag feedback is visual only. An explicit Forge
         // text selection (Shift+drag or SEL mode) has priority if present.
         let selection = self
             .selection
-            .or(self.native_highlight)
+            .or_else(|| {
+                self.native_highlight.map(|(a, b)| {
+                    (
+                        (a.0, i64::from(a.1) + snapshot.first_row),
+                        (b.0, i64::from(b.1) + snapshot.first_row),
+                    )
+                })
+            })
             .map(|(start, end)| {
                 if (start.1, start.0) <= (end.1, end.0) {
                     (start, end)
@@ -917,11 +1168,9 @@ impl EmbeddedTerminal {
                     .fg(to_color(cell.fgcolor(), fg))
                     .bg(to_color(cell.bgcolor(), bg))
                     .add_modifier(attrs);
-                if draw_cursor && cursor == (y, x) {
-                    style = style.add_modifier(Modifier::REVERSED);
-                }
                 if selection.is_some_and(|(start, end)| {
-                    (y, x) >= (start.1, start.0) && (y, x) <= (end.1, end.0)
+                    let row = snapshot.first_row + i64::from(y);
+                    (row, x) >= (start.1, start.0) && (row, x) <= (end.1, end.0)
                 }) {
                     style = style.add_modifier(Modifier::REVERSED);
                 }
@@ -1132,6 +1381,187 @@ impl Drop for EmbeddedTerminal {
     }
 }
 
+// Unlike the Unix-specific protocol suite, this exercises the actual native
+// PTY on both platforms, including startup, input, output and rendering.
+#[cfg(all(test, any(unix, windows)))]
+mod native_pty_tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn osc_tab_titles_are_streamed_isolated_and_resettable() {
+        let make_parser = || {
+            let title = Arc::new(Mutex::new(TabTitle::default()));
+            let parser = TerminalParser::new_with_callbacks(
+                NonZeroU16::new(12).unwrap(),
+                NonZeroU16::new(60).unwrap(),
+                200,
+                TerminalCallbacks {
+                    reply_writer: std::sync::Weak::new(),
+                    pending: Arc::new(Mutex::new(None)),
+                    title: title.clone(),
+                    discarded_rows: 0,
+                },
+            );
+            (parser, title)
+        };
+        let (mut first, first_title) = make_parser();
+        let (mut second, second_title) = make_parser();
+        first.process(b"\x1b]0;Antigravity");
+        assert!(first_title.lock().unwrap().value.is_none());
+        first.process(b"\x07");
+        assert_eq!(
+            first_title.lock().unwrap().value.as_deref(),
+            Some("Antigravity")
+        );
+        assert!(first_title.lock().unwrap().dirty);
+        assert!(second_title.lock().unwrap().value.is_none());
+
+        second.process(b"\x1b]2;Codex\x1b");
+        second.process(b"\\");
+        assert_eq!(second_title.lock().unwrap().value.as_deref(), Some("Codex"));
+        first_title.lock().unwrap().dirty = false;
+        first.process(b"\x1b]2;Antigravity\x07");
+        assert!(!first_title.lock().unwrap().dirty);
+        first.process(b"\x1b]1;icon only\x07");
+        assert_eq!(
+            first_title.lock().unwrap().value.as_deref(),
+            Some("Antigravity")
+        );
+        first.process("\x1b]2;中文标题\x07".as_bytes());
+        assert_eq!(
+            first_title.lock().unwrap().value.as_deref(),
+            Some("中文标题")
+        );
+        first.process(b"\x1b]2;\x07");
+        assert!(first_title.lock().unwrap().value.is_none());
+        assert!(first_title.lock().unwrap().dirty);
+        assert_eq!(second_title.lock().unwrap().value.as_deref(), Some("Codex"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_pty_osc_title_updates_tab_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut embedded =
+            EmbeddedTerminal::start(dir.path(), 80, 12, Arc::new(tokio::sync::Notify::new()))
+                .expect("start native interactive shell");
+        embedded
+            .paste(r"printf '\033]2;Forge-%s\007' OSC; sleep 2")
+            .unwrap();
+        embedded
+            .send(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while embedded.display_title() != "Forge-OSC" {
+            assert!(
+                Instant::now() < deadline,
+                "PTY title: {:?}",
+                embedded.display_title()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(embedded.tab_title_changed());
+        assert_eq!(embedded.draw_tab_title(), "Forge-OSC");
+        assert!(!embedded.tab_title_changed());
+    }
+
+    #[test]
+    fn terminal_answers_device_status_queries_at_actual_cursor() {
+        use std::io::{self, Write};
+        struct Capture(Arc<Mutex<Vec<u8>>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(InputWriter::capture(Box::new(Capture(bytes.clone()))));
+        let mut parser = TerminalParser::new_with_callbacks(
+            NonZeroU16::new(12).unwrap(),
+            NonZeroU16::new(80).unwrap(),
+            0,
+            TerminalCallbacks {
+                reply_writer: Arc::downgrade(&writer),
+                pending: Arc::new(Mutex::new(None)),
+                title: Arc::new(Mutex::new(TabTitle::default())),
+                discarded_rows: 0,
+            },
+        );
+        parser.process(b"\x1b[3;7H\x1b[");
+        assert!(bytes.lock().unwrap().is_empty());
+        parser.process(b"6n\x1b[5n\x1b[?6n\x1b[9n");
+        assert_eq!(&*bytes.lock().unwrap(), b"\x1b[3;7R\x1b[0n\x1b[?3;7R");
+    }
+
+    #[test]
+    fn native_shell_starts_and_renders_command_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut embedded =
+            EmbeddedTerminal::start(dir.path(), 80, 12, Arc::new(tokio::sync::Notify::new()))
+                .expect("start native interactive shell");
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let contents = embedded.parser.lock().unwrap().screen().contents();
+            if !contents.trim().is_empty() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline && !embedded.ended.load(Ordering::Acquire),
+                "native shell produced no startup output"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+
+        // The expected string cannot occur in the echoed command itself.
+        #[cfg(windows)]
+        let (command, expected) = ("echo FORGE_PTY_%OS%_READY", "FORGE_PTY_Windows_NT_READY");
+        #[cfg(unix)]
+        let (command, expected) = ("printf '%s%s\\n' FORGE_PTY_ READY", "FORGE_PTY_READY");
+
+        embedded.paste(command).unwrap();
+        embedded
+            .send(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut ui = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        loop {
+            ui.draw(|frame| {
+                embedded.render(
+                    frame,
+                    Rect::new(0, 0, 80, 12),
+                    Color::Black,
+                    Color::White,
+                    true,
+                );
+            })
+            .unwrap();
+            let rendered = (0..12)
+                .map(|y| {
+                    (0..80)
+                        .map(|x| ui.backend().buffer()[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            if rendered.contains(expected) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline && !embedded.ended.load(Ordering::Acquire),
+                "native shell command output not rendered: {rendered:?}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        embedded.resize(60, 9);
+        assert_eq!(embedded.size, (60, 9));
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
@@ -1202,7 +1632,7 @@ mod tests {
         let mut term =
             EmbeddedTerminal::start(&cwd, 80, 12, Arc::new(tokio::sync::Notify::new())).unwrap();
         let output = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        term.writer = InputWriter::capture(Box::new(Capture(output.clone())));
+        term.writer = Arc::new(InputWriter::capture(Box::new(Capture(output.clone()))));
         let fg = term.master.lock().unwrap().process_group_leader();
         child_output(&term, fg, b"\x1b[?2004h");
         term.paste("echo alpha\necho beta").unwrap();
@@ -1236,7 +1666,7 @@ mod tests {
         );
 
         let recorded = Arc::new(Mutex::new(Vec::new()));
-        term.writer = InputWriter::capture(Box::new(Capture(recorded.clone())));
+        term.writer = Arc::new(InputWriter::capture(Box::new(Capture(recorded.clone()))));
         let movement = MouseEvent {
             kind: MouseEventKind::Moved,
             column: 12,
@@ -1327,7 +1757,7 @@ mod tests {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let original_writer = std::mem::replace(
             &mut term.writer,
-            InputWriter::capture(Box::new(Capture(recorded.clone()))),
+            Arc::new(InputWriter::capture(Box::new(Capture(recorded.clone())))),
         );
         child_output(&term, foreground, b"\x1b[?1003h\x1b[?1006h");
         term.mouse(MouseEvent {
@@ -1392,12 +1822,18 @@ mod tests {
         assert_eq!(text.as_deref(), Some("ABC"));
         assert_eq!(term.selection, Some(((7, 4), (9, 4))));
         // Selection must be visible in the rendered screen, not just in the
-        // clipboard result. The cursor may also be reversed at its own cell.
+        // clipboard result. The hardware cursor is independent of the selection.
         {
             use ratatui::{backend::TestBackend, Terminal};
             let mut ui = Terminal::new(TestBackend::new(80, 20)).unwrap();
             ui.draw(|frame| {
-                term.render(frame, Rect::new(0, 0, 80, 20), Color::Black, Color::White)
+                term.render(
+                    frame,
+                    Rect::new(0, 0, 80, 20),
+                    Color::Black,
+                    Color::White,
+                    true,
+                )
             })
             .unwrap();
             for x in 7..=9 {
@@ -1448,7 +1884,13 @@ mod tests {
             use ratatui::{backend::TestBackend, Terminal};
             let mut ui = Terminal::new(TestBackend::new(80, 20)).unwrap();
             ui.draw(|frame| {
-                term.render(frame, Rect::new(0, 0, 80, 20), Color::Reset, Color::Reset)
+                term.render(
+                    frame,
+                    Rect::new(0, 0, 80, 20),
+                    Color::Reset,
+                    Color::Reset,
+                    true,
+                )
             })
             .unwrap();
             assert!(!ui.backend().buffer()[(6, 4)]
@@ -1610,8 +2052,11 @@ mod tests {
             NonZeroU16::new(12).unwrap(),
             NonZeroU16::new(60).unwrap(),
             200,
-            ClipboardCallbacks {
+            TerminalCallbacks {
+                reply_writer: std::sync::Weak::new(),
                 pending: pending.clone(),
+                title: Arc::new(Mutex::new(TabTitle::default())),
+                discarded_rows: 0,
             },
         );
         parser.process(b"\x1b]52;c;Rk9SR0VfTkFUSVZFX0NPUFk=");
@@ -1648,7 +2093,7 @@ mod tests {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let original = std::mem::replace(
             &mut term.writer,
-            InputWriter::capture(Box::new(Capture(recorded.clone()))),
+            Arc::new(InputWriter::capture(Box::new(Capture(recorded.clone())))),
         );
         app.terminal = Some(term);
 
@@ -1658,6 +2103,7 @@ mod tests {
         assert_eq!(&*recorded.lock().unwrap(), b"\x03");
         assert!(!app.session.should_quit);
         assert!(app.terminal.as_ref().unwrap().selection.is_none());
+        assert!(app.session.terminal_copy_notice.is_none());
 
         // Forge's explicit host shortcut copies a host selection without
         // sending anything new to the foreground process.
@@ -1669,6 +2115,10 @@ mod tests {
         assert_eq!(&*recorded.lock().unwrap(), b"\x03");
         assert_eq!(app.session.status, "Terminal selected 13 characters");
         assert!(!app.session.should_quit);
+        assert_eq!(
+            app.session.terminal_copy_notice.as_ref().unwrap().message,
+            "Copied to clipboard"
+        );
 
         let term = app.terminal.as_mut().unwrap();
         term.writer = original;
@@ -1818,24 +2268,88 @@ mod tests {
     }
 
     #[test]
-    fn scrollback_and_selection_keep_visible_text() {
+    fn scrollback_selection_stays_on_text_and_extends_across_pages() {
         let cwd = std::env::current_dir().unwrap();
         let mut term =
             EmbeddedTerminal::start(&cwd, 40, 8, Arc::new(tokio::sync::Notify::new())).unwrap();
         term.area = Rect::new(1, 1, 40, 8);
-        term.parser.lock().unwrap().process(b"ONE\r\nTWO\r\nTHREE");
-        term.selection = Some(((0, 0), (2, 1)));
-        assert_eq!(term.selected_text().unwrap(), "ONE\nTWO");
+        // A dedicated parser makes the history deterministic independently of
+        // asynchronous shell startup output.
+        term.parser = Arc::new(Mutex::new(TerminalParser::new_with_callbacks(
+            NonZeroU16::new(8).unwrap(),
+            NonZeroU16::new(40).unwrap(),
+            200,
+            TerminalCallbacks {
+                reply_writer: std::sync::Weak::new(),
+                pending: term.pending_clipboard.clone(),
+                title: term.tab_title.clone(),
+                discarded_rows: 0,
+            },
+        )));
         {
             let mut parser = term.parser.lock().unwrap();
             for i in 0..30 {
                 parser.process(format!("{i:02}\r\n").as_bytes());
             }
         }
-        term.scroll(-4);
-        assert!(term.parser.lock().unwrap().screen().scrollback() > 0);
+        let event = |kind, row| MouseEvent {
+            kind,
+            column: 1,
+            row,
+            modifiers: KeyModifiers::SHIFT,
+        };
+        term.mouse(event(MouseEventKind::Down(MouseButton::Left), 3))
+            .unwrap();
+        term.mouse(event(MouseEventKind::Up(MouseButton::Left), 4))
+            .unwrap();
+        let initial = term.selected_text().unwrap();
+        let selection = term.selection;
+        term.scroll(-5);
+        assert_eq!(term.selection, selection);
+        assert_eq!(term.selected_text().as_deref(), Some(initial.as_str()));
         term.scroll_to_bottom();
-        assert_eq!(term.parser.lock().unwrap().screen().scrollback(), 0);
+        assert_eq!(term.selected_text().as_deref(), Some(initial.as_str()));
+
+        // Hold the pointer at the top edge across more than a full viewport.
+        term.mouse(event(MouseEventKind::Down(MouseButton::Left), 5))
+            .unwrap();
+        let anchor = term.selection.unwrap().0;
+        term.mouse(event(MouseEventKind::Drag(MouseButton::Left), 1))
+            .unwrap();
+        for _ in 0..12 {
+            term.tick_selection_autoscroll();
+        }
+        assert_eq!(term.scrollback_position(), 12);
+        assert_eq!(term.selection.unwrap().0, anchor);
+        assert!(term.selected_text().unwrap().lines().count() > 8);
+        term.mouse(event(MouseEventKind::ScrollUp, 1)).unwrap();
+        assert_eq!(term.scrollback_position(), 15);
+        assert_eq!(term.selection.unwrap().0, anchor);
+        let selected = term
+            .mouse(event(MouseEventKind::Up(MouseButton::Left), 1))
+            .unwrap()
+            .unwrap();
+        assert!(selected.starts_with("08"), "{selected:?}");
+        assert!(!term.selection_autoscroll_active());
+        term.scroll_to_bottom();
+        assert_eq!(term.selected_text().as_deref(), Some(selected.as_str()));
+
+        // Reverse direction: drag toward the live bottom from history.
+        term.scroll(-15);
+        term.mouse(event(MouseEventKind::Down(MouseButton::Left), 3))
+            .unwrap();
+        let anchor = term.selection.unwrap().0;
+        term.mouse(event(MouseEventKind::Drag(MouseButton::Left), 8))
+            .unwrap();
+        for _ in 0..10 {
+            term.tick_selection_autoscroll();
+        }
+        assert_eq!(term.scrollback_position(), 5);
+        assert_eq!(term.selection.unwrap().0, anchor);
+        assert!(term.selected_text().unwrap().lines().count() > 8);
+        term.mouse(event(MouseEventKind::Up(MouseButton::Left), 8))
+            .unwrap();
+        assert!(!term.selection_autoscroll_active());
     }
 
     #[test]
@@ -1898,8 +2412,11 @@ mod tests {
             NonZeroU16::new(5).unwrap(),
             NonZeroU16::new(30).unwrap(),
             2000,
-            ClipboardCallbacks {
+            TerminalCallbacks {
+                reply_writer: std::sync::Weak::new(),
                 pending: embedded.pending_clipboard.clone(),
+                title: embedded.tab_title.clone(),
+                discarded_rows: 0,
             },
         );
         embedded.parser.lock().unwrap().process(b"\x1b[2J\x1b[HOLD");
@@ -1908,7 +2425,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
         let draw = |embedded: &mut EmbeddedTerminal, terminal: &mut Terminal<TestBackend>, area| {
             terminal
-                .draw(|frame| embedded.render(frame, area, Color::Reset, Color::Reset))
+                .draw(|frame| embedded.render(frame, area, Color::Reset, Color::Reset, true))
                 .unwrap();
         };
         draw(&mut embedded, &mut terminal, Rect::new(0, 0, 30, 5));
@@ -1992,7 +2509,13 @@ mod tests {
         let draw = |embedded: &mut EmbeddedTerminal, terminal: &mut Terminal<TestBackend>| {
             terminal
                 .draw(|frame| {
-                    embedded.render(frame, Rect::new(0, 0, 30, 5), Color::Reset, Color::Reset)
+                    embedded.render(
+                        frame,
+                        Rect::new(0, 0, 30, 5),
+                        Color::Reset,
+                        Color::Reset,
+                        true,
+                    )
                 })
                 .unwrap();
             (0..30)
@@ -2036,7 +2559,13 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(30, 5)).unwrap();
         terminal
             .draw(|frame| {
-                embedded.render(frame, Rect::new(0, 0, 30, 5), Color::Reset, Color::Reset)
+                embedded.render(
+                    frame,
+                    Rect::new(0, 0, 30, 5),
+                    Color::Reset,
+                    Color::Reset,
+                    true,
+                )
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -2068,46 +2597,92 @@ mod tests {
     }
 
     #[test]
-    fn terminal_renderer_respects_child_cursor_visibility() {
-        use ratatui::{backend::TestBackend, Terminal};
+    fn terminal_renderer_maps_real_cursor_and_respects_keyboard_ownership() {
+        use ratatui::{backend::TestBackend, layout::Position, Terminal};
         let cwd = std::env::current_dir().unwrap();
         let mut embedded =
             EmbeddedTerminal::start(&cwd, 40, 8, Arc::new(tokio::sync::Notify::new())).unwrap();
-        let mut terminal = Terminal::new(TestBackend::new(40, 8)).unwrap();
-
-        // The foreground TUI owns its cursor visibility through DECSET 25.
-        // Even when Forge's terminal pane has focus, a hidden child cursor
-        // must not overwrite the status character with inverse video.
-        {
-            let mut parser = embedded.parser.lock().unwrap();
-            parser.process(b"\x1b[?25l\x1b[1;1HSTATUS");
-            embedded.parser_revision.fetch_add(1, Ordering::Release);
-            assert!(parser.screen().hide_cursor());
-        }
+        let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+        let area = Rect::new(10, 6, 40, 8);
+        // Isolate shell startup output from the deterministic screen fixture.
+        embedded.parser = Arc::new(Mutex::new(TerminalParser::new_with_callbacks(
+            NonZeroU16::new(8).unwrap(),
+            NonZeroU16::new(40).unwrap(),
+            200,
+            TerminalCallbacks {
+                reply_writer: std::sync::Weak::new(),
+                pending: embedded.pending_clipboard.clone(),
+                title: embedded.tab_title.clone(),
+                discarded_rows: 0,
+            },
+        )));
+        embedded.visible = true;
         embedded.focused = true;
-        terminal
-            .draw(|frame| {
-                embedded.render(frame, Rect::new(0, 0, 40, 8), Color::Black, Color::White);
-            })
-            .unwrap();
-        let first = &terminal.backend().buffer()[(0, 0)];
-        assert_eq!(first.symbol(), "S");
-        assert!(!first.modifier.contains(Modifier::REVERSED));
+        let draw = |term: &mut EmbeddedTerminal, ui: &mut Terminal<TestBackend>, owns_keyboard| {
+            ui.draw(|frame| term.render(frame, area, Color::Black, Color::White, owns_keyboard))
+                .unwrap();
+        };
+        let process = |term: &EmbeddedTerminal, bytes: &[u8]| {
+            term.parser.lock().unwrap().process(bytes);
+            term.parser_revision.fetch_add(1, Ordering::Release);
+        };
+        process(&embedded, b"\x1b[?25l\x1b[1;1HSTATUS");
+        draw(&mut embedded, &mut terminal, true);
+        assert!(!terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().buffer()[(10, 6)].symbol(), "S");
+        assert!(!terminal.backend().buffer()[(10, 6)]
+            .modifier
+            .contains(Modifier::REVERSED));
 
-        // Once the child explicitly shows its cursor again, Forge may draw it.
-        {
-            let mut parser = embedded.parser.lock().unwrap();
-            parser.process(b"\x1b[?25h\x1b[1;1H");
-            embedded.parser_revision.fetch_add(1, Ordering::Release);
-            assert!(!parser.screen().hide_cursor());
-        }
+        // The child cursor is relative to the PTY, including the pane's offset.
+        process(&embedded, b"\x1b[?25h\x1b[5;7H");
+        draw(&mut embedded, &mut terminal, true);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(16, 10));
+        assert!(!terminal.backend().buffer()[(16, 10)]
+            .modifier
+            .contains(Modifier::REVERSED));
+        draw(&mut embedded, &mut terminal, false);
+        assert!(!terminal.backend().cursor_visible());
+
+        embedded.focused = false;
+        draw(&mut embedded, &mut terminal, true);
+        assert!(!terminal.backend().cursor_visible());
+        embedded.focused = true;
+        process(&embedded, b"\x1b[8;1H\r\n\r\n\r\n");
+        embedded.scroll(-2);
+        draw(&mut embedded, &mut terminal, true);
+        assert!(!terminal.backend().cursor_visible());
+        embedded.scroll_to_bottom();
+        draw(&mut embedded, &mut terminal, true);
+        assert!(terminal.backend().cursor_visible());
+        assert_eq!(terminal.backend().cursor_position(), Position::new(10, 13));
+
+        // Resize/reposition the terminal and translate from the new origin.
         terminal
             .draw(|frame| {
-                embedded.render(frame, Rect::new(0, 0, 40, 8), Color::Black, Color::White);
+                embedded.render(
+                    frame,
+                    Rect::new(2, 3, 30, 6),
+                    Color::Black,
+                    Color::White,
+                    true,
+                );
             })
             .unwrap();
-        let first = &terminal.backend().buffer()[(0, 0)];
-        assert!(first.modifier.contains(Modifier::REVERSED));
+        process(&embedded, b"\x1b[3;5H");
+        terminal
+            .draw(|frame| {
+                embedded.render(
+                    frame,
+                    Rect::new(2, 3, 30, 6),
+                    Color::Black,
+                    Color::White,
+                    true,
+                );
+            })
+            .unwrap();
+        assert_eq!(terminal.backend().cursor_position(), Position::new(6, 5));
     }
 
     #[test]
@@ -2134,7 +2709,13 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
         terminal
             .draw(|frame| {
-                embedded.render(frame, Rect::new(0, 0, 80, 12), Color::Black, Color::White);
+                embedded.render(
+                    frame,
+                    Rect::new(0, 0, 80, 12),
+                    Color::Black,
+                    Color::White,
+                    true,
+                );
             })
             .unwrap();
         lock_holder.join().unwrap();
@@ -2243,7 +2824,13 @@ mod tests {
             loop {
                 notify.notified().await;
                 ui.draw(|frame| {
-                    embedded.render(frame, Rect::new(0, 0, 50, 6), Color::Reset, Color::Reset)
+                    embedded.render(
+                        frame,
+                        Rect::new(0, 0, 50, 6),
+                        Color::Reset,
+                        Color::Reset,
+                        true,
+                    )
                 })
                 .unwrap();
                 let screen = (0..6)

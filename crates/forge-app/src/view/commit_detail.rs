@@ -72,6 +72,28 @@ fn clip(text: &str, width: usize) -> String {
     }
     s
 }
+fn clip_path(path: &str, width: usize) -> String {
+    if path.width() <= width {
+        return path.into();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let mut left = width - 1;
+    let mut suffix = Vec::new();
+    for ch in path.chars().rev() {
+        let cells = ch.width().unwrap_or(0);
+        if cells > left {
+            break;
+        }
+        left -= cells;
+        suffix.push(ch);
+    }
+    std::iter::once('…')
+        .chain(suffix.into_iter().rev())
+        .collect()
+}
+
 fn field(name: &'static str, value: &str, width: usize, p: Palette) -> Line<'static> {
     let label = 12usize.min(width);
     Line::from(vec![
@@ -107,10 +129,30 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palett
     if path.to_string_lossy() != commit.id {
         return false;
     }
-    let d = parse(lines);
-    if d.sha.is_empty() {
+    let mut d = parse(lines);
+    if d.sha != commit.id {
         return false;
     }
+    let Some((_, files)) = model
+        .history
+        .detail_files
+        .as_ref()
+        .filter(|(oid, _)| oid == &commit.id)
+    else {
+        return false;
+    };
+    d.files = files
+        .iter()
+        .map(|f| (f.path.clone(), f.additions, f.deletions, f.binary))
+        .collect();
+    let additions: usize = files.iter().map(|f| f.additions).sum();
+    let deletions: usize = files.iter().map(|f| f.deletions).sum();
+    d.summary = format!(
+        "{} files changed, {} insertions(+), {} deletions(-)",
+        files.len(),
+        additions,
+        deletions
+    );
     frame.render_widget(Block::default().style(Style::default().bg(p.bg)), area);
     let width = area.width as usize;
     let content_width = width.saturating_sub(4);
@@ -166,7 +208,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palett
     for (index, (path, plus, minus, binary)) in d.files.iter().enumerate() {
         let suffix_width = 18usize.min(content_width / 2);
         let path_width = content_width.saturating_sub(suffix_width);
-        let path = clip(path, path_width);
+        let path = clip_path(path, path_width);
         let padding = path_width.saturating_sub(path.width());
         links.push((rows.len(), index, path.clone()));
         let mut spans = vec![
@@ -283,7 +325,12 @@ pub(crate) fn file_link_count(model: &App) -> usize {
     if detail.sha != *oid {
         return 0;
     }
-    detail.files.len()
+    model
+        .history
+        .detail_files
+        .as_ref()
+        .filter(|(id, _)| id == oid)
+        .map_or(0, |(_, files)| files.len())
 }
 
 /// Resolve a link against the commit currently shown in Preview. Never
@@ -306,7 +353,12 @@ pub(crate) fn file_link_target(model: &App, index: usize) -> Option<(String, Str
     if detail.sha != *oid {
         return None;
     }
-    Some((oid.clone(), detail.files.get(index)?.0.clone()))
+    let (_, files) = model
+        .history
+        .detail_files
+        .as_ref()
+        .filter(|(id, _)| id == oid)?;
+    Some((oid.clone(), files.get(index)?.path.clone()))
 }
 
 #[cfg(test)]

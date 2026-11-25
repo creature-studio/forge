@@ -822,7 +822,7 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "forge"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "forge-app"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "arboard",
@@ -853,11 +853,12 @@ dependencies = [
  "tokio",
  "unicode-width 0.1.14",
  "vt100",
+ "winreg",
 ]
 
 [[package]]
 name = "forge-config"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "forge-model",
  "serde",
@@ -867,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "forge-fs"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "forge-jobs",
@@ -881,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "forge-git"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "forge-git-cli",
  "forge-git-gix",
@@ -892,7 +893,7 @@ dependencies = [
 
 [[package]]
 name = "forge-git-cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "forge-model",
  "tempfile",
@@ -902,7 +903,7 @@ dependencies = [
 
 [[package]]
 name = "forge-git-gix"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "encoding_rs",
  "forge-model",
@@ -913,7 +914,7 @@ dependencies = [
 
 [[package]]
 name = "forge-jobs"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "forge-model",
  "thiserror 2.0.21",
@@ -922,21 +923,21 @@ dependencies = [
 
 [[package]]
 name = "forge-model"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "forge-theme"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "forge-model",
 ]
 
 [[package]]
 name = "forge-ui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "forge-model",
  "forge-theme",

@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 pub use forge_git_cli::BlameLine;
 pub use forge_git_cli::{CliWriteBackend, GitWriteError};
-pub use forge_git_cli::{GitAction, GitItem, GitQuery};
+pub use forge_git_cli::{CommitFileStat, GitAction, GitItem, GitQuery};
 pub use forge_git_gix::{GitReadError, GixReadBackend};
 pub use forge_model::{
     ChangeEntry, CommitChange, CommitChangeKind, DiffHunk, DiffLine, DiffLineKind, DiffSide,

@@ -53,6 +53,15 @@ jobs:
       - name: Verify Windows workspace path boundaries and editor load
         run: cargo test -p forge-fs --lib --locked windows_verbatim_and_standard_paths_are_equivalent_inside_workspace -- --nocapture
 
+      - name: Ensure text installer matches released script
+        shell: powershell
+        run: |
+          $original = (Get-FileHash -Algorithm SHA256 install.ps1).Hash
+          $text = (Get-FileHash -Algorithm SHA256 web/public/install.txt).Hash
+          if ($original -ne $text) { throw 'Windows text installer is not identical to install.ps1' }
+          $homepage = Get-Content web/src/components/Landing.astro -Raw
+          if (-not $homepage.Contains('/forge/install.txt | iex')) { throw 'Homepage still uses octet-stream installer URL' }
+
       - name: Test PowerShell installer (offline)
         shell: powershell
         run: .\scripts\test-install-windows.ps1
@@ -66,7 +75,8 @@ jobs:
           cargo build -p forge --locked
           if ($LASTEXITCODE -ne 0) { throw 'Windows Forge build failed' }
           $version = & .\target\debug\forge.exe --version
-          if ($LASTEXITCODE -ne 0 -or $version -ne 'forge 0.4.1') {
+          $workspaceVersion = (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($LASTEXITCODE -ne 0 -or $version -ne "forge $workspaceVersion") {
             throw "Windows Forge executable smoke test failed: $version"
           }
           Write-Host "OK: $version"

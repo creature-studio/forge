@@ -17,7 +17,7 @@ pub(super) struct Shortcut {
 
 pub(super) const HELP_TEXT: &str = "Terminal tabs
 F8: show/hide embedded Terminal; F11 maximizes/restores it.
-Shift+F8 or Ctrl+Shift+N: create a local Shell tab (up to eight).
+Shift+F8 / Ctrl+Shift+N: new tab; Ctrl+Shift+F8: profiles.
 Alt+1 through Alt+8: jump directly to a tab by its displayed number.
 F12 / Shift+F12: next / previous terminal tab.
 Ctrl+Shift+W: close the current terminal tab.
@@ -25,7 +25,7 @@ F4: show the Terminal guide while Terminal has focus.
 Ctrl+Shift+Tab: return focus to Forge without closing the Shell.
 Shift+PageUp/PageDown: scroll Shell history; Ctrl+Shift+End returns to latest output.
 Ctrl+Shift+C/V: copy selected output / paste. Click tabs to switch;
-click × or middle-click to close. + new, ‹/› switch, □ maximize, ? help, − hide.
+click × or middle-click to close. + new, ▾ profiles, ‹/› switch, □ maximize, ? help, − hide.
 All tabs use local PTY Shells; no persistent session integration.
 
 Git help
@@ -152,7 +152,7 @@ B: branches. Enter switch, A create, r rename, X delete, D compare to HEAD.
 Z: stashes. Enter diff, A save, a apply, X drop. Save includes untracked files.
 S: ahead/behind and remote results. F fetch, p pull --ff-only, P push.
 W: worktrees. Enter switch workspace, A create, X remove clean worktree.
-Commands → Conflicts lists conflicts: e editor, o ours, t theirs, s mark resolved.
+Commands → Conflicts: Enter/e opens the merge editor. Alt+Up/Down navigate blocks; Alt+1/2/3 accept current/incoming/both. o/t resolves entire files; s marks resolved after saving.
 Commands also includes continue/abort for cherry-pick and revert, and abort merge.
 Dialogs capture shortcuts. Esc closes; PgUp/PgDn scrolls details.
 

@@ -18,7 +18,7 @@ use forge_jobs::{JobError, JobHandle, JobPriority, JobScheduler};
 use forge_model::JobId;
 use forge_theme::{detect_color_mode, ColorMode};
 use forge_ui::{
-    build_scm_rows, compact_scm_rows, compact_tree_rows, diff_items, diff_render_hunk_start,
+    build_scm_rows_with_compact, compact_tree_rows, diff_items, diff_render_hunk_start,
     expand_ancestors_for_path, file_list_items, find_parent_row, find_scm_parent_row, flatten_tree,
     init_icons_from_env, scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode,
     staging_items, sticky_index_at, ActivityTab, ContextAction, ContextMenu, ContextTarget,
@@ -212,9 +212,18 @@ fn terminal_panel_height(window_height: u16, requested: Option<u16>) -> u16 {
         .clamp(5, max)
 }
 
+const TERMINAL_COPY_NOTICE_DURATION: Duration = Duration::from_secs(2);
+
+struct TerminalCopyNotice {
+    message: &'static str,
+    error: bool,
+    expires_at: Instant,
+}
+
 struct SessionState {
     status: String,
     write_status: Option<String>,
+    terminal_copy_notice: Option<TerminalCopyNotice>,
     /// Transient write-operation notification; tracked separately from
     /// long-lived context/status so old success/error messages expire.
     notice_lease: Option<(String, String, Instant)>,
@@ -265,6 +274,7 @@ enum TerminalTabAction {
     Activate(u64),
     Close(u64),
     New,
+    Profiles,
     Previous,
     Next,
     Maximize,
@@ -295,11 +305,16 @@ struct App {
     /// Exact hit targets for controls painted in the Terminal header.
     terminal_tab_hits: HoverTargets<TerminalTabAction>,
     terminal_tab_bar: ratatui::layout::Rect,
+    shell_profiles: Option<Vec<embedded_terminal::shell::ShellProfile>>,
+    shell_discovery: Option<
+        std::sync::Arc<std::sync::Mutex<Option<Vec<embedded_terminal::shell::ShellProfile>>>>,
+    >,
     activity_hits: HoverTargets<ActivityAction>,
     /// Clickable paths in the historical commit details (visible rows only).
     commit_file_links: HoverTargets<usize>,
     terminal_help_return: bool,
     terminal_notify: std::sync::Arc<tokio::sync::Notify>,
+    selection_scroll_notify: std::sync::Arc<tokio::sync::Notify>,
     terminal_frame_epoch: u64,
     /// Pointer capture persists regardless of horizontal mouse movement.
     scrollbar_drag: Option<(ScrollbarTarget, ScrollbarDrag)>,
@@ -594,6 +609,7 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         session: SessionState {
             status: config_warning.unwrap_or_else(|| format!("palette:{}", color_mode.as_str())),
             write_status: None,
+            terminal_copy_notice: None,
             notice_lease: None,
             help_open: false,
             help_reference: false,
@@ -627,10 +643,13 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         terminal_tabs: Vec::new(),
         terminal_tab_hits: HoverTargets::default(),
         terminal_tab_bar: ratatui::layout::Rect::default(),
+        shell_profiles: None,
+        shell_discovery: None,
         activity_hits: HoverTargets::default(),
         commit_file_links: HoverTargets::default(),
         terminal_help_return: false,
         terminal_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
+        selection_scroll_notify: std::sync::Arc::new(tokio::sync::Notify::new()),
         terminal_frame_epoch: 0,
         scrollbar_drag: None,
     };
@@ -639,6 +658,49 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
     app.request_status();
 
     app
+}
+
+/// Negotiate unambiguous modifier input on the outer terminal, not the child PTY.
+/// Kitty keyboard flags have separate stacks for the primary and alternate
+/// screens; push only after the fullscreen UI has entered its alternate screen.
+#[derive(Default)]
+pub(crate) struct KeyboardEnhancement {
+    enabled: std::sync::atomic::AtomicBool,
+    supported: bool,
+}
+
+impl KeyboardEnhancement {
+    fn new(supported: bool) -> Self {
+        Self {
+            supported,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn enable(&self) {
+        use crossterm::event::{KeyboardEnhancementFlags, PushKeyboardEnhancementFlags};
+        use std::sync::atomic::Ordering;
+        if self.supported
+            && !self.enabled.load(Ordering::Relaxed)
+            && crossterm::execute!(
+                io::stdout(),
+                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
+            )
+            .is_ok()
+        {
+            self.enabled.store(true, Ordering::Relaxed);
+            input_trace::log("keyboard enhancement: enabled");
+        }
+    }
+
+    pub(crate) fn disable(&self) {
+        use std::sync::atomic::Ordering;
+        if self.enabled.swap(false, Ordering::Relaxed) {
+            let _ =
+                crossterm::execute!(io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
+            input_trace::log("keyboard enhancement: restored");
+        }
+    }
 }
 
 async fn run_async(color_mode: ColorMode) -> Result<()> {
@@ -654,6 +716,15 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
         }
     }
     let _restore = RestoreTerminal;
+    // Query before ratatui-kit creates an event stream; concurrent reads can
+    // consume the terminal's capability response. Native Windows console
+    // input already carries modifiers; unsupported VT hosts remain legacy.
+    let keyboard_supported = crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
+    input_trace::log(if keyboard_supported {
+        "keyboard enhancement: supported"
+    } else {
+        "keyboard enhancement: unavailable"
+    });
     let handoff = std::sync::Arc::new(std::sync::Mutex::new(None));
     let mut initial = None;
     loop {
@@ -665,7 +736,8 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
             crossterm::event::EnableMouseCapture,
             crossterm::event::EnableBracketedPaste,
         )?;
-        element!(view::Workspace(color_mode: color_mode, initial: initial, editor_handoff: Some(handoff.clone())))
+        let keyboard = std::sync::Arc::new(KeyboardEnhancement::new(keyboard_supported));
+        element!(view::Workspace(color_mode: color_mode, initial: initial, editor_handoff: Some(handoff.clone()), keyboard_enhancement: Some(keyboard)))
             .fullscreen().await?;
         crossterm::execute!(
             io::stdout(),
@@ -685,6 +757,27 @@ async fn run_async(color_mode: ColorMode) -> Result<()> {
 impl App {
     fn hint_bar(&self) -> String {
         String::new()
+    }
+
+    fn show_terminal_copy_notice(&mut self, message: &'static str, error: bool) {
+        self.session.terminal_copy_notice = Some(TerminalCopyNotice {
+            message,
+            error,
+            expires_at: Instant::now() + TERMINAL_COPY_NOTICE_DURATION,
+        });
+    }
+
+    fn terminal_copy_notice_expired(&self) -> bool {
+        self.session
+            .terminal_copy_notice
+            .as_ref()
+            .is_some_and(|notice| Instant::now() >= notice.expires_at)
+    }
+
+    fn expire_terminal_copy_notice(&mut self) {
+        if self.terminal_copy_notice_expired() {
+            self.session.terminal_copy_notice = None;
+        }
     }
 
     /// An operation notification is not permanent state. Give it time to be
@@ -733,18 +826,14 @@ impl App {
 
     fn scm_rows(&self) -> Vec<ScmRow> {
         let (u, s) = self.scm_slices();
-        let rows = build_scm_rows(
+        build_scm_rows_with_compact(
             u,
             s,
             &self.scm.scm_expanded_unstaged,
             &self.scm.scm_expanded_staged,
             &self.history_view(),
-        );
-        if self.config.compact_folders {
-            compact_scm_rows(&rows)
-        } else {
-            rows
-        }
+            self.config.compact_folders,
+        )
     }
 
     fn selected_scm_entry(&self) -> Option<&forge_git::ChangeEntry> {
@@ -861,6 +950,17 @@ impl App {
                 self.toggle_scm_expand_at(self.scm.scm_selected);
             }
             Some(ScmRow::Change { .. }) => {
+                if let Some(entry) = self.selected_scm_entry() {
+                    if entry.status == forge_git::GitStatus::Conflicted {
+                        if let Some(root) = self.repo_root() {
+                            let path = root.join(&entry.path);
+                            if path.is_file() {
+                                self.open_conflict_editor(path);
+                                return;
+                            }
+                        }
+                    }
+                }
                 self.request_diff_for_scm_selection();
                 self.session.focus = PaneFocus::Preview;
             }
@@ -2025,7 +2125,9 @@ impl App {
                         self.open_tools(tools::PanelKind::Text);
                         if let Some(panel) = &mut self.tools.panel {
                             panel.title = "Remote operation failed".into();
-                            panel.detail=format!("{message}\n\nUse Ctrl+K Commands → Conflicts to resolve conflicts. Pull uses --ff-only and refuses divergent histories.");
+                            panel.detail = format!(
+                                "{message}\n\nUse Ctrl+K Commands → Conflicts to resolve conflicts. Pull uses --ff-only and refuses divergent histories."
+                            );
                         }
                         self.request_status();
                     }
@@ -2666,6 +2768,12 @@ impl App {
         };
         self.dismiss_menu();
         match menu.target {
+            ContextTarget::TerminalProfiles { set_default } => match action {
+                ContextAction::ShellProfile(index) => self.choose_shell_profile(index, set_default),
+                ContextAction::ShellDefaultMenu => self.open_shell_profiles(true),
+                ContextAction::ShellConfigure => self.configure_shell_profiles(),
+                _ => {}
+            },
             ContextTarget::FileList { path } => {
                 let Some(index) = self.files.visible.iter().position(|r| r.entry.path == path)
                 else {

@@ -74,6 +74,7 @@ fn theme_palette(name: Option<&str>) -> Palette {
 pub struct WorkspaceProps {
     pub color_mode: ColorMode,
     pub(super) initial: Option<App>,
+    pub(super) keyboard_enhancement: Option<std::sync::Arc<super::KeyboardEnhancement>>,
     pub(super) editor_handoff:
         Option<std::sync::Arc<std::sync::Mutex<Option<tools::EditorResume>>>>,
 }
@@ -122,6 +123,35 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             if notice_app.read().session.write_status.is_some() {
                 notice_app.write().expire_write_notice();
             }
+            if notice_app.read().terminal_copy_notice_expired() {
+                notice_app.write().expire_terminal_copy_notice();
+            }
+        }
+    });
+    // The edge timer sleeps completely when there is no host drag.
+    let selection_app = app;
+    let selection_notify = selection_app.read().selection_scroll_notify.clone();
+    hooks.use_future(async move {
+        loop {
+            selection_notify.notified().await;
+            while selection_app
+                .read()
+                .terminal
+                .as_ref()
+                .is_some_and(|t| t.selection_autoscroll_active())
+            {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                if selection_app
+                    .read()
+                    .terminal
+                    .as_ref()
+                    .is_some_and(|t| t.selection_autoscroll_active())
+                {
+                    if let Some(term) = &mut selection_app.write().terminal {
+                        term.tick_selection_autoscroll();
+                    }
+                }
+            }
         }
     });
     // A PTY output event schedules the first frame immediately. Coalesce
@@ -131,6 +161,14 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     hooks.use_future(async move {
         loop {
             terminal_notify.notified().await;
+            let profiles_ready = terminal_app
+                .read()
+                .shell_discovery
+                .as_ref()
+                .is_some_and(|r| r.lock().is_ok_and(|slot| slot.is_some()));
+            if profiles_ready {
+                terminal_app.write().poll_shell_discovery();
+            }
             // A child TUI can request clipboard transfer over OSC 52 after
             // handling its own Ctrl+C. vt100's callback gives us the already
             // validated base64 bytes; forward them to the *outer* terminal,
@@ -153,11 +191,21 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             if let Some(data) = clipboard {
                 use std::io::Write;
                 let mut stdout = std::io::stdout().lock();
-                let _ = stdout
+                let result = stdout
                     .write_all(b"\x1b]52;c;")
                     .and_then(|_| stdout.write_all(&data))
                     .and_then(|_| stdout.write_all(b"\x07"))
                     .and_then(|_| stdout.flush());
+                drop(stdout);
+                // OSC 52 has no clipboard-write acknowledgement from the host.
+                terminal_app.write().show_terminal_copy_notice(
+                    if result.is_ok() {
+                        "Copy sent to clipboard"
+                    } else {
+                        "Clipboard unavailable"
+                    },
+                    result.is_err(),
+                );
             }
             let changed = {
                 let model = terminal_app.read();
@@ -165,7 +213,12 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                     t.visible
                         && (t.revision.load(std::sync::atomic::Ordering::Acquire)
                             != t.drawn_revision
-                            || (t.ended.load(std::sync::atomic::Ordering::Acquire) && t.focused))
+                            || (t.ended.load(std::sync::atomic::Ordering::Acquire) && t.focused)
+                            || t.tab_title_changed()
+                            || model
+                                .terminal_tabs
+                                .iter()
+                                .any(|tab| tab.tab_title_changed()))
                 })
             };
             if changed {
@@ -415,6 +468,21 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         }
     }
     let model = app.read();
+    // The kit renders once more before processing a requested exit. Restore
+    // keyboard flags while the alternate screen is still active, including
+    // external-editor handoffs. Test harnesses have no keyboard controller.
+    if let Some(keyboard) = &props.keyboard_enhancement {
+        let leaving = model.session.should_quit
+            || props
+                .editor_handoff
+                .as_ref()
+                .is_some_and(|handoff| handoff.lock().is_ok_and(|resume| resume.is_some()));
+        if leaving {
+            keyboard.disable();
+        } else {
+            keyboard.enable();
+        }
+    }
     input_trace::render(&model);
     let commit_open = model.session.commit_open;
     let menu_open = model.session.context_menu.is_some();
@@ -1278,11 +1346,23 @@ impl Component for NativePane {
             PaneKind::Terminal => {
                 let inner =
                     terminal_tabs::draw_tab_strip(drawer.frame, area, &mut model, self.palette);
+                // Cursor ownership follows exactly the normal text-input route;
+                // dialogs, editors and active find inputs must never inherit it.
+                let owns_keyboard = model
+                    .key_owner(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
+                    == input_router::KeyOwner::Terminal;
                 if let Some(term) = &mut model.terminal {
                     // The child PTY's default colors belong to the outer terminal, not
                     // Forge's theme. Explicit ANSI/RGB colors still come from vt100.
-                    term.render(drawer.frame, inner, Color::Reset, Color::Reset);
+                    term.render(
+                        drawer.frame,
+                        inner,
+                        Color::Reset,
+                        Color::Reset,
+                        owns_keyboard,
+                    );
                 }
+                terminal_tabs::draw_copy_notice(drawer.frame, inner, &model, self.palette);
                 terminal_tabs::draw_tab_tooltip(drawer.frame, area, &model, self.palette);
             }
             PaneKind::Footer => {

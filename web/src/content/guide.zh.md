@@ -20,7 +20,7 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 Windows 10/11 x64 可直接在 PowerShell / Windows Terminal 中安装原生 `forge.exe`（无需 WSL）：
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.ps1 | iex
+irm https://creature-studio.github.io/forge/install.txt | iex
 ```
 
 安装到当前用户的 `%LOCALAPPDATA%\Programs\Forge\bin`，校验 Release ZIP 的 SHA-256 并添加用户 PATH。请新开终端执行 `forge`；升级时先关闭 Forge，再重复执行安装命令。Windows 暂不支持 `forge update`。需要 Git for Windows 以使用 Git 操作。

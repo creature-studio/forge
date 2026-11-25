@@ -20,7 +20,7 @@ curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
 On **Windows 10/11 x64**, install a native `forge.exe` from PowerShell (no WSL needed):
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.ps1 | iex
+irm https://creature-studio.github.io/forge/install.txt | iex
 ```
 
 The Windows installer verifies SHA-256, installs under the user profile, and updates the user PATH. Open a fresh terminal after installation. Close Forge and rerun the installer to upgrade; `forge update` currently works only on Linux/macOS. Install Git for Windows for Git actions.

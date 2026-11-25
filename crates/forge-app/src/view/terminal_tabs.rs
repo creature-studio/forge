@@ -46,7 +46,7 @@ pub(super) fn draw_tab_strip(
         .chain(model.terminal.iter())
         .map(|t| Label {
             id: t.id,
-            name: t.name.clone(),
+            name: t.draw_tab_title(),
             ended: t.ended.load(std::sync::atomic::Ordering::Acquire),
             history: if Some(t.id) == current {
                 t.scrollback_position()
@@ -67,16 +67,21 @@ pub(super) fn draw_tab_strip(
         " SEL "
     };
     let controls: Vec<_> = if area.width < 24 {
-        vec![(" + ", TerminalTabAction::New)]
+        vec![
+            (" + ", TerminalTabAction::New),
+            (" ▾ ", TerminalTabAction::Profiles),
+        ]
     } else if area.width < 42 {
         vec![
             (" + ", TerminalTabAction::New),
+            (" ▾ ", TerminalTabAction::Profiles),
             (" ‹ ", TerminalTabAction::Previous),
             (" › ", TerminalTabAction::Next),
         ]
     } else {
         vec![
             (" + ", TerminalTabAction::New),
+            (" ▾ ", TerminalTabAction::Profiles),
             (" ‹ ", TerminalTabAction::Previous),
             (" › ", TerminalTabAction::Next),
             (" □ ", TerminalTabAction::Maximize),
@@ -212,6 +217,29 @@ pub(super) fn draw_tab_strip(
     )
 }
 
+/// Non-interactive feedback, including when the workspace footer is hidden.
+pub(super) fn draw_copy_notice(frame: &mut Frame<'_>, area: Rect, model: &App, palette: Palette) {
+    let Some(notice) = model.session.terminal_copy_notice.as_ref() else {
+        return;
+    };
+    if model.terminal_copy_notice_expired() || area.width < 8 || area.height == 0 {
+        return;
+    }
+    let label = format!(" {} ", notice.message);
+    let width = (label.width() as u16).min(area.width);
+    let rect = Rect::new(area.right() - width, area.y, width, 1);
+    let fg = if notice.error {
+        ratatui::style::Color::Red
+    } else {
+        palette.accent
+    };
+    frame.render_widget(
+        Paragraph::new(shorten(&label, width as usize))
+            .style(Style::default().fg(fg).bg(palette.bg)),
+        rect,
+    );
+}
+
 /// Draw after the PTY so the hint sits above terminal output, not inside it.
 /// Reuse HoverTargets' painted hitbox rather than a second set of coordinates.
 pub(super) fn draw_tab_tooltip(frame: &mut Frame<'_>, area: Rect, model: &App, palette: Palette) {
@@ -254,8 +282,8 @@ fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<St
             let label = tabs
                 .iter()
                 .find(|tab| tab.id == id)
-                .map(|tab| tab.name.as_str())
-                .unwrap_or("Terminal");
+                .map(|tab| tab.display_title())
+                .unwrap_or_else(|| "Terminal".into());
             let number = position.map(|p| p + 1).unwrap_or(1);
             (
                 format!("Terminal {number}: {label}"),
@@ -266,8 +294,8 @@ fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<St
             let label = tabs
                 .iter()
                 .find(|tab| tab.id == id)
-                .map(|tab| tab.name.as_str())
-                .unwrap_or("Terminal");
+                .map(|tab| tab.display_title())
+                .unwrap_or_else(|| "Terminal".into());
             let active = model.terminal.as_ref().is_some_and(|tab| tab.id == id);
             (
                 format!("Close terminal: {label}"),
@@ -275,6 +303,9 @@ fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<St
             )
         }
         TerminalTabAction::New => ("New terminal".into(), Some("Shift+F8".into())),
+        TerminalTabAction::Profiles => {
+            ("Select shell profile".into(), Some("Ctrl+Shift+F8".into()))
+        }
         TerminalTabAction::Previous => ("Previous terminal".into(), None),
         TerminalTabAction::Next => ("Next terminal".into(), Some("F12".into())),
         TerminalTabAction::Maximize => ("Toggle terminal maximize".into(), Some("F11".into())),
@@ -331,6 +362,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn profile_dropdown_selects_independent_shell_and_esc_dismisses() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.config.terminal = forge_config::TerminalConfig::default();
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        let first = app.terminal.as_ref().unwrap().id;
+        paint(&mut app, 100);
+        click(&mut app, TerminalTabAction::Profiles);
+        assert!(matches!(
+            app.session.context_menu.as_ref().map(|m| &m.target),
+            Some(ContextTarget::TerminalProfiles { set_default: false })
+        ));
+        for _ in 0..100 {
+            app.poll_shell_discovery();
+            if app.shell_profiles.is_some() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let profiles = app
+            .shell_profiles
+            .as_ref()
+            .expect("shell discovery finished");
+        assert!(!profiles.is_empty());
+        let menu = app.session.context_menu.as_ref().unwrap();
+        assert!(menu.labels.contains_key(&ContextAction::ShellProfile(0)));
+        assert!(menu
+            .items
+            .iter()
+            .any(|i| i.action == ContextAction::ShellDefaultMenu));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(app.session.context_menu.is_none());
+        assert_eq!(app.terminal.as_ref().unwrap().id, first);
+        app.handle_key(KeyEvent::new(
+            KeyCode::F(8),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert!(app.session.context_menu.is_some());
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.session.context_menu.is_none());
+        assert_ne!(app.terminal.as_ref().unwrap().id, first);
+        assert_eq!(app.terminal_tabs.len(), 1);
+        assert_eq!(app.terminal_tabs[0].id, first);
+    }
+
+    #[tokio::test]
     async fn tab_bar_mouse_routing_is_per_terminal_and_keyboard_accessible() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
@@ -377,6 +454,42 @@ mod tests {
             app.terminal.as_ref().unwrap().mouse_routing,
             MouseRouting::SelectText
         );
+    }
+
+    #[tokio::test]
+    async fn terminal_copy_notice_draws_and_expires_without_touching_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.session.status = "Unrelated operation".into();
+        app.show_terminal_copy_notice("Copied to clipboard", false);
+        let mut terminal = Terminal::new(TestBackend::new(80, 12)).unwrap();
+        let area = Rect::new(0, 1, 80, 10);
+        terminal
+            .draw(|frame| {
+                draw_copy_notice(frame, area, &app, workspace_palette());
+            })
+            .unwrap();
+        let row = (0..80)
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
+            .collect::<String>();
+        assert!(row.ends_with(" Copied to clipboard "));
+        app.session
+            .terminal_copy_notice
+            .as_mut()
+            .unwrap()
+            .expires_at = std::time::Instant::now() - std::time::Duration::from_millis(1);
+        app.expire_terminal_copy_notice();
+        assert!(app.session.terminal_copy_notice.is_none());
+        assert_eq!(app.session.status, "Unrelated operation");
+        terminal
+            .draw(|frame| {
+                draw_copy_notice(frame, area, &app, workspace_palette());
+            })
+            .unwrap();
+        let row = (0..80)
+            .map(|x| terminal.backend().buffer()[(x, 1)].symbol())
+            .collect::<String>();
+        assert!(!row.contains("Copied"));
     }
 
     #[tokio::test]

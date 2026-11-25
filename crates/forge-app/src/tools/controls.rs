@@ -220,7 +220,7 @@ impl App {
                     if let Some(path) = item.path {
                         if let Some(root) = self.repo_root() {
                             self.close_tools();
-                            self.reveal_file(root.join(path), 1);
+                            self.open_conflict_editor(root.join(path));
                         }
                     }
                 }
@@ -464,7 +464,7 @@ impl App {
             (PanelKind::Git(GitQuery::Conflicts), KeyCode::Char('e')) => {
                 if let Some(root) = self.repo_root() {
                     self.close_tools();
-                    self.open_editor(Some(root.join(item.id)), 1);
+                    self.open_conflict_editor(root.join(item.id));
                 }
             }
             (PanelKind::Git(GitQuery::Worktrees), KeyCode::Char('X')) => {

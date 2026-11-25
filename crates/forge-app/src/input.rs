@@ -77,6 +77,164 @@ impl App {
     }
 
     fn open_terminal_tab(&mut self) {
+        let local;
+        let profiles = if let Some(profiles) = &self.shell_profiles {
+            profiles
+        } else {
+            local = embedded_terminal::shell::local_profiles(&self.config.terminal);
+            &local
+        };
+        match embedded_terminal::shell::resolve_default(&self.config.terminal, profiles) {
+            Ok(profile) => self.open_terminal_with_profile(profile.as_ref()),
+            Err(error) => {
+                self.session.status = error.to_string();
+                self.open_shell_profiles(false);
+            }
+        }
+    }
+
+    pub(super) fn open_shell_profiles(&mut self, set_default: bool) {
+        use std::sync::{Arc, Mutex};
+        if self.shell_profiles.is_none() && self.shell_discovery.is_none() {
+            let result = Arc::new(Mutex::new(None));
+            self.shell_discovery = Some(result.clone());
+            let config = self.config.terminal.clone();
+            let notify = self.terminal_notify.clone();
+            std::thread::spawn(move || {
+                let profiles = embedded_terminal::shell::discover(&config);
+                if let Ok(mut slot) = result.lock() {
+                    *slot = Some(profiles);
+                }
+                notify.notify_one();
+            });
+        }
+        self.render_shell_profiles_menu(set_default);
+    }
+
+    fn render_shell_profiles_menu(&mut self, set_default: bool) {
+        use forge_ui::ContextMenuItem;
+        let mut items = Vec::new();
+        let mut labels = std::collections::HashMap::new();
+        if let Some(profiles) = &self.shell_profiles {
+            let default =
+                embedded_terminal::shell::resolve_default(&self.config.terminal, profiles)
+                    .ok()
+                    .flatten()
+                    .map(|p| p.id);
+            for (i, profile) in profiles.iter().enumerate() {
+                let action = ContextAction::ShellProfile(i);
+                items.push(ContextMenuItem {
+                    action,
+                    enabled: true,
+                });
+                labels.insert(
+                    action,
+                    format!(
+                        "{}{}",
+                        profile.name,
+                        if default.as_ref() == Some(&profile.id) {
+                            " ✓"
+                        } else {
+                            ""
+                        }
+                    ),
+                );
+            }
+        } else {
+            items.push(ContextMenuItem {
+                action: ContextAction::ShellLoading,
+                enabled: false,
+            });
+        }
+        if !set_default {
+            items.push(ContextMenuItem {
+                action: ContextAction::ShellDefaultMenu,
+                enabled: true,
+            });
+        }
+        items.push(ContextMenuItem {
+            action: ContextAction::ShellConfigure,
+            enabled: true,
+        });
+        let bar = self.terminal_tab_bar;
+        let x = self
+            .terminal_tab_hits
+            .iter()
+            .find_map(|(area, action)| (*action == TerminalTabAction::Profiles).then_some(area.x))
+            .unwrap_or_else(|| bar.right().saturating_sub(25));
+        let y = bar.bottom();
+        self.session.context_menu =
+            ContextMenu::new(items, x, y, ContextTarget::TerminalProfiles { set_default });
+        if let Some(menu) = &mut self.session.context_menu {
+            menu.labels = labels;
+        }
+    }
+
+    pub(super) fn poll_shell_discovery(&mut self) {
+        let result = self
+            .shell_discovery
+            .as_ref()
+            .and_then(|r| r.lock().ok()?.take());
+        if let Some(profiles) = result {
+            self.shell_discovery = None;
+            self.shell_profiles = Some(profiles);
+            if let Some(ContextTarget::TerminalProfiles { set_default }) =
+                self.session.context_menu.as_ref().map(|m| &m.target)
+            {
+                let set_default = *set_default;
+                self.render_shell_profiles_menu(set_default);
+            }
+        }
+    }
+
+    pub(super) fn choose_shell_profile(&mut self, index: usize, set_default: bool) {
+        let Some(profile) = self
+            .shell_profiles
+            .as_ref()
+            .and_then(|p| p.get(index))
+            .cloned()
+        else {
+            return;
+        };
+        if set_default {
+            let old = self
+                .config
+                .terminal
+                .default_profile
+                .replace(profile.id.clone());
+            if let Err(error) = self.config.save() {
+                self.config.terminal.default_profile = old;
+                self.session.status = format!("Cannot save shell profile: {error}");
+                return;
+            }
+            self.session.status = format!("Default terminal: {}", profile.name);
+        } else {
+            self.open_terminal_with_profile(Some(&profile));
+        }
+    }
+
+    pub(super) fn configure_shell_profiles(&mut self) {
+        let Some(path) = forge_config::Config::path() else {
+            self.session.status = "Configuration path is unavailable".into();
+            return;
+        };
+        if !path.exists() {
+            if let Err(error) = self.config.save() {
+                self.session.status = format!("Cannot create config: {error}");
+                return;
+            }
+        }
+        self.shell_profiles = None;
+        self.shell_discovery = None;
+        self.open_terminal_config_editor(path);
+        self.session.status =
+            "Edit [terminal.profiles] in config.toml; changes reload on save".into();
+    }
+
+    fn open_terminal_with_profile(
+        &mut self,
+        profile: Option<&embedded_terminal::shell::ShellProfile>,
+    ) {
         if self.terminal_tabs.len() >= 7
             && self
                 .terminal
@@ -86,12 +244,22 @@ impl App {
             self.session.status = "Terminal limit: 8 tabs (Ctrl+Shift+W closes one)".into();
             return;
         }
-        let next = embedded_terminal::EmbeddedTerminal::start(
-            &self.files.tree_root,
-            80,
-            12,
-            self.terminal_notify.clone(),
-        );
+        let next = if let Some(profile) = profile {
+            embedded_terminal::EmbeddedTerminal::start_with_profile(
+                &self.files.tree_root,
+                80,
+                12,
+                self.terminal_notify.clone(),
+                Some(profile),
+            )
+        } else {
+            embedded_terminal::EmbeddedTerminal::start(
+                &self.files.tree_root,
+                80,
+                12,
+                self.terminal_notify.clone(),
+            )
+        };
         match next {
             Ok(mut next) => {
                 next.maximized = self.terminal.as_ref().is_some_and(|t| t.maximized);
@@ -202,6 +370,7 @@ impl App {
             TerminalTabAction::Activate(id) => self.activate_terminal_tab(id),
             TerminalTabAction::Close(id) => self.close_terminal_tab_by_id(id),
             TerminalTabAction::New => self.open_terminal_tab(),
+            TerminalTabAction::Profiles => self.open_shell_profiles(false),
             TerminalTabAction::Previous => self.switch_terminal_tab(true),
             TerminalTabAction::Next => self.switch_terminal_tab(false),
             TerminalTabAction::Maximize => {
@@ -227,6 +396,7 @@ impl App {
         }
         if text.len() > 256 * 1024 {
             self.session.status = "Terminal selection exceeds 256 KiB".into();
+            self.show_terminal_copy_notice("Selection too large", true);
             return;
         }
         #[cfg(not(test))]
@@ -241,6 +411,16 @@ impl App {
                 )
                 .is_ok()
             };
+            self.show_terminal_copy_notice(
+                if native {
+                    "Copied to clipboard"
+                } else if osc52 {
+                    "Copy sent to clipboard"
+                } else {
+                    "Clipboard unavailable"
+                },
+                !native && !osc52,
+            );
             self.session.status = if native {
                 format!("Copied {} terminal characters", text.chars().count())
             } else if osc52 {
@@ -255,6 +435,7 @@ impl App {
         #[cfg(test)]
         {
             self.session.status = format!("Terminal selected {} characters", text.chars().count());
+            self.show_terminal_copy_notice("Copied to clipboard", false);
         }
     }
 
@@ -409,6 +590,12 @@ impl App {
         }
         // Function-key alternatives work even in host terminals that swallow
         // Ctrl+Shift combinations or report them as plain Ctrl.
+        if key.code == KeyCode::F(8)
+            && key.modifiers == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+        {
+            self.open_shell_profiles(false);
+            return;
+        }
         if key.code == KeyCode::F(8) && key.modifiers == KeyModifiers::SHIFT {
             self.open_terminal_tab();
             return;
@@ -1133,15 +1320,22 @@ impl App {
         // Keep the original Terminal as the owner of an in-progress text
         // drag, even when the pointer crosses into the sidebar or tab strip.
         // Otherwise the release is lost and the child remains in drag state.
-        if !modal
-            && matches!(
-                mouse.kind,
-                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-            )
-        {
+        if !modal {
             if let Some(term) = &mut self.terminal {
-                if term.visible && term.captures_left_drag() {
-                    match term.mouse(mouse) {
+                let captured = match mouse.kind {
+                    MouseEventKind::Drag(MouseButton::Left)
+                    | MouseEventKind::Up(MouseButton::Left) => term.captures_left_drag(),
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        term.captures_host_selection()
+                    }
+                    _ => false,
+                };
+                if term.visible && captured {
+                    let result = term.mouse(mouse);
+                    if term.selection_autoscroll_active() {
+                        self.selection_scroll_notify.notify_one();
+                    }
+                    match result {
                         Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
                         Err(error) => self.session.status = format!("Terminal mouse: {error}"),
                         _ => {}
@@ -1540,7 +1734,13 @@ impl App {
                                 self.scm.last_scm_click =
                                     if double { None } else { Some((now, flat)) };
                                 if double {
-                                    self.open_selected_worktree_file();
+                                    if self.selected_scm_entry().is_some_and(|entry| {
+                                        entry.status == forge_git::GitStatus::Conflicted
+                                    }) {
+                                        self.scm_open_or_expand();
+                                    } else {
+                                        self.open_selected_worktree_file();
+                                    }
                                 } else {
                                     self.request_diff_for_scm_selection();
                                 }

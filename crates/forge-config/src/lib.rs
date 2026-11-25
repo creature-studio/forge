@@ -17,6 +17,7 @@ fn default_compact() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    pub terminal: TerminalConfig,
     pub git: GitConfig,
     pub theme: Option<String>,
     /// Pin parent directories above scrolled Files / Git / History trees.
@@ -39,6 +40,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            terminal: TerminalConfig::default(),
             git: GitConfig::default(),
             theme: None,
             tree_sticky_scroll: true,
@@ -49,6 +51,23 @@ impl Default for Config {
             recent_workspaces: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TerminalConfig {
+    pub default_profile: Option<String>,
+    pub profiles: std::collections::BTreeMap<String, ShellProfileConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ShellProfileConfig {
+    pub name: Option<String>,
+    pub command: PathBuf,
+    pub args: Vec<String>,
+    pub env: std::collections::BTreeMap<String, String>,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +112,21 @@ impl Config {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|p| PathBuf::from(p).join(".config")))
+            .or({
+                #[cfg(windows)]
+                {
+                    std::env::var_os("APPDATA").map(PathBuf::from)
+                }
+                #[cfg(not(windows))]
+                {
+                    None
+                }
+            })
             .map(|p| p.join("forge/config.toml"))
+    }
+
+    pub fn parse(content: &str) -> Result<Self, String> {
+        toml::from_str(content).map_err(|e| e.to_string())
     }
 
     pub fn load_checked() -> Result<Self, String> {
@@ -172,6 +205,19 @@ impl Config {
         } else {
             table.remove("theme");
         }
+        let terminal = table
+            .entry("terminal")
+            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+            .as_table_mut()
+            .ok_or("Cannot save config: [terminal] must be a table")?;
+        if let Some(profile) = &self.terminal.default_profile {
+            terminal.insert(
+                "default_profile".into(),
+                toml::Value::String(profile.clone()),
+            );
+        } else {
+            terminal.remove("default_profile");
+        }
         let text = toml::to_string_pretty(&table).map_err(|e| e.to_string())?;
         let parent = path.parent().ok_or("Invalid configuration path")?;
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -188,6 +234,36 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn terminal_profiles_roundtrip_and_legacy_config_defaults() {
+        let legacy: Config = toml::from_str("wrap_code = true").unwrap();
+        assert!(legacy.terminal.default_profile.is_none());
+        assert!(legacy.terminal.profiles.is_empty());
+        let config: Config = toml::from_str(
+            r#"
+[terminal]
+default_profile = "work"
+[terminal.profiles.work]
+name = "Work Bash"
+command = "/bin/bash"
+args = ["-i"]
+cwd = "/tmp"
+[terminal.profiles.work.env]
+FORGE_TEST = "yes"
+"#,
+        )
+        .unwrap();
+        let p = &config.terminal.profiles["work"];
+        assert_eq!(p.args, ["-i"]);
+        assert_eq!(p.env["FORGE_TEST"], "yes");
+        assert_eq!(p.cwd.as_deref(), Some(std::path::Path::new("/tmp")));
+        let again: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+        assert_eq!(again.terminal.default_profile.as_deref(), Some("work"));
+        assert_eq!(
+            again.terminal.profiles["work"].command,
+            PathBuf::from("/bin/bash")
+        );
+    }
     #[test]
     fn focus_ruler_defaults_on_and_can_be_persistently_disabled() {
         let old: Config = toml::from_str("wrap_code = true").unwrap();

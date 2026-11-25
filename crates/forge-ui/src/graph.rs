@@ -303,18 +303,33 @@ fn flatten_change_tree(
     prefix: &str,
     depth: u16,
     expanded_dirs: &HashSet<String>,
+    compact: bool,
     out: &mut Vec<ChangeRow>,
 ) {
     for (name, child) in &node.dirs {
-        let path = if prefix.is_empty() {
+        let mut path = if prefix.is_empty() {
             name.clone()
         } else {
             format!("{prefix}/{name}")
         };
+        let mut label = name.clone();
+        let mut child = child;
+        // Compress from the complete tree, not just the expanded visible rows.
+        // The deepest directory is the stable expansion key.
+        if compact {
+            while child.files.is_empty() && child.dirs.len() == 1 {
+                let (next, node) = child.dirs.iter().next().expect("single child");
+                path.push('/');
+                path.push_str(next);
+                label.push_str(" / ");
+                label.push_str(next);
+                child = node;
+            }
+        }
         let expanded = expanded_dirs.contains(&dir_key(oid, &path));
         out.push(ChangeRow::Folder {
             path: path.clone(),
-            name: name.clone(),
+            name: label,
             depth,
             expanded,
             files: child.file_count(),
@@ -326,6 +341,7 @@ fn flatten_change_tree(
                 &path,
                 depth.saturating_add(1),
                 expanded_dirs,
+                compact,
                 out,
             );
         }
@@ -345,9 +361,19 @@ pub fn flatten_changes(
     expanded_dirs: &HashSet<String>,
     depth: u16,
 ) -> Vec<ChangeRow> {
+    flatten_changes_with_compact(oid, changes, expanded_dirs, depth, false)
+}
+
+pub(crate) fn flatten_changes_with_compact(
+    oid: &str,
+    changes: &[CommitChange],
+    expanded_dirs: &HashSet<String>,
+    depth: u16,
+    compact: bool,
+) -> Vec<ChangeRow> {
     let tree = build_change_tree(changes);
     let mut rows = Vec::with_capacity(changes.len());
-    flatten_change_tree(&tree, oid, "", depth, expanded_dirs, &mut rows);
+    flatten_change_tree(&tree, oid, "", depth, expanded_dirs, compact, &mut rows);
     rows
 }
 

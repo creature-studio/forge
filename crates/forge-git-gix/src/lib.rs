@@ -309,9 +309,10 @@ impl GixReadBackend {
                 Change::Rewrite {
                     source_location,
                     location,
+                    entry_mode,
                     copy,
                     ..
-                } => out.push(CommitChange {
+                } if entry_mode.is_no_tree() => out.push(CommitChange {
                     path: bstr_to_rela(location.as_ref()),
                     old_path: Some(bstr_to_rela(source_location.as_ref())),
                     kind: if copy {
@@ -950,5 +951,25 @@ mod tests {
         assert_eq!(first.len(), 1);
         assert_eq!(first[0].kind, CommitChangeKind::Added);
         assert_eq!(first[0].path, "keep.txt");
+    }
+
+    #[test]
+    fn history_directory_rename_only_reports_leaf_files() {
+        let dir = init_repo();
+        let root = dir.path();
+        fs::create_dir_all(root.join("old/nested/deep")).unwrap();
+        commit_file(root, "old/nested/deep/file.txt", "one\n", "base");
+        fs::rename(root.join("old"), root.join("new")).unwrap();
+        git(root, &["add", "-A"]);
+        git(root, &["commit", "-m", "rename directory"]);
+        let git = GixReadBackend::new();
+        let head = git.graph(root, 1).unwrap().commits[0].id.clone();
+        let changes = git.commit_changes(root, &head).unwrap();
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert_eq!(changes[0].path, "new/nested/deep/file.txt");
+        assert_eq!(
+            changes[0].old_path.as_deref(),
+            Some("old/nested/deep/file.txt")
+        );
     }
 }

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.2] - 2026-11-25
+
+### Added
+- Discover and configure shell profiles on Windows, Linux and macOS; choose a default profile without closing existing sessions.
+- Resolve merge conflicts in the integrated editor, with per-block current/incoming/both actions, navigation and undo.
+- Terminal copy notifications and child OSC title support.
+
+### Fixed
+- Keep terminal selections anchored to scrollback content, extend them across pages with edge autoscroll, and copy off-screen history.
+- Synchronize the real outer terminal cursor to the focused PTY for IME placement while honoring hidden cursors and scrollback.
+- Improve modifier-key negotiation and terminal clipboard feedback.
+- Compact single-child Git history directories and open exact file paths for truncated names and renames.
+- Serve the Windows PowerShell installer as text and avoid nullable architecture detection on older PowerShell hosts.
+
 ## [0.4.0] - 2026-11-23
 
 ### Added

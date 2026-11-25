@@ -18,6 +18,7 @@ pub(super) struct EditingState {
     pending_save: Option<JobHandle<Result<TextDocument>>>,
     return_focus: Option<PaneFocus>,
     close_after_save: bool,
+    terminal_config: bool,
     clipboard: String,
     clipboard_line: bool,
     system_clipboard: Option<arboard::Clipboard>,
@@ -168,6 +169,68 @@ struct Snapshot {
     anchor: Option<(usize, usize)>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ConflictBlock {
+    start: usize,
+    base: Option<usize>,
+    separator: usize,
+    end: usize,
+}
+
+// Complete non-nested Git markers, including diff3/zdiff3.
+fn conflict_blocks(lines: &[String]) -> Vec<ConflictBlock> {
+    fn marker(line: &str, ch: u8) -> Option<usize> {
+        let n = line.bytes().take_while(|&b| b == ch).count();
+        (n >= 7 && (line.len() == n || line.as_bytes()[n] == b' ')).then_some(n)
+    }
+    let mut blocks = Vec::new();
+    let mut pending: Option<(usize, usize, Option<usize>, Option<usize>)> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(width) = marker(line, b'<') {
+            if pending.is_some() {
+                return Vec::new();
+            }
+            pending = Some((i, width, None, None));
+        } else if let Some((start, width, base, sep)) = pending.as_mut() {
+            if marker(line, b'|') == Some(*width) && base.is_none() && sep.is_none() {
+                *base = Some(i);
+            } else if line.len() == *width && marker(line, b'=') == Some(*width) && sep.is_none() {
+                *sep = Some(i);
+            } else if marker(line, b'>') == Some(*width) {
+                let Some(separator) = *sep else {
+                    return Vec::new();
+                };
+                blocks.push(ConflictBlock {
+                    start: *start,
+                    base: *base,
+                    separator,
+                    end: i,
+                });
+                pending = None;
+            } else if [b'|', b'=', b'>']
+                .iter()
+                .any(|&ch| marker(line, ch) == Some(*width))
+            {
+                return Vec::new();
+            }
+        }
+    }
+    if pending.is_some() {
+        Vec::new()
+    } else {
+        blocks
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConflictAction {
+    Previous,
+    Next,
+    Current,
+    Incoming,
+    Both,
+}
+
 pub(super) struct TextEditor {
     document: TextDocument,
     lines: Vec<String>,
@@ -187,6 +250,9 @@ pub(super) struct TextEditor {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     syntax_cache: EditorSyntaxCache,
+    conflict_cache: OnceLock<Vec<ConflictBlock>>,
+    conflict_mode: bool,
+    conflict_hits: Vec<(Rect, ConflictAction, Option<usize>)>,
 }
 
 impl TextEditor {
@@ -211,8 +277,94 @@ impl TextEditor {
             undo: Vec::new(),
             redo: Vec::new(),
             syntax_cache: EditorSyntaxCache::default(),
+            conflict_cache: OnceLock::new(),
+            conflict_mode: false,
+            conflict_hits: Vec::new(),
         }
     }
+    fn enable_conflicts(&mut self, jump: bool) {
+        self.conflict_mode = true;
+        if jump {
+            if let Some(start) = self.conflicts().first().map(|b| b.start) {
+                self.row = start;
+                self.top = start.saturating_sub(3);
+            }
+        }
+    }
+
+    fn conflicts(&self) -> &[ConflictBlock] {
+        self.conflict_cache
+            .get_or_init(|| conflict_blocks(&self.lines))
+    }
+
+    fn active_conflict(&self) -> Option<usize> {
+        self.conflicts()
+            .iter()
+            .position(|b| b.start <= self.row && self.row <= b.end)
+    }
+
+    fn apply_conflict(&mut self, action: ConflictAction) {
+        let blocks = self.conflicts();
+        if blocks.is_empty() {
+            return;
+        }
+        let active = self.active_conflict();
+        if matches!(action, ConflictAction::Previous | ConflictAction::Next) {
+            let index = if action == ConflictAction::Next {
+                blocks.iter().position(|b| b.start > self.row).unwrap_or(0)
+            } else {
+                blocks
+                    .iter()
+                    .rposition(|b| b.end < self.row)
+                    .unwrap_or(blocks.len() - 1)
+            };
+            self.row = blocks[index].start;
+        } else {
+            let Some(index) = active else {
+                self.message = "Move to a conflict first (Alt+Up/Down)".into();
+                return;
+            };
+            let block = blocks[index];
+            let mut replacement = Vec::new();
+            if matches!(action, ConflictAction::Current | ConflictAction::Both) {
+                replacement.extend_from_slice(
+                    &self.lines[block.start + 1..block.base.unwrap_or(block.separator)],
+                );
+            }
+            if matches!(action, ConflictAction::Incoming | ConflictAction::Both) {
+                replacement.extend_from_slice(&self.lines[block.separator + 1..block.end]);
+            }
+            self.checkpoint_range(block.start, block.end + 1);
+            self.lines.splice(block.start..=block.end, replacement);
+            if self.lines.is_empty() {
+                self.lines.push(String::new());
+            }
+            self.byte_len =
+                self.lines.iter().map(String::len).sum::<usize>() + self.lines.len() - 1;
+            self.row = block.start.min(self.lines.len() - 1);
+            let next = self
+                .conflicts()
+                .iter()
+                .find(|b| b.start >= self.row)
+                .or_else(|| self.conflicts().first())
+                .map(|b| b.start);
+            if let Some(next) = next {
+                self.row = next;
+            }
+            self.message = if self.conflicts().is_empty() {
+                "No complete conflict blocks remain. Review, save, then stage.".into()
+            } else {
+                "Conflict accepted".into()
+            };
+        }
+        self.col = 0;
+        self.left = 0;
+        self.anchor = None;
+        self.dragging = false;
+        self.follow_cursor = true;
+        self.conflict_hits.clear();
+    }
+
     fn value(&self) -> String {
         self.lines.join("\n")
     }
@@ -243,6 +395,8 @@ impl TextEditor {
         );
         self.byte_len = self.lines.iter().map(String::len).sum::<usize>() + self.lines.len() - 1;
         self.dirty_cache.take();
+        self.conflict_cache.take();
+        self.conflict_hits.clear();
         self.row = snapshot.row;
         self.col = snapshot.col;
         self.anchor = snapshot.anchor;
@@ -260,6 +414,8 @@ impl TextEditor {
         }
         self.redo.clear();
         self.dirty_cache.take();
+        self.conflict_cache.take();
+        self.conflict_hits.clear();
         self.message.clear();
     }
     fn undo(&mut self, redo: bool) {
@@ -494,6 +650,19 @@ fn byte_at_cell(s: &str, cell: usize) -> usize {
 
 impl App {
     pub(super) fn open_text_editor(&mut self, path: PathBuf, line: usize) {
+        let conflict = self.scm.git_status.as_ref().is_some_and(|status| {
+            status.entries.iter().any(|(relative, kind)| {
+                *kind == forge_git::GitStatus::Conflicted && status.repo_root.join(relative) == path
+            })
+        });
+        self.load_text_editor(path, line, conflict);
+    }
+
+    pub(super) fn open_conflict_editor(&mut self, path: PathBuf) {
+        self.load_text_editor(path, 1, true);
+    }
+
+    fn load_text_editor(&mut self, path: PathBuf, line: usize, conflict: bool) {
         if self.editing.active() || self.write_busy() {
             return;
         }
@@ -505,13 +674,37 @@ impl App {
         // editor modal layered over a Git Diff. Otherwise Esc closes the
         // editor and unexpectedly reveals the Git Activity underneath.
         // Preserve Git selection/history for an explicit F2 return.
-        if self.in_git_sidebar() && path.is_file() {
+        if (self.in_git_sidebar() || (conflict && !path.starts_with(&self.files.tree_root)))
+            && path.is_file()
+        {
             self.leave_git_sidebar();
             self.tools.return_focus = Some(PaneFocus::List);
             self.reveal_file(path.clone(), line);
         }
         self.editing.return_focus = Some(self.session.focus);
         let root = self.files.tree_root.clone();
+        self.editing.terminal_config = false;
+        self.load_editor_document(root, path, line, conflict);
+    }
+
+    // Configuration is a single explicitly selected file outside the workspace.
+    // Use its parent as the editor's containment root; do not switch workspace
+    // or suspend Forge, so every existing PTY remains alive.
+    pub(super) fn open_terminal_config_editor(&mut self, path: PathBuf) {
+        if self.editing.active() || self.write_busy() {
+            return;
+        }
+        let Some(root) = path.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        self.close_tools();
+        self.dismiss_menu();
+        self.editing.return_focus = Some(self.session.focus);
+        self.editing.terminal_config = true;
+        self.load_editor_document(root, path, 1, false);
+    }
+
+    fn load_editor_document(&mut self, root: PathBuf, path: PathBuf, line: usize, conflict: bool) {
         self.editing.pending_load = Some(self.services.jobs.spawn(
             JobPriority::High,
             Some("editor:load".into()),
@@ -521,7 +714,11 @@ impl App {
                     // Grammar initialization and splitting large documents
                     // must not block input or the first loading frame.
                     let _ = forge_ui::TextLang::from_name(&path.to_string_lossy());
-                    Ok(TextEditor::new(document, line))
+                    let mut editor = TextEditor::new(document, line);
+                    if conflict {
+                        editor.enable_conflicts(line == 1);
+                    }
+                    Ok(editor)
                 })
                 .await?
             },
@@ -532,6 +729,7 @@ impl App {
         self.services.jobs.cancel_key("editor:syntax");
         self.editing.pending_load = None;
         self.editing.view = None;
+        self.editing.terminal_config = false;
         if let Some(focus) = self.editing.return_focus.take() {
             self.session.focus = focus;
         }
@@ -553,6 +751,13 @@ impl App {
         }
         let document = view.document.clone();
         let value = view.value();
+        if self.editing.terminal_config {
+            if let Err(error) = Config::parse(&value) {
+                view.message = format!("Invalid config: {error}");
+                view.confirm_close = false;
+                return;
+            }
+        }
         view.message = "Saving…".into();
         self.editing.close_after_save = close;
         self.editing.pending_save = Some(self.services.jobs.spawn(
@@ -604,13 +809,25 @@ impl App {
                         view.message = "Saved".into();
                     }
                     self.session.status = format!("Saved {}", path.display());
-                    self.request_status();
-                    if self.in_git_sidebar() {
-                        self.request_diff_for_scm_selection();
+                    if self.editing.terminal_config {
+                        match Config::load_checked() {
+                            Ok(config) => {
+                                self.config.terminal = config.terminal;
+                                self.shell_profiles = None;
+                                self.shell_discovery = None;
+                                self.session.status = "Shell profiles reloaded".into();
+                            }
+                            Err(error) => self.session.status = error,
+                        }
                     } else {
-                        self.tools.reveal = Some((path, self.preview_source_line()));
-                        self.tools.return_focus = Some(self.session.focus);
-                        self.request_preview_for_selection();
+                        self.request_status();
+                        if self.in_git_sidebar() {
+                            self.request_diff_for_scm_selection();
+                        } else {
+                            self.tools.reveal = Some((path, self.preview_source_line()));
+                            self.tools.return_focus = Some(self.session.focus);
+                            self.request_preview_for_selection();
+                        }
                     }
                     if self.editing.close_after_save {
                         self.close_text_editor();
@@ -687,6 +904,20 @@ impl App {
                 _ => {}
             }
             return;
+        }
+        if view.conflict_mode && key.modifiers == KeyModifiers::ALT {
+            let action = match key.code {
+                KeyCode::Up => Some(ConflictAction::Previous),
+                KeyCode::Down => Some(ConflictAction::Next),
+                KeyCode::Char('1') => Some(ConflictAction::Current),
+                KeyCode::Char('2') => Some(ConflictAction::Incoming),
+                KeyCode::Char('3') => Some(ConflictAction::Both),
+                _ => None,
+            };
+            if let Some(action) = action {
+                view.apply_conflict(action);
+                return;
+            }
         }
         if key.code == KeyCode::Esc && view.selection().is_some() {
             view.anchor = None;
@@ -845,6 +1076,29 @@ impl App {
         };
         if view.confirm_close {
             return;
+        }
+        if mouse.kind == MouseEventKind::Down(MouseButton::Left) {
+            if let Some((_, action, target)) = view
+                .conflict_hits
+                .iter()
+                .find(|(rect, _, _)| rect.contains((mouse.column, mouse.row).into()))
+                .copied()
+            {
+                if let Some(start) = target.filter(|_| {
+                    matches!(
+                        action,
+                        ConflictAction::Current | ConflictAction::Incoming | ConflictAction::Both
+                    )
+                }) {
+                    if !view.conflicts().iter().any(|b| b.start == start) {
+                        return;
+                    }
+                    view.row = start;
+                    view.col = 0;
+                }
+                view.apply_conflict(action);
+                return;
+            }
         }
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left)
@@ -1008,6 +1262,90 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
         .style(Style::default().fg(p.fg).bg(p.bg));
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    view.conflict_hits.clear();
+    let conflict_blocks = if view.conflict_mode {
+        view.conflicts().to_vec()
+    } else {
+        Vec::new()
+    };
+    let active = if view.conflict_mode {
+        view.active_conflict()
+    } else {
+        None
+    };
+    let mut inner = inner;
+    if view.conflict_mode && inner.height >= 5 {
+        let label = if conflict_blocks.is_empty() {
+            "No complete conflicts · Review & save, then stage".to_owned()
+        } else {
+            format!(
+                "Conflict {}/{} · Alt+↑/↓  Alt+1/2/3",
+                active.map_or(0, |i| i + 1),
+                conflict_blocks.len()
+            )
+        };
+        frame.render_widget(
+            Paragraph::new(label).style(Style::default().fg(p.warning)),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        if !conflict_blocks.is_empty() {
+            let compact = inner.width < 60;
+            let buttons = [
+                (" Prev ", ConflictAction::Previous),
+                (" Next ", ConflictAction::Next),
+                (
+                    if compact {
+                        " Current "
+                    } else {
+                        " Accept Current "
+                    },
+                    ConflictAction::Current,
+                ),
+                (
+                    if compact {
+                        " Incoming "
+                    } else {
+                        " Accept Incoming "
+                    },
+                    ConflictAction::Incoming,
+                ),
+                (
+                    if compact { " Both " } else { " Accept Both " },
+                    ConflictAction::Both,
+                ),
+            ];
+            let mut x = inner.x;
+            for (label, action) in buttons {
+                let width = label.len() as u16;
+                if x.saturating_add(width) > inner.right() {
+                    break;
+                }
+                let rect = Rect::new(x, inner.y + 1, width, 1);
+                let enabled = !saving
+                    && !view.confirm_close
+                    && (active.is_some()
+                        || matches!(action, ConflictAction::Previous | ConflictAction::Next));
+                frame.render_widget(
+                    Paragraph::new(label).style(
+                        Style::default()
+                            .fg(if enabled { p.accent } else { p.fg_dim })
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    rect,
+                );
+                if enabled {
+                    view.conflict_hits.push((
+                        rect,
+                        action,
+                        active.map(|i| conflict_blocks[i].start),
+                    ));
+                }
+                x += width;
+            }
+        }
+        inner.y += 2;
+        inner.height -= 2;
+    }
     let rows = Layout::vertical([
         Constraint::Min(0),
         Constraint::Length(if inner.height > 2 { 2 } else { 1 }),
@@ -1075,7 +1413,26 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
                 offset + 1,
                 width = gutter.saturating_sub(1) as usize
             ))
-            .style(Style::default().fg(p.fg_dim)),
+            .style(
+                Style::default().fg(conflict_blocks
+                    .iter()
+                    .find(|b| b.start <= offset && offset <= b.end)
+                    .map_or(p.fg_dim, |b| {
+                        if offset == b.start
+                            || offset == b.end
+                            || offset == b.separator
+                            || b.base == Some(offset)
+                        {
+                            p.warning
+                        } else if offset < b.base.unwrap_or(b.separator) {
+                            p.success
+                        } else if offset > b.separator {
+                            p.info
+                        } else {
+                            p.fg_dim
+                        }
+                    })),
+            ),
             Rect::new(rows[0].x, y, gutter, 1),
         );
         let highlight = Style::default().fg(p.on_accent).bg(p.selection);
@@ -1091,7 +1448,7 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
         let (visible, scroll) = editor_line(
             line,
             colored.get(offset - view.top),
-            selected,
+            selected.clone(),
             view.left,
             text_area.width as usize,
             highlight,
@@ -1100,6 +1457,29 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
             Paragraph::new(visible).scroll((0, scroll)),
             Rect::new(text_area.x, y, text_area.width, 1),
         );
+        if !saving
+            && !view.confirm_close
+            && view.left == 0
+            && conflict_blocks.iter().any(|b| b.start == offset)
+            && display_width(line) + 30 <= text_area.width as usize
+            && selected.is_none()
+        {
+            let mut x = text_area.right() - 29;
+            for (label, action) in [
+                ("[Current]", ConflictAction::Current),
+                ("[Incoming]", ConflictAction::Incoming),
+                ("[Both]", ConflictAction::Both),
+            ] {
+                let rect = Rect::new(x, y, label.len() as u16, 1);
+                frame.render_widget(
+                    Paragraph::new(label)
+                        .style(Style::default().fg(p.accent).add_modifier(Modifier::BOLD)),
+                    rect,
+                );
+                view.conflict_hits.push((rect, action, Some(offset)));
+                x += label.len() as u16 + 1;
+            }
+        }
     }
     let help = if saving {
         "Saving…"
@@ -1447,6 +1827,112 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    const CONFLICTS: &str = "prefix\n<<<<<<< HEAD\nours\n||||||| base\nold\n=======\ntheirs\n>>>>>>> branch\nmiddle\n<<<<<<< HEAD\n=======\nincoming\n>>>>>>> branch\nsuffix\n";
+
+    #[test]
+    fn conflict_parser_rejects_malformed_blocks_and_understands_diff3() {
+        let lines = |value: &str| value.split('\n').map(str::to_owned).collect::<Vec<_>>();
+        let blocks = conflict_blocks(&lines(CONFLICTS));
+        assert_eq!(
+            blocks,
+            vec![
+                ConflictBlock {
+                    start: 1,
+                    base: Some(3),
+                    separator: 5,
+                    end: 7
+                },
+                ConflictBlock {
+                    start: 9,
+                    base: None,
+                    separator: 10,
+                    end: 12
+                }
+            ]
+        );
+        assert!(conflict_blocks(&lines("<<<<<<< HEAD\na\n=======\nb")).is_empty());
+        assert!(conflict_blocks(&lines(
+            "<<<<<<< HEAD\n<<<<<<< nested\n=======\n>>>>>>> branch"
+        ))
+        .is_empty());
+        assert_eq!(
+            conflict_blocks(&lines("<<<<<<<<< HEAD\na\n=========\nb\n>>>>>>>>> side")).len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn conflict_accept_both_and_empty_current_preserve_context_and_undo() {
+        let (_dir, mut app, path) = fixture(CONFLICTS);
+        app.open_conflict_editor(path.clone());
+        finish(&mut app).await;
+        let v = app.editing.view.as_ref().unwrap();
+        assert_eq!(v.active_conflict(), Some(0));
+        key(&mut app, KeyCode::Char('3'), KeyModifiers::ALT);
+        let v = app.editing.view.as_ref().unwrap();
+        assert_eq!(v.conflicts().len(), 1);
+        assert!(v.value().starts_with("prefix\nours\ntheirs\nmiddle\n"));
+        key(&mut app, KeyCode::Char('1'), KeyModifiers::ALT);
+        let v = app.editing.view.as_ref().unwrap();
+        assert_eq!(v.value(), "prefix\nours\ntheirs\nmiddle\nsuffix\n");
+        assert!(v.conflicts().is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), CONFLICTS);
+        key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(app.editing.view.as_ref().unwrap().conflicts().len(), 1);
+        key(&mut app, KeyCode::Char('z'), KeyModifiers::CONTROL);
+        assert_eq!(app.editing.view.as_ref().unwrap().value(), CONFLICTS);
+        key(&mut app, KeyCode::Char('y'), KeyModifiers::CONTROL);
+        key(&mut app, KeyCode::Char('2'), KeyModifiers::ALT);
+        key(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
+        finish(&mut app).await;
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            "prefix\nours\ntheirs\nmiddle\nincoming\nsuffix\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn inline_conflict_mouse_action_targets_its_own_block() {
+        let (_dir, mut app, path) = fixture(CONFLICTS);
+        app.open_conflict_editor(path);
+        finish(&mut app).await;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|f| draw_editor(f, f.area(), &mut app, Palette::default()))
+            .unwrap();
+        let rect = app
+            .editing
+            .view
+            .as_ref()
+            .unwrap()
+            .conflict_hits
+            .iter()
+            .find(|(_, action, target)| *action == ConflictAction::Incoming && *target == Some(9))
+            .unwrap()
+            .0;
+        app.handle_editor_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: rect.x,
+            row: rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        let v = app.editing.view.as_ref().unwrap();
+        assert_eq!(v.conflicts().len(), 1);
+        assert!(v.value().ends_with("middle\nincoming\nsuffix\n"));
+        assert!(v.value().contains("||||||| base"));
+    }
+
+    #[tokio::test]
+    async fn conflict_examples_in_regular_files_do_not_enable_resolution() {
+        let (_dir, mut app, path) = fixture(CONFLICTS);
+        app.open_text_editor(path, 1);
+        finish(&mut app).await;
+        assert!(!app.editing.view.as_ref().unwrap().conflict_mode);
+        key(&mut app, KeyCode::Char('3'), KeyModifiers::ALT);
+        assert_eq!(app.editing.view.as_ref().unwrap().value(), CONFLICTS);
     }
 
     #[tokio::test]

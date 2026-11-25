@@ -759,3 +759,16 @@ async fn stash_all_removes_staged_and_unstaged_changes() {
     assert!(!root.join("untracked.txt").exists());
     assert!(git(root, &["stash", "list"]).contains("test all"));
 }
+
+#[test]
+fn numstat_paths_are_exact_including_renames_tabs_and_binary() {
+    let files = parse_commit_numstat("12\t3\tlong/path/file.rs\0");
+    assert_eq!(files[0].path, "long/path/file.rs");
+    assert_eq!((files[0].additions, files[0].deletions), (12, 3));
+    let files =
+        parse_commit_numstat("0\t0\t\0old/long/name.rs\0new/long/name.rs\0-\t-\tassets/a\tb.png\0");
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].path, "new/long/name.rs");
+    assert_eq!(files[1].path, "assets/a\tb.png");
+    assert!(files[1].binary);
+}
