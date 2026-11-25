@@ -17,7 +17,8 @@ use ratatui::Frame;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::graph::{
-    change_color, flatten_changes, lane_color, ChangeRow, GraphCell, GraphLayout, LANE_WIDTH,
+    change_color, flatten_changes_with_compact, lane_color, ChangeRow, GraphCell, GraphLayout,
+    LANE_WIDTH,
 };
 use crate::icons::{icon_mode, IconMode, Icons};
 use crate::sticky;
@@ -364,6 +365,25 @@ pub fn build_scm_rows(
     expanded_staged: &HashSet<String>,
     history: &HistoryView<'_>,
 ) -> Vec<ScmRow> {
+    build_scm_rows_with_compact(
+        unstaged,
+        staged,
+        expanded_unstaged,
+        expanded_staged,
+        history,
+        false,
+    )
+}
+
+/// One row model shared by rendering, navigation and mouse hit testing.
+pub fn build_scm_rows_with_compact(
+    unstaged: &[ChangeEntry],
+    staged: &[ChangeEntry],
+    expanded_unstaged: &HashSet<String>,
+    expanded_staged: &HashSet<String>,
+    history: &HistoryView<'_>,
+    compact: bool,
+) -> Vec<ScmRow> {
     let mut rows = Vec::with_capacity(3 + unstaged.len() + staged.len() + history.commits.len());
     rows.push(ScmRow::Section {
         title: "CHANGES",
@@ -393,7 +413,10 @@ pub fn build_scm_rows(
         expanded_staged,
         &mut rows,
     );
-    push_history_rows(&mut rows, history);
+    if compact {
+        rows = compact_scm_rows(&rows);
+    }
+    push_history_rows(&mut rows, history, compact);
     rows
 }
 
@@ -426,7 +449,7 @@ pub struct HistoryView<'a> {
 
 /// Append the HISTORY section and, when open, each commit plus the file tree of
 /// expanded commits.
-fn push_history_rows(rows: &mut Vec<ScmRow>, history: &HistoryView<'_>) {
+fn push_history_rows(rows: &mut Vec<ScmRow>, history: &HistoryView<'_>, compact: bool) {
     rows.push(ScmRow::HistorySection {
         count: history.commits.len(),
         expanded: history.expanded,
@@ -444,7 +467,9 @@ fn push_history_rows(rows: &mut Vec<ScmRow>, history: &HistoryView<'_>) {
             // Still loading; the commit row shows the hint itself.
             continue;
         };
-        for row in flatten_changes(&commit.id, changes, history.expanded_dirs, 1) {
+        for row in
+            flatten_changes_with_compact(&commit.id, changes, history.expanded_dirs, 1, compact)
+        {
             rows.push(match row {
                 ChangeRow::Folder {
                     path,
@@ -609,18 +634,14 @@ pub fn draw_scm_sidebar(
 
     let body = area;
 
-    let raw = build_scm_rows(
+    let rows = build_scm_rows_with_compact(
         state.unstaged,
         state.staged,
         state.expanded_unstaged,
         state.expanded_staged,
         state.history,
+        state.compact_folders,
     );
-    let rows = if state.compact_folders {
-        compact_scm_rows(&raw)
-    } else {
-        raw
-    };
     let count = rows.len();
     let selected = state.selected.min(count.saturating_sub(1));
 

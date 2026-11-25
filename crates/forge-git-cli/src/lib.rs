@@ -14,7 +14,7 @@ use forge_model::{DiffHunk, DiffLine, DiffLineKind, DiffSide, FileDiff};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 mod workbench;
-pub use workbench::{GitAction, GitItem, GitQuery};
+pub use workbench::{CommitFileStat, GitAction, GitItem, GitQuery};
 
 /// Errors from the git CLI write / diff backend.
 #[derive(Debug, thiserror::Error)]

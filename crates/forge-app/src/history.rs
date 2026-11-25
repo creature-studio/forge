@@ -46,7 +46,11 @@ pub(super) struct HistoryState {
     pub ahead: usize,
     pub behind: usize,
     pub counts_truncated: bool,
-    pending_detail: Option<(String, JobHandle<Result<String>>)>,
+    pending_detail: Option<(
+        String,
+        JobHandle<Result<(String, Vec<forge_git::CommitFileStat>)>>,
+    )>,
+    pub detail_files: Option<(String, Vec<forge_git::CommitFileStat>)>,
     pending_graph: Option<PendingHistory>,
     pending_files: Vec<PendingCommitFiles>,
     /// Deferred click on a commit-detail file whose history tree is still loading.
@@ -79,6 +83,7 @@ impl Default for HistoryState {
             behind: 0,
             counts_truncated: false,
             pending_detail: None,
+            detail_files: None,
             pending_graph: None,
             pending_files: Vec::new(),
             pending_link: None,
@@ -257,34 +262,6 @@ impl App {
         }
     }
 
-    /// Git --stat can compact renames (`dir/{old => new}.rs`), whereas the
-    /// History model stores canonical new/old paths. Resolve only exact
-    /// equivalents to avoid opening an unrelated file from the same commit.
-    fn matches_commit_stat_path(shown: &str, change: &forge_git::CommitChange) -> bool {
-        if shown == change.path {
-            return true;
-        }
-        let Some(old) = change.old_path.as_deref() else {
-            return false;
-        };
-        if shown == format!("{old} => {}", change.path) {
-            return true;
-        }
-        let (Some(start), Some(end)) = (shown.find('{'), shown.rfind('}')) else {
-            return false;
-        };
-        if end <= start {
-            return false;
-        }
-        let Some((before, after)) = shown[start + 1..end].split_once(" => ") else {
-            return false;
-        };
-        let prefix = &shown[..start];
-        let suffix = &shown[end + 1..];
-        format!("{prefix}{before}{suffix}") == old
-            && format!("{prefix}{after}{suffix}") == change.path
-    }
-
     /// Select the exact historical file in SCM before requesting its Diff.
     /// Keeping these in sync is important: diff_matches_selection rejects
     /// stale diffs associated with another commit or file.
@@ -302,10 +279,7 @@ impl App {
         let Some(files) = self.history.files.get(&oid) else {
             return;
         };
-        let Some(file_index) = files
-            .iter()
-            .position(|entry| Self::matches_commit_stat_path(&path, entry))
-        else {
+        let Some(file_index) = files.iter().position(|entry| entry.path == path) else {
             self.session.status = format!("Historical file not found: {path}");
             return;
         };
@@ -355,6 +329,7 @@ impl App {
         self.preview_state.pending_preview = None;
         self.clear_diff_view();
         self.preview_state.preview = None;
+        self.history.detail_files = None;
         self.preview_state.preview_mode = PreviewMode::File;
         self.preview_state.preview_scroll = 0;
         self.preview_state.preview_loading = true;
@@ -367,13 +342,7 @@ impl App {
         let handle = self.services.jobs.spawn(
             JobPriority::High,
             Some("git:commit-detail".into()),
-            async move {
-                let (_, detail) = git
-                    .write
-                    .query(&root, forge_git::GitQuery::Commit(query_oid))
-                    .await?;
-                Ok(detail)
-            },
+            async move { Ok(git.write.commit_detail(&root, &query_oid).await?) },
         );
         self.history.pending_detail = Some((oid, handle));
     }
@@ -394,11 +363,14 @@ impl App {
                         && matches!(self.preview_state.preview_mode, PreviewMode::File)))
             {
                 let content = match result {
-                    Ok(Ok(detail)) => PreviewContent::Text {
-                        bytes_read: detail.len(),
-                        lines: detail.lines().map(str::to_owned).collect(),
-                        truncated: false,
-                    },
+                    Ok(Ok((detail, files))) => {
+                        self.history.detail_files = Some((oid.clone(), files));
+                        PreviewContent::Text {
+                            bytes_read: detail.len(),
+                            lines: detail.lines().map(str::to_owned).collect(),
+                            truncated: false,
+                        }
+                    }
                     Ok(Err(err)) => PreviewContent::Error {
                         message: err.to_string(),
                     },
@@ -555,22 +527,15 @@ impl App {
                         .expanded_dirs
                         .retain(|item| !item.starts_with(&prefix));
                 } else {
-                    let chain = if self.config.compact_folders {
-                        Self::compact_expand_paths(
-                            &path,
-                            self.history
-                                .files
-                                .get(&oid)
-                                .into_iter()
-                                .flat_map(|files| files.iter().map(|file| file.path.as_str())),
-                        )
-                    } else {
-                        vec![path.clone()]
-                    };
-                    for part in &chain {
-                        self.history.expanded_dirs.insert(dir_key(&oid, part));
+                    let mut prefix = String::new();
+                    for part in path.split('/') {
+                        if !prefix.is_empty() {
+                            prefix.push('/');
+                        }
+                        prefix.push_str(part);
+                        self.history.expanded_dirs.insert(dir_key(&oid, &prefix));
                     }
-                    let target = chain.last().unwrap_or(&path);
+                    let target = &path;
                     if let Some(i) = self.scm_rows().iter().position(|row| {
                         matches!(row, ScmRow::CommitFolder { commit: c, path: p, .. }
                             if *c == commit && p == target)
@@ -872,9 +837,12 @@ mod tests {
         let folder = row(&app, |row| {
             matches!(row,
             ScmRow::CommitFolder { path, expanded: false, .. }
-                if path == "crates")
+                if path == "crates/forge-config/src")
         })
         .unwrap();
+        assert!(
+            matches!(&app.scm_rows()[folder], ScmRow::CommitFolder { name, .. } if name == "crates / forge-config / src")
+        );
         app.toggle_history_row(folder);
         assert!(app.history.expanded_dirs.contains(&dir_key(&oid, "crates")));
         assert!(app
@@ -898,6 +866,12 @@ mod tests {
         assert_eq!(app.scm.scm_selected, merged);
         assert_eq!(rows.iter().filter(|row| row.is_commit_file()).count(), 2);
         app.toggle_history_row(merged);
+        assert!(
+            matches!(&app.scm_rows()[merged], ScmRow::CommitFolder { path, name, expanded: false, .. } if path == "crates/forge-config/src" && name == "crates / forge-config / src")
+        );
+        app.config.compact_folders = false;
+        assert!(app.scm_rows().iter().any(|r| matches!(r, ScmRow::CommitFolder { path, name, .. } if path == "crates" && name == "crates")));
+        app.config.compact_folders = true;
         assert!(!app
             .history
             .expanded_dirs
@@ -934,34 +908,6 @@ mod tests {
             app.scm_rows().iter().filter(|row| row.is_commit()).count(),
             1
         );
-    }
-
-    #[test]
-    fn commit_stat_rename_links_resolve_only_the_canonical_new_path() {
-        let renamed = forge_git::CommitChange {
-            path: "src/new.rs".into(),
-            old_path: Some("src/old.rs".into()),
-            kind: forge_git::CommitChangeKind::Renamed,
-        };
-        assert!(App::matches_commit_stat_path(
-            "src/{old => new}.rs",
-            &renamed
-        ));
-        assert!(App::matches_commit_stat_path(
-            "src/old.rs => src/new.rs",
-            &renamed
-        ));
-        assert!(App::matches_commit_stat_path("src/new.rs", &renamed));
-        assert!(!App::matches_commit_stat_path(
-            "src/{notold => new}.rs",
-            &renamed
-        ));
-        assert!(!App::matches_commit_stat_path("another/file.rs", &renamed));
-        let ordinary = change("src/regular.rs");
-        assert!(!App::matches_commit_stat_path(
-            "src/{old => regular}.rs",
-            &ordinary
-        ));
     }
 
     #[tokio::test]
@@ -1176,6 +1122,91 @@ mod tests {
         assert_eq!(app.session.focus, PaneFocus::Preview);
         app.handle_key(key(KeyCode::Tab, KeyModifiers::NONE));
         assert_eq!(app.preview_state.commit_link_focus, Some(0));
+    }
+
+    #[tokio::test]
+    async fn long_history_links_reveal_exact_paths_even_with_identical_suffixes_and_renames() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::{backend::TestBackend, layout::Rect, Terminal};
+        let dir = repo();
+        let suffix = "very_long_directory_name_for_git_stat_truncation/repeated/subdirectory/same_filename.rs";
+        let old = format!("old/{suffix}");
+        let new = format!("new/{suffix}");
+        let other = format!("other/{suffix}");
+        for path in [&old, &other] {
+            let target = dir.path().join(path);
+            std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+            std::fs::write(
+                target,
+                if path == &old {
+                    "original\n"
+                } else {
+                    "different\n"
+                },
+            )
+            .unwrap();
+        }
+        git(dir.path(), &["add", "-A"]);
+        git(dir.path(), &["commit", "-qm", "add long paths"]);
+        std::fs::create_dir_all(dir.path().join(&new).parent().unwrap()).unwrap();
+        git(dir.path(), &["mv", &old, &new]);
+        std::fs::write(dir.path().join(&other), "different\nupdated\n").unwrap();
+        git(
+            dir.path(),
+            &["commit", "-qam", "rename and modify long paths"],
+        );
+        for expected in [&new, &other] {
+            let mut app = app(dir.path());
+            app.show_history();
+            settle(&mut app).await;
+            let area = Rect::new(2, 1, 50, 24);
+            app.session.layout.preview = area;
+            app.session.layout.preview_inner = area;
+            let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+            term.draw(|frame| {
+                app.commit_file_links.clear();
+                assert!(crate::view::commit_detail::draw(
+                    frame,
+                    area,
+                    &mut app,
+                    crate::view::workspace_palette()
+                ));
+            })
+            .unwrap();
+            let (link, _) = app
+                .commit_file_links
+                .iter()
+                .find(|(_, index)| {
+                    crate::view::commit_detail::file_link_target(&app, *index)
+                        .is_some_and(|(_, path)| path == *expected)
+                })
+                .copied()
+                .expect("canonical long-path link");
+            assert_eq!(term.backend().buffer()[(link.x, link.y)].symbol(), "…");
+            app.handle_mouse_content(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: link.x,
+                row: link.y,
+                modifiers: KeyModifiers::NONE,
+            });
+            settle(&mut app).await;
+            let diff = app
+                .preview_state
+                .file_diff
+                .as_ref()
+                .expect("historical diff");
+            assert_eq!(&diff.path, expected);
+            assert!(
+                matches!(
+                    app.selected_scm_row(),
+                    Some(ScmRow::CommitFile { depth: 2, .. })
+                ),
+                "expected {expected}, compact={}, selected={:?}, rows={:?}",
+                app.config.compact_folders,
+                app.selected_scm_row(),
+                app.scm_rows()
+            );
+        }
     }
 
     #[tokio::test]

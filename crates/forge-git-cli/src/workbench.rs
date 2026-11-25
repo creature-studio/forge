@@ -85,7 +85,87 @@ fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|x| (*x).to_owned()).collect()
 }
 
+/// Exact paths and line counts from Git's NUL-delimited numstat protocol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitFileStat {
+    pub path: String,
+    pub additions: usize,
+    pub deletions: usize,
+    pub binary: bool,
+}
+
+fn parse_commit_numstat(text: &str) -> Vec<CommitFileStat> {
+    let mut records = text.split('\0');
+    let mut files = Vec::new();
+    while let Some(record) = records.next().filter(|r| !r.is_empty()) {
+        let mut fields = record.splitn(3, '\t');
+        let (Some(added), Some(deleted), Some(path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            break;
+        };
+        // With -z, renames use an empty path followed by old and new records.
+        let path = if path.is_empty() {
+            let (Some(_old), Some(new)) = (records.next(), records.next()) else {
+                break;
+            };
+            new
+        } else {
+            path
+        };
+        files.push(CommitFileStat {
+            path: path.into(),
+            additions: added.parse().unwrap_or(0),
+            deletions: deleted.parse().unwrap_or(0),
+            binary: added == "-" || deleted == "-",
+        });
+    }
+    files
+}
+
 impl CliWriteBackend {
+    /// Metadata and exact changed-file identities, relative to the first parent
+    /// (the same comparison used by the history tree and per-file diff).
+    pub async fn commit_detail(
+        &self,
+        repo: &Path,
+        oid: &str,
+    ) -> Result<(String, Vec<CommitFileStat>), GitWriteError> {
+        let metadata = self
+            .text(
+                repo,
+                strings(&[
+                    "show",
+                    "--no-patch",
+                    "--no-color",
+                    "--format=fuller",
+                    oid,
+                    "--",
+                ]),
+            )
+            .await?;
+        let stats = self
+            .text(
+                repo,
+                strings(&[
+                    "show",
+                    "--format=",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-color",
+                    "--numstat",
+                    "-z",
+                    "--first-parent",
+                    "--diff-merges=first-parent",
+                    "-M",
+                    oid,
+                    "--",
+                ]),
+            )
+            .await?;
+        Ok((metadata, parse_commit_numstat(&stats)))
+    }
+
     /// Unified diff of one file as changed by `oid` (read-only, for history).
     ///
     /// `-m --first-parent` matches [`gix`'s first-parent tree diff] used to list

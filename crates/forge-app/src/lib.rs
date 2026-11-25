@@ -16,15 +16,14 @@ use forge_git::{
 };
 use forge_jobs::{JobError, JobHandle, JobPriority, JobScheduler};
 use forge_model::JobId;
-use forge_theme::{detect_color_mode, ColorMode};
+use forge_theme::{ColorMode, detect_color_mode};
 use forge_ui::{
-    build_scm_rows, compact_scm_rows, compact_tree_rows, diff_items, diff_render_hunk_start,
-    expand_ancestors_for_path, file_list_items, find_parent_row, find_scm_parent_row, flatten_tree,
-    init_icons_from_env, scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode,
-    staging_items, sticky_index_at, ActivityTab, ContextAction, ContextMenu, ContextTarget,
-    HorizontalScrollbar, HoverTargets, MarkdownPreview, PaneFocus, PaneLayout, ScmRow,
-    ScrollbarDrag, SplitRowsCache, StagingColumn, TextLang, TextRowsCache, TreeRow,
-    VerticalScrollbar,
+    ActivityTab, ContextAction, ContextMenu, ContextTarget, HorizontalScrollbar, HoverTargets,
+    MarkdownPreview, PaneFocus, PaneLayout, ScmRow, ScrollbarDrag, SplitRowsCache, StagingColumn,
+    TextLang, TextRowsCache, TreeRow, VerticalScrollbar, build_scm_rows_with_compact,
+    compact_tree_rows, diff_items, diff_render_hunk_start, expand_ancestors_for_path,
+    file_list_items, find_parent_row, find_scm_parent_row, flatten_tree, init_icons_from_env,
+    scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode, staging_items, sticky_index_at,
 };
 mod auto_refresh;
 mod blame;
@@ -733,18 +732,14 @@ impl App {
 
     fn scm_rows(&self) -> Vec<ScmRow> {
         let (u, s) = self.scm_slices();
-        let rows = build_scm_rows(
+        build_scm_rows_with_compact(
             u,
             s,
             &self.scm.scm_expanded_unstaged,
             &self.scm.scm_expanded_staged,
             &self.history_view(),
-        );
-        if self.config.compact_folders {
-            compact_scm_rows(&rows)
-        } else {
-            rows
-        }
+            self.config.compact_folders,
+        )
     }
 
     fn selected_scm_entry(&self) -> Option<&forge_git::ChangeEntry> {
