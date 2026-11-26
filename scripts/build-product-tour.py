@@ -3,13 +3,13 @@
 
 Requires Pillow: python3 -m pip install pillow
 Run from the repository root: python3 scripts/build-product-tour.py
-This is a screenshot slideshow, NOT a screen recording.
+This is a screenshot slideshow, NOT a screen recording. The README uses a separate live terminal recording (forge-tour.gif); never overwrite it.
 """
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "docs/assets/forge-tour.gif"
+OUTPUT = ROOT / "docs/assets/forge-screenshot-tour.gif"
 SOURCES = [
     ("guide/files.webp", "FILES + PREVIEW", "Navigate real project files", 4500),
     ("guide/git-diff.webp", "GIT DIFF", "Review staged and unstaged changes", 4500),
