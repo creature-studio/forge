@@ -24,6 +24,10 @@ PAGES = {
     "en/releases/index.html": {"lang": "en", "canonical": BASE + "en/releases/"},
 }
 
+for entry in json.loads((ROOT / "web/src/data/seo-pages.json").read_text()):
+    slug = "en/" + entry["slug"] + "/"
+    PAGES[slug + "index.html"] = {"lang": "en", "canonical": BASE + slug}
+
 
 class Page(HTMLParser):
     def __init__(self):

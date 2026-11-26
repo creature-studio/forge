@@ -1,0 +1,198 @@
+[
+  {
+    "slug": "compare/lazygit",
+    "title": "Forge TUI vs Lazygit: Files and Git in One Terminal",
+    "description": "Compare Forge TUI and Lazygit for staging, reviewing diffs, navigating project files and running commands.",
+    "image": "git-diff.webp",
+    "alt": "Side-by-side diff in Forge Git panel",
+    "lead": "Lazygit is a dedicated Git interface. Forge TUI combines Git with a file tree, code preview, search and an embedded terminal.",
+    "sections": [
+      [
+        "When to choose Lazygit",
+        "If your editor and file navigation already work well, Lazygit is a focused interface for Git operations. Its Git-specific workflows may be more familiar to experienced users."
+      ],
+      [
+        "When to choose Forge",
+        "If you repeatedly move from a changed file to related source files, Forge lets you browse the tree, search for references, inspect full-file context and stage changes in one workspace."
+      ],
+      [
+        "Try a review workflow",
+        "Launch forge in a repository. Open Git with F2, inspect a changed file, switch to Files with F1 to read related code, then return to Git to stage and commit. Open the terminal with F8 to run tests. Check F4 for effective shortcuts."
+      ],
+      [
+        "Limits",
+        "Forge is not a drop-in clone of Lazygit and does not promise parity for advanced Git operations. The Git CLI remains available."
+      ]
+    ],
+    "source": "https://github.com/jesseduffield/lazygit",
+    "sourceLabel": "Lazygit upstream"
+  },
+  {
+    "slug": "compare/yazi",
+    "title": "Forge TUI vs Yazi: Terminal File Manager and Git Workspace",
+    "description": "Compare Yazi and Forge TUI for terminal file browsing, previews, mouse interaction and Git review.",
+    "image": "files.webp",
+    "alt": "Forge file tree with syntax-highlighted code preview",
+    "lead": "Yazi focuses on terminal file management. Forge TUI focuses on navigating a source repository and reviewing its Git changes.",
+    "sections": [
+      [
+        "File-manager-first workflow",
+        "Yazi is a terminal file manager with its own customization ecosystem. Choose it when general file management rather than source review is the priority."
+      ],
+      [
+        "Repository-first workflow",
+        "Forge provides a project tree, code previews, content search, lightweight editing, Git status, diffs and staging. Mouse users can resize panes and use context menus."
+      ],
+      [
+        "Try both in a repository",
+        "Locate a modified source file in your preferred file manager. In Forge, open the same project with forge, locate the file, switch to Git and review the changes before committing."
+      ],
+      [
+        "Limits",
+        "Forge does not promise Yazi plugin compatibility or an equivalent file-management ecosystem. The tools can complement each other."
+      ]
+    ],
+    "source": "https://github.com/sxyazi/yazi",
+    "sourceLabel": "Yazi upstream"
+  },
+  {
+    "slug": "use-cases/codex",
+    "title": "A Terminal Workspace for Codex CLI | Forge TUI",
+    "description": "Run Codex CLI in a terminal while browsing files, searching code and reviewing Git diffs in Forge TUI.",
+    "image": "terminal.webp",
+    "alt": "Forge embedded terminal alongside project files",
+    "lead": "A coding agent can modify many files during a session. Forge provides a separate file and Git view alongside an embedded terminal for manual inspection.",
+    "sections": [
+      [
+        "Set up",
+        "Install Forge and Codex CLI separately. Start Forge in the target repository, open Terminal (F8 by default), and run codex if it is installed on PATH."
+      ],
+      [
+        "Review agent changes",
+        "Switch to Git (F2) to inspect modified paths and full-file diffs. Use Files or search to read surrounding code; Ctrl+R refreshes if needed. Stage only intended changes."
+      ],
+      [
+        "Validate independently",
+        "Use another shell tab for tests and lint commands. Inspect the output yourself before committing. Keep credentials and permissions under your control."
+      ],
+      [
+        "Compatibility boundary",
+        "Forge embeds a terminal, not a Codex API integration. Interactive behavior depends on the host terminal and Forge version. It does not manage Codex authentication or approvals."
+      ]
+    ],
+    "source": "https://github.com/openai/codex",
+    "sourceLabel": "Codex CLI upstream"
+  },
+  {
+    "slug": "use-cases/claude-code",
+    "title": "A Terminal Workspace for Claude Code | Forge TUI",
+    "description": "Use Claude Code in a Forge TUI shell alongside a project tree, code search and Git diffs for manual review.",
+    "image": "terminal.webp",
+    "alt": "Forge terminal tab alongside a project workspace",
+    "lead": "Claude Code runs in a terminal; Forge provides surrounding project navigation and Git review, keeping the agent session and your own inspection distinct.",
+    "sections": [
+      [
+        "Launch in a project",
+        "Install Claude Code separately and ensure claude is on PATH. Run forge in the repository, open Terminal with F8 and launch claude. Configure authentication and permissions in Claude Code."
+      ],
+      [
+        "Inspect changes",
+        "Open Git to see changed paths and inspect full-file diffs. Use code search to find affected references. Refresh with Ctrl+R if needed; review before staging."
+      ],
+      [
+        "Run independent checks",
+        "Use another shell tab for the project test suite. Keep the agent session available while comparing results and manually reviewing uncertain changes."
+      ],
+      [
+        "No special integration required",
+        "Forge does not supply Claude Code, intercept approvals, or guarantee compatibility with every terminal feature. It is a local file, Git and terminal workspace."
+      ]
+    ],
+    "source": "https://github.com/anthropics/claude-code",
+    "sourceLabel": "Claude Code upstream"
+  },
+  {
+    "slug": "features/git",
+    "title": "Terminal Git Client with Visual Diffs | Forge TUI",
+    "description": "Review Git status, side-by-side diffs, staging, commits, history, branches and stashes in a terminal Git client.",
+    "image": "git-stage.webp",
+    "alt": "Forge Git staging interface",
+    "lead": "Forge TUI connects Git review to project navigation. Work with changed files without switching to a separate desktop application.",
+    "sections": [
+      [
+        "Review before staging",
+        "Open Git with F2, select a changed file and inspect its diff with surrounding code. Navigate to Files to examine other source files and use search to locate references."
+      ],
+      [
+        "Stage and commit",
+        "Use the Git panel's contextual actions to stage or unstage selected changes. Review staged content, open the commit dialog, enter a message and commit only what you intend."
+      ],
+      [
+        "History and branch workflows",
+        "Browse commit history, blame, branches and stashes. Use the built-in shell for advanced Git commands or automation. Check F4 for effective shortcuts."
+      ],
+      [
+        "Who it is for",
+        "Useful for developers working over SSH, in WSL or locally who want visual Git review and file access in one TUI. Forge does not replace every Git command."
+      ]
+    ],
+    "source": "",
+    "sourceLabel": ""
+  },
+  {
+    "slug": "features/file-manager",
+    "title": "Terminal File Manager with Mouse Support | Forge TUI",
+    "description": "Browse source files, preview code and Markdown, search content, resize panels and navigate with mouse or keyboard.",
+    "image": "files.webp",
+    "alt": "Forge directory tree and code preview",
+    "lead": "Forge TUI is a repository-oriented terminal file manager for developers who want both keyboard navigation and pointer interaction.",
+    "sections": [
+      [
+        "Browse and preview",
+        "Run forge in a project directory. Expand folders in the Files panel, open source files in the preview and inspect Markdown or syntax-highlighted code without launching a separate editor."
+      ],
+      [
+        "Find files and content",
+        "Use Ctrl+P for file-name search or the Search panel for content matches. Open a match at its line to inspect the relevant code."
+      ],
+      [
+        "Mouse and keyboard",
+        "Click and double-click items, open context menus, drag panel dividers and scrollbars, and scroll content. Terminal mouse support and key bindings can vary; use F4 to view effective shortcuts."
+      ],
+      [
+        "Connect files with Git",
+        "Switch to Git to inspect changes to the same repository. Forge is designed for developer workflows rather than replacing every general-purpose file manager."
+      ]
+    ],
+    "source": "",
+    "sourceLabel": ""
+  },
+  {
+    "slug": "features/terminal",
+    "title": "Integrated Terminal for a Git and File Workspace | Forge TUI",
+    "description": "Run interactive CLI tools and shells in Forge TUI while keeping your project tree, code search and Git review nearby.",
+    "image": "terminal.webp",
+    "alt": "Forge terminal panel with shell tabs",
+    "lead": "Forge embeds interactive terminal sessions inside the same TUI as file navigation and Git review. It is useful for running project commands while inspecting code.",
+    "sections": [
+      [
+        "Open a shell",
+        "Launch forge in your working directory and open Terminal (F8 by default). Run the commands you normally use for development, such as git status, cargo test or npm test."
+      ],
+      [
+        "Separate tasks with tabs",
+        "Keep a shell for builds and another for interactive CLI work. Return to Files or Git when you need to inspect changes. Check the guide for the current tab and focus controls."
+      ],
+      [
+        "Pointer and keyboard behavior",
+        "Use context-aware shortcuts and mouse interaction. Programs inside a terminal can handle their own input; clipboard, selection and mouse behavior depend on the host and running program."
+      ],
+      [
+        "What it is not",
+        "Forge is not an agent service or an OS terminal emulator replacement. Install your shell and CLI tools separately; Forge provides a project-centered workspace around them."
+      ]
+    ],
+    "source": "",
+    "sourceLabel": ""
+  }
+]

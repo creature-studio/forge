@@ -5,12 +5,14 @@ interface Props {
   lang?: 'zh-CN' | 'en';
   path?: string;
   kind?: 'home' | 'article';
+  hasTranslation?: boolean;
 }
 import '../styles/main.css';
+import seoPages from '../data/seo-pages.json';
 import { FORGE_VERSION, FORGE_TAG } from '../utils/version';
 import { Terminal, Download, Menu, ArrowUpRight } from '@lucide/astro';
 
-const { title, description, lang = 'zh-CN', path = '/', kind = 'article' } = Astro.props;
+const { title, description, lang = 'zh-CN', path = '/', kind = 'article', hasTranslation = true } = Astro.props;
 const english = lang === 'en';
 const root = '/forge/';
 const canonical = `https://creature-studio.github.io${root}${path.replace(/^\//, '')}`;
@@ -18,9 +20,9 @@ const canonical = `https://creature-studio.github.io${root}${path.replace(/^\//,
 const structured = kind === 'home' ? {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
-  name: 'Forge',
+  name: 'Forge TUI',
   applicationCategory: 'DeveloperApplication',
-  operatingSystem: 'Linux, macOS, Windows (via WSL)',
+  operatingSystem: 'Linux, macOS, Windows',
   softwareVersion: FORGE_VERSION,
   description,
   url: canonical,
@@ -35,7 +37,7 @@ const structured = kind === 'home' ? {
   url: canonical,
   publisher: {
     '@type': 'Organization',
-    name: 'Forge',
+    name: 'Forge TUI',
     url: 'https://github.com/creature-studio/forge',
   },
 };
@@ -44,7 +46,7 @@ const zhRoot = root;
 const enRoot = `${root}en/`;
 const translationPath = english ? (path.replace(/^\/en\//, '/') || '/') : ('/en' + path);
 const translatedUrl = 'https://creature-studio.github.io/forge' + (translationPath.startsWith('/') ? translationPath : '/' + translationPath);
-const localTranslatedPath = translatedUrl.replace('https://creature-studio.github.io', '');
+const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://creature-studio.github.io', '') : zhRoot;
 ---
 <!doctype html>
 <html lang={lang}>
@@ -58,7 +60,7 @@ const localTranslatedPath = translatedUrl.replace('https://creature-studio.githu
     <link rel="icon" type="image/svg+xml" href={`${root}favicon.svg`} />
     <link rel="manifest" href={`${root}site.webmanifest`} />
     <link rel="alternate" hreflang={lang} href={canonical} />
-    <link rel="alternate" hreflang={english ? 'zh-CN' : 'en'} href={translatedUrl} />
+    {hasTranslation && <link rel="alternate" hreflang={english ? 'zh-CN' : 'en'} href={translatedUrl} />}
     {kind === 'home' && <link rel="alternate" hreflang="x-default" href="https://creature-studio.github.io/forge/en/" />}
     <meta property="og:type" content="website" />
     <meta property="og:title" content={title} />
@@ -73,11 +75,11 @@ const localTranslatedPath = translatedUrl.replace('https://creature-studio.githu
     <header class="site-header">
       <div class="shell header-inner">
         <div class="brand-cluster">
-          <a href={english ? enRoot : zhRoot} class="wordmark" aria-label="Forge home">
+          <a href={english ? enRoot : zhRoot} class="wordmark" aria-label="Forge TUI home">
             <span class="brand-mark" aria-hidden="true">
               <Terminal size={17} strokeWidth={2.3} />
             </span>
-            <span>Forge</span>
+            <span>Forge TUI</span>
           </a>
           <a href={`${english ? enRoot : zhRoot}releases/`} class="version-pill" aria-label={english ? `Release ${FORGE_TAG}` : `版本 ${FORGE_TAG}`}>
             {FORGE_TAG}
@@ -136,7 +138,7 @@ const localTranslatedPath = translatedUrl.replace('https://creature-studio.githu
     <footer class="site-footer">
       <div class="shell footer-inner">
         <div class="footer-brand">
-          <strong>Forge</strong>
+          <strong>Forge TUI</strong>
           <span class="footer-sep">·</span>
           <span>{english ? `Rust TUI Workspace · ${FORGE_TAG} · MIT License` : `原生 Rust 终端工作台 · ${FORGE_TAG} · MIT 开源协议`}</span>
         </div>
@@ -147,6 +149,10 @@ const localTranslatedPath = translatedUrl.replace('https://creature-studio.githu
           <a href="https://github.com/creature-studio/forge/issues">{english ? 'Issues' : '问题反馈'}</a>
         </div>
       </div>
+      <nav class="shell seo-links" aria-label={english ? 'Features and workflows' : '功能与使用场景（英文）'}>
+        <strong>{english ? 'Features, comparisons & workflows' : '功能与使用场景（英文）'}</strong>
+        {seoPages.map(page => <a href={root + 'en/' + page.slug + '/'} lang="en">{page.title}</a>)}
+      </nav>
     </footer>
 
     <script>
@@ -159,3 +165,9 @@ const localTranslatedPath = translatedUrl.replace('https://creature-studio.githu
     </script>
   </body>
 </html>
+
+<style>
+.seo-links { display:flex; flex-wrap:wrap; gap:.5rem 1.25rem; padding-block:1rem 1.5rem; font-size:.85rem; }
+.seo-links strong { flex-basis:100%; }
+.seo-links a { text-decoration:underline; text-underline-offset:3px; }
+</style>

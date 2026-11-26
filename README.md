@@ -1,10 +1,10 @@
-# Forge
+# Forge TUI
 
 **A modern terminal workspace for files, code, and Git.**
 
-Forge is a keyboard-first TUI file manager and Git workspace built in Rust. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
+Forge TUI is an open-source terminal file manager, Git client and integrated terminal built in Rust, with mouse and keyboard control on Linux, macOS and Windows. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
 
-[Website](https://creature-studio.github.io/forge/) · [Practical guide](https://creature-studio.github.io/forge/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://creature-studio.github.io/forge/) · [Issues](https://github.com/creature-studio/forge/issues)
+[Website](https://creature-studio.github.io/forge/en/) · [Practical guide](https://creature-studio.github.io/forge/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://creature-studio.github.io/forge/) · [Issues](https://github.com/creature-studio/forge/issues)
 
 ![Forge product tour showing real terminal screenshots of Files, Diff, themes, and Commit](docs/assets/forge-tour.gif)
 
@@ -16,7 +16,8 @@ When working over SSH, in tmux, or in a local terminal, switching between a file
 
 - **Files + Git, together.** Browse a tree with Git status, then switch to changes and staged files in the same app.
 - **Review before you commit.** Side-by-side diffs, full-file context, hunk/line staging, commit history and blame.
-- **Stay in the terminal.** Built-in syntax-highlighted previews, Markdown preview, search, lightweight editing, and keyboard shortcuts.
+- **Stay in the terminal.** Built-in syntax-highlighted previews, Markdown preview, search, lightweight editing, and embedded terminal tabs for CLI tools.
+- **Mouse and keyboard.** Click, drag splitters and scrollbars, open context menus, and use configurable shortcuts.
 - **Manage the complete Git loop.** Stage/unstage, commit, push/pull, branches, stash, and worktrees.
 - **Make it yours.** Themes, color-depth options, customizable shortcuts, and Unicode/ASCII/Nerd Font icon modes.
 
