@@ -8,7 +8,7 @@ Forge TUI is an open-source terminal file manager, Git client and integrated ter
 
 ![Forge TUI live terminal demo: browse files, fuzzy search, review Git diffs, stage changes, and run tests in the integrated terminal](docs/assets/forge-tour.gif)
 
-*Tour assembled from screenshots of the real Forge TUI; not a simulated terminal session. [View full-resolution screenshots](https://creature-studio.github.io/forge/#features).*
+*29-second recording of a real Forge terminal session: browse, search, review a diff, stage a change, and run tests. [View full-resolution screenshots](https://creature-studio.github.io/forge/en/#features).*
 
 ## Why Forge?
 
