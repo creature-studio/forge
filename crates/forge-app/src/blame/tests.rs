@@ -81,7 +81,7 @@ fn measure(app: &mut App, width: u16) {
     else {
         panic!("expected text");
     };
-    app.preview_state.text_rows.ensure(
+    app.preview_state.presentation.text_rows.ensure(
         &forge_theme::Theme::modern_ide(),
         lines,
         *truncated,
@@ -162,10 +162,10 @@ async fn cache_invalidates_when_index_removes_an_unchanged_file() {
 async fn markdown_code_cjk_continuations_clicks_and_scrolling_use_source_lines() {
     let (dir, path) = fixture();
     let mut app = app_with_blame(dir.path(), &path).await;
-    let second = app.preview_state.text_rows.source_to_row(2);
+    let second = app.preview_state.presentation.text_rows.source_to_row(2);
     assert!(second > 2, "fixture must wrap CJK");
     for row in 0..second {
-        app.preview_state.preview_scroll = row;
+        app.preview_state.presentation.preview_scroll = row;
         assert_eq!(app.current_blame().unwrap().1, 1);
         app.tick_blame();
         assert!(
@@ -173,10 +173,10 @@ async fn markdown_code_cjk_continuations_clicks_and_scrolling_use_source_lines()
             "cursor moves must reuse the cache"
         );
     }
-    app.preview_state.preview_scroll = 0;
+    app.preview_state.presentation.preview_scroll = 0;
     app.blame.cursor = Some((path.clone(), second, 0));
     assert_eq!(app.current_blame().unwrap().1, 2);
-    app.preview_state.preview_scroll = second + 1;
+    app.preview_state.presentation.preview_scroll = second + 1;
     assert_eq!(
         app.current_blame().unwrap().1,
         3,
@@ -188,7 +188,7 @@ async fn markdown_code_cjk_continuations_clicks_and_scrolling_use_source_lines()
         "formatted Markdown must never guess source offsets"
     );
     app.preview_state.markdown_code = true;
-    app.preview_state.preview_scroll = 999;
+    app.preview_state.presentation.preview_scroll = 999;
     assert!(
         app.current_blame().is_none(),
         "non-source rows have no blame"
@@ -199,21 +199,21 @@ async fn markdown_code_cjk_continuations_clicks_and_scrolling_use_source_lines()
 async fn popup_is_modal_and_escape_keeps_file_scroll_focus_and_line() {
     let (dir, path) = fixture();
     let mut app = app_with_blame(dir.path(), &path).await;
-    app.preview_state.preview_scroll = 2;
+    app.preview_state.presentation.preview_scroll = 2;
     app.handle_key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE));
     assert!(app.blame.popup.is_some());
     let source = app.current_blame().unwrap().1;
     for key in [KeyCode::Char('d'), KeyCode::Char('h'), KeyCode::F(6)] {
         app.handle_key(KeyEvent::new(key, KeyModifiers::NONE));
         assert_eq!(app.preview_state.preview.as_ref().unwrap().path, path);
-        assert_eq!(app.preview_state.preview_scroll, 2);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     }
     app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
     assert!(!app.keys.open, "popup owns shortcut input");
     app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(app.blame.popup.is_none());
     assert_eq!(app.preview_state.preview.as_ref().unwrap().path, path);
-    assert_eq!(app.preview_state.preview_scroll, 2);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     assert_eq!(app.current_blame().unwrap().1, source);
     assert_eq!(app.session.focus, PaneFocus::Preview);
     assert!(!app.session.should_quit);
@@ -250,7 +250,7 @@ async fn popup_renders_and_scrolls_at_narrow_widths_without_losing_source_state(
             );
         }
         assert_eq!(app.preview_state.preview.as_ref().unwrap().path, path);
-        assert_eq!(app.preview_state.preview_scroll, 0);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     }
 }
 
@@ -314,7 +314,7 @@ async fn blame_never_overwrites_a_partially_loaded_source_preview() {
     );
     app.preview_state.preview_loading = false;
     app.preview_state.markdown_code = true;
-    app.session.layout.preview_inner.height = 24;
+    app.layout_state.geometry.preview_inner.height = 24;
     let before_offset = match &app.preview_state.preview.as_ref().unwrap().content {
         PreviewContent::Text {
             lines,
@@ -380,7 +380,7 @@ async fn blame_never_overwrites_a_partially_loaded_source_preview() {
 async fn background_edit_refresh_installs_matching_preview_and_attribution() {
     let (dir, path) = fixture();
     let mut app = app_with_blame(dir.path(), &path).await;
-    app.preview_state.preview_scroll = 2;
+    app.preview_state.presentation.preview_scroll = 2;
     let content = std::fs::read_to_string(&path)
         .unwrap()
         .replace("second", "changed");
@@ -396,7 +396,7 @@ async fn background_edit_refresh_installs_matching_preview_and_attribution() {
     .await
     .unwrap();
     measure(&mut app, 24);
-    assert_eq!(app.preview_state.preview_scroll, 2);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     assert!(app.blame.active.as_ref().unwrap().lines.as_ref().unwrap()[1].uncommitted());
     let PreviewContent::Text { lines, .. } = &app.preview_state.preview.as_ref().unwrap().content
     else {
@@ -411,7 +411,7 @@ async fn clicked_blame_line_survives_focus_ruler_redraw() {
     let (dir, path) = fixture();
     let mut app = app_with_blame(dir.path(), &path).await;
     app.config.show_overview_ruler = true;
-    let source_row = app.preview_state.text_rows.source_to_row(2);
+    let source_row = app.preview_state.presentation.text_rows.source_to_row(2);
     app.blame.cursor = Some((path, source_row, 0));
     // A narrow source-row cache combined with a wider Preview pane and
     // the three-column ruler used to reset the click every frame.

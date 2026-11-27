@@ -48,7 +48,7 @@ impl FooterContext {
         }
         match (
             model.in_git_sidebar(),
-            !model.session.sidebar_visible || model.session.focus == PaneFocus::Preview,
+            !model.layout_state.sidebar_visible() || model.session.focus == PaneFocus::Preview,
         ) {
             (false, false) => Self::FilesList,
             (false, true) => Self::FilesPreview,
@@ -107,9 +107,14 @@ impl FooterModel {
                 "Find in file · Enter next · Shift+Enter previous · Esc close".into()
             }
             FooterContext::Terminal => {
-                let count = model.terminal_tabs.len() + 1;
-                let current = model.terminal.as_ref().map(|t| t.id);
-                let mut ids = model.terminal_tabs.iter().map(|t| t.id).collect::<Vec<_>>();
+                let count = model.terminals.inactive().len() + 1;
+                let current = model.terminals.active.as_ref().map(|t| t.id);
+                let mut ids = model
+                    .terminals
+                    .inactive()
+                    .iter()
+                    .map(|t| t.id)
+                    .collect::<Vec<_>>();
                 if let Some(id) = current {
                     ids.push(id);
                 }
@@ -132,7 +137,7 @@ impl FooterModel {
                 } else {
                     format!(
                         "File preview · line {}",
-                        model.preview_state.preview_scroll + 1
+                        model.preview_state.presentation.preview_scroll + 1
                     )
                 }
             }
@@ -163,7 +168,10 @@ impl FooterModel {
         let description = notice.map(str::to_owned).unwrap_or(description);
         let position = match context {
             FooterContext::FilesPreview | FooterContext::GitPreview => {
-                format!("Preview  line {}", model.preview_state.preview_scroll + 1)
+                format!(
+                    "Preview  line {}",
+                    model.preview_state.presentation.preview_scroll + 1
+                )
             }
             FooterContext::GitList => format!(
                 "Git  {} / {}",
@@ -305,6 +313,12 @@ fn focused_pane_actions(model: &App, context: FooterContext) -> Vec<interaction:
             }
             if model.selected_entry().is_some() {
                 actions.push(shortcut("v", "Select"));
+                actions.push(shortcut("Ctrl+C", "Copy"));
+                actions.push(shortcut("Ctrl+X", "Cut"));
+                actions.push(shortcut("Del", "Trash"));
+            }
+            if model.file_paste_available() {
+                actions.push(shortcut("Ctrl+V", "Paste"));
             }
             if let Some(label) = model.workspace_escape().label() {
                 actions.push(shortcut("Esc", label));
@@ -331,8 +345,8 @@ fn focused_pane_actions(model: &App, context: FooterContext) -> Vec<interaction:
                     Some(ScmRow::HistorySection { expanded: true, .. }) => Some("Hide history"),
                     Some(ScmRow::HistorySection { .. }) => Some("Show history"),
                     Some(ScmRow::Commit { index }) => Some(
-                        if model.history.commits.get(*index).is_some_and(|commit| {
-                            model.history.expanded_commits.contains(&commit.id)
+                        if model.history.commits().get(*index).is_some_and(|commit| {
+                            model.history.expanded_commits().contains(&commit.id)
                         }) {
                             "Collapse commit"
                         } else {
@@ -390,7 +404,7 @@ fn focused_pane_actions(model: &App, context: FooterContext) -> Vec<interaction:
             {
                 actions.push(shortcut("n/Alt+n", "Next/prev hunk"));
             }
-            if model.session.sidebar_visible {
+            if model.layout_state.sidebar_visible() {
                 actions.push(shortcut("Tab", "Focus list"));
             }
             if diff_ready
@@ -414,7 +428,7 @@ fn focused_pane_actions(model: &App, context: FooterContext) -> Vec<interaction:
             // Secondary preview actions must never crowd out the actionable
             // hunk navigation, explicit Back and sidebar restore hints.
             if link_count == 0 {
-                if model.preview_state.selection.active() {
+                if model.preview_state.presentation.selection.active() {
                     actions.push(shortcut("Ctrl+C", "Copy selection"));
                 }
                 if model.preview_state.preview.is_some() || model.preview_state.file_diff.is_some()
@@ -434,7 +448,7 @@ fn focused_pane_actions(model: &App, context: FooterContext) -> Vec<interaction:
         }
         _ => {}
     }
-    if !model.session.sidebar_visible {
+    if !model.layout_state.sidebar_visible() {
         let index = actions
             .iter()
             .position(|candidate| candidate.key == "j/k")
@@ -517,7 +531,8 @@ fn footer_shortcuts_for(
     if context == FooterContext::Terminal {
         // Show context-sensitive terminal shortcuts in the normal footer,
         // rather than an unrelated Files/Git command bar.
-        let tab_count = model.terminal_tabs.len() + usize::from(model.terminal.is_some());
+        let tab_count =
+            model.terminals.inactive().len() + usize::from(model.terminals.active.is_some());
         let mut candidates = vec![shortcut("Ctrl+Shift+Tab", "Focus Forge")];
         if tab_count > 1 {
             candidates.push(shortcut("Alt+1-8", "Tab"));
@@ -625,9 +640,9 @@ fn footer_shortcuts_for(
     // A collapsed sidebar already has Ctrl+B as its restore action. Do not
     // reserve a second back hint at the expense of Diff navigation or Ctrl+B.
     let reserve_escape = !context.is_regular_pane()
-        || model.session.sidebar_visible
+        || model.layout_state.sidebar_visible()
         || model.inline_peek_open()
-        || model.preview_state.selection.active();
+        || model.preview_state.presentation.selection.active();
     let display_width = |key: &str| {
         if context.is_regular_pane() {
             model.keys.label(key).len()
@@ -651,7 +666,7 @@ fn footer_shortcuts_for(
         // Back hint when a terminal is too narrow to display both.
         let primary_git_action = matches!(shortcut.key, "s" | "u")
             && !model.inline_peek_open()
-            && !model.preview_state.selection.active();
+            && !model.preview_state.presentation.selection.active();
         let reserve = if !escape_added && shortcut.key != "Esc" && !primary_git_action {
             escape_cost
         } else {
@@ -773,7 +788,7 @@ mod tests {
             "Files list is not a command catalog"
         );
         app.session.focus = PaneFocus::Preview;
-        app.session.sidebar_visible = false;
+        app.layout_state.set_sidebar_visible(false);
         let preview = footer_shortcuts_for(&app, FooterContext::FilesPreview, 120);
         assert!(preview.iter().any(|s| s.key == "Ctrl+B"));
         assert!(
@@ -787,7 +802,7 @@ mod tests {
         assert!(!preview.iter().any(|s| s.key == "n/Alt+n"), "not a Diff");
         assert!(preview.iter().all(|s| !global.contains(&s.key)));
         app.session.activity = ActivityTab::Git;
-        app.session.sidebar_visible = true;
+        app.layout_state.set_sidebar_visible(true);
         app.session.focus = PaneFocus::List;
         let git = footer_shortcuts_for(&app, FooterContext::GitList, 120);
         assert!(git.iter().all(|s| !global.contains(&s.key)));
@@ -884,7 +899,7 @@ mod tests {
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.session.activity = ActivityTab::Git;
         app.session.focus = PaneFocus::Preview;
-        app.session.sidebar_visible = false;
+        app.layout_state.set_sidebar_visible(false);
         app.preview_state.preview_mode = PreviewMode::Diff;
         app.preview_state.preview_loading = false;
         app.preview_state.hunk_index = Some(0);
@@ -959,20 +974,20 @@ mod tests {
         assert_eq!(app.preview_state.hunk_index, Some(0));
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(
-            !app.session.sidebar_visible,
+            !app.layout_state.sidebar_visible(),
             "Esc must not alter sidebar visibility"
         );
         assert_eq!(app.session.focus, PaneFocus::Preview);
         app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert!(
-            app.session.sidebar_visible,
+            app.layout_state.sidebar_visible(),
             "Ctrl+B explicitly restores the sidebar"
         );
         assert_eq!(app.session.focus, PaneFocus::List);
 
         // In the list context there is no false promise of hunk navigation.
         app.session.focus = PaneFocus::List;
-        app.session.sidebar_visible = true;
+        app.layout_state.set_sidebar_visible(true);
         let list_keys = footer_shortcuts_for(&app, FooterContext::GitList, 78);
         assert!(!list_keys.iter().any(|s| s.key == "n/Alt+n"));
         // Files can also open a Diff with `d`; Alt+n works there too.
@@ -988,13 +1003,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        app.session.layout.list = Rect::new(0, 2, 26, 20);
-        app.session.layout.list_inner = Rect::new(1, 3, 24, 18);
-        app.session.layout.preview = Rect::new(27, 2, 70, 20);
-        app.session.layout.preview_inner = Rect::new(29, 3, 66, 18);
-        app.session.layout.files_tab = Rect::new(1, 1, 12, 1);
-        app.session.layout.git_tab = Rect::new(13, 1, 12, 1);
-        let term = app.terminal.as_mut().unwrap();
+        app.layout_state.geometry.list = Rect::new(0, 2, 26, 20);
+        app.layout_state.geometry.list_inner = Rect::new(1, 3, 24, 18);
+        app.layout_state.geometry.preview = Rect::new(27, 2, 70, 20);
+        app.layout_state.geometry.preview_inner = Rect::new(29, 3, 66, 18);
+        app.layout_state.geometry.files_tab = Rect::new(1, 1, 12, 1);
+        app.layout_state.geometry.git_tab = Rect::new(13, 1, 12, 1);
+        let term = app.terminals.active.as_mut().unwrap();
         term.area = Rect::new(0, 23, 96, 8);
         app.terminal_tab_bar = Rect::new(0, 22, 96, 1);
         let click = |app: &mut App, x, y| {
@@ -1014,14 +1029,14 @@ mod tests {
         assert_eq!(FooterContext::resolve(&app), FooterContext::Terminal);
         click(&mut app, 4, 5); // Files sidebar
         assert_eq!(FooterContext::resolve(&app), FooterContext::FilesList);
-        assert!(!app.terminal.as_ref().unwrap().focused);
-        assert!(app.terminal.as_ref().unwrap().visible);
+        assert!(!app.terminals.active.as_ref().unwrap().is_focused());
+        assert!(app.terminals.active.as_ref().unwrap().is_visible());
         click(&mut app, 35, 6); // Preview pane
         assert_eq!(FooterContext::resolve(&app), FooterContext::FilesPreview);
         click(&mut app, 5, 25); // Terminal body
         assert_eq!(FooterContext::resolve(&app), FooterContext::Terminal);
         click(&mut app, 5, 1); // active Files collapses Sidebar
-        assert!(!app.terminal.as_ref().unwrap().focused);
+        assert!(!app.terminals.active.as_ref().unwrap().is_focused());
         assert_eq!(FooterContext::resolve(&app), FooterContext::FilesPreview);
         click(&mut app, 5, 1); // second click restores Files Sidebar
         assert_eq!(FooterContext::resolve(&app), FooterContext::FilesList);
@@ -1031,10 +1046,10 @@ mod tests {
         // No foreground PTY may swallow clicks while an overlay is active.
         app.session.help_open = true;
         app.session.help_area = Rect::new(0, 0, 100, 35);
-        app.terminal.as_mut().unwrap().focused = false;
+        app.terminals.active.as_mut().unwrap().set_focused(false);
         click(&mut app, 5, 25);
         assert_eq!(FooterContext::resolve(&app), FooterContext::Help);
-        assert!(!app.terminal.as_ref().unwrap().focused);
+        assert!(!app.terminals.active.as_ref().unwrap().is_focused());
     }
 
     #[tokio::test]
@@ -1123,13 +1138,13 @@ mod tests {
             forge_model::GitStatus::Modified,
             DiffSide::Unstaged,
         );
-        app.scm.git_status = Some(initial);
+        app.scm.set_status(Some(initial));
         app.scm.scm_selected = app
             .scm_rows()
             .iter()
             .position(|row| matches!(row, ScmRow::Change { .. }))
             .expect("fixture has one change");
-        app.scm.pending_transfer = None; // Hunk writes do not use whole-file transfer.
+        app.scm.cancel_transfer(); // Hunk writes do not use whole-file transfer.
         let mut after = StatusSnapshot::new(dir.path().to_owned());
         after.push_change(
             "moved.rs",

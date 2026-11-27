@@ -113,7 +113,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palett
         Some(ScmRow::CommitFolder { commit, .. }) => commit,
         _ => return false,
     };
-    let Some(commit) = model.history.commits.get(index) else {
+    let Some(commit) = model.history.commits().get(index) else {
         return false;
     };
     if !model.in_git_sidebar() || model.preview_state.preview_loading {
@@ -241,18 +241,19 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palett
     if model.session.focus == PaneFocus::Preview {
         if let Some(target) = model.preview_state.commit_link_focus {
             if let Some((line, _, _)) = links.iter().find(|(_, index, _)| *index == target) {
-                let scroll = model.preview_state.preview_scroll;
+                let scroll = model.preview_state.presentation.preview_scroll;
                 if *line < scroll {
-                    model.preview_state.preview_scroll = *line;
+                    model.preview_state.presentation.preview_scroll = *line;
                 } else if *line >= scroll.saturating_add(area.height as usize) {
-                    model.preview_state.preview_scroll =
+                    model.preview_state.presentation.preview_scroll =
                         line.saturating_sub(area.height.saturating_sub(1) as usize);
                 }
             }
         }
     }
-    model.preview_state.preview_scroll = model.preview_state.preview_scroll.min(maximum);
-    let scroll = model.preview_state.preview_scroll;
+    model.preview_state.presentation.preview_scroll =
+        model.preview_state.presentation.preview_scroll.min(maximum);
+    let scroll = model.preview_state.presentation.preview_scroll;
     frame.render_widget(
         Paragraph::new(rows)
             .scroll((scroll.min(u16::MAX as usize) as u16, 0))
@@ -297,7 +298,7 @@ pub(crate) fn draw(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palett
         )
         .draw(frame, rect, &mut model.commit_file_links);
     }
-    model.session.layout.preview_inner = area;
+    model.layout_state.geometry.preview_inner = area;
     true
 }
 
@@ -309,7 +310,7 @@ pub(crate) fn file_link_count(model: &App) -> usize {
         Some(ScmRow::CommitFolder { commit, .. }) => commit,
         _ => return 0,
     };
-    let Some(oid) = model.history.commits.get(commit_index).map(|c| &c.id) else {
+    let Some(oid) = model.history.commits().get(commit_index).map(|c| &c.id) else {
         return 0;
     };
     let Some(preview) = model.preview_state.preview.as_ref() else {
@@ -341,7 +342,7 @@ pub(crate) fn file_link_target(model: &App, index: usize) -> Option<(String, Str
         ScmRow::CommitFolder { commit, .. } => commit,
         _ => return None,
     };
-    let oid = &model.history.commits.get(commit_index)?.id;
+    let oid = &model.history.commits().get(commit_index)?.id;
     let preview = model.preview_state.preview.as_ref()?;
     if preview.path.to_string_lossy() != oid.as_str() {
         return None;

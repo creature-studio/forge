@@ -52,11 +52,14 @@ pub(super) fn draw_inline_blame(
         .blame
         .cursor
         .as_ref()
-        .filter(|(_, _, scroll)| *scroll == model.preview_state.preview_scroll)
-        .map_or(model.preview_state.preview_scroll, |(_, row, _)| *row);
+        .filter(|(_, _, scroll)| *scroll == model.preview_state.presentation.preview_scroll)
+        .map_or(
+            model.preview_state.presentation.preview_scroll,
+            |(_, row, _)| *row,
+        );
     let y = inner
         .y
-        .saturating_add(row.saturating_sub(model.preview_state.preview_scroll) as u16);
+        .saturating_add(row.saturating_sub(model.preview_state.presentation.preview_scroll) as u16);
     let mut end = inner.x;
     if y < inner.bottom() {
         for x in inner.x..inner.right() {
@@ -141,8 +144,14 @@ pub(crate) fn draw_blame_popup(frame: &mut Frame<'_>, area: Rect, model: &mut Ap
 }
 
 pub(super) fn draw_marks(frame: &mut Frame<'_>, model: &App, p: Palette) {
-    let area = model.session.layout.list_inner;
-    if area.width == 0 {
+    let area = model.layout_state.geometry.list_inner;
+    if area.width == 0
+        || if model.in_git_sidebar() {
+            model.tools.marks.git.is_empty()
+        } else {
+            model.tools.marks.files.is_empty()
+        }
+    {
         return;
     }
     let rows: Vec<MarkRow> = if model.in_git_sidebar() {

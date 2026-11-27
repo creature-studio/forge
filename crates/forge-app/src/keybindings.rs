@@ -924,7 +924,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("one.txt"), "one").unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
-        app.files.children.insert(
+        app.files.install_listing(
             dir.path().to_owned(),
             vec![Entry {
                 id: forge_model::PathId(42),

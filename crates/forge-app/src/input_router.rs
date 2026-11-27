@@ -73,49 +73,210 @@ pub(super) fn workspace_modifier_allowed(key: KeyEvent) -> bool {
     }
 }
 
-impl App {
-    pub(super) fn key_owner(&self, key: KeyEvent) -> KeyOwner {
-        if self.session.commit_open {
-            return KeyOwner::Commit;
+/// Existing gesture owners are the source of truth. No second capture
+/// flag is maintained in App or in the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PointerCapture {
+    Splitter,
+    Terminal,
+    Scrollbar,
+    PreviewSelection,
+    Activity,
+}
+
+impl PointerCapture {
+    pub(super) fn resolve(
+        splitter: bool,
+        terminal: bool,
+        scrollbar: bool,
+        preview: bool,
+        activity: bool,
+    ) -> Option<Self> {
+        [
+            (splitter, Self::Splitter),
+            (terminal, Self::Terminal),
+            (scrollbar, Self::Scrollbar),
+            (preview, Self::PreviewSelection),
+            (activity, Self::Activity),
+        ]
+        .into_iter()
+        .find_map(|(active, owner)| active.then_some(owner))
+    }
+}
+
+/// Immutable routing inputs. Resolving a key never mutates a domain.
+#[derive(Default)]
+struct InputContext {
+    modal: Option<KeyOwner>,
+    find_open: bool,
+    find_active: bool,
+    terminal_focused: bool,
+}
+
+impl InputContext {
+    fn typing_owner(&self) -> KeyOwner {
+        if let Some(modal) = self.modal {
+            return modal;
         }
-        if self.keys.open {
-            return KeyOwner::Shortcuts;
-        }
-        if self.session.help_open {
-            return KeyOwner::Help;
-        }
-        if self.blame.popup.is_some() {
-            return KeyOwner::Blame;
-        }
-        if self.editing.active() {
-            return KeyOwner::Editor;
-        }
-        if self.tools.panel.is_some() {
-            return KeyOwner::Tools;
-        }
-        if self.session.context_menu.is_some() {
-            return KeyOwner::Menu;
-        }
-        // The active find input owns keys even over a stale focused PTY.
-        if self.preview_state.find.open
-            && self.preview_state.find.input_active
-            && !matches!(key.code, KeyCode::F(1) | KeyCode::F(2))
-        {
+        if self.find_open && self.find_active {
             return KeyOwner::Find;
         }
-        // A *passive* find bar must not steal Esc from a focused terminal;
-        // Esc belongs to the child application running inside the PTY.
-        if self
-            .terminal
-            .as_ref()
-            .is_some_and(|t| t.visible && t.focused)
-        {
+        if self.terminal_focused {
             return KeyOwner::Terminal;
         }
-        if self.preview_state.find.open && matches!(key.code, KeyCode::Esc | KeyCode::F(3)) {
+        KeyOwner::Workspace
+    }
+
+    fn owner(&self, key: KeyEvent) -> KeyOwner {
+        let owner = self.typing_owner();
+        if self.modal.is_some() {
+            return owner;
+        }
+        if owner == KeyOwner::Find && matches!(key.code, KeyCode::F(1) | KeyCode::F(2)) {
+            return if self.terminal_focused {
+                KeyOwner::Terminal
+            } else {
+                KeyOwner::Workspace
+            };
+        }
+        if owner == KeyOwner::Workspace
+            && self.find_open
+            && matches!(key.code, KeyCode::Esc | KeyCode::F(3))
+        {
             return KeyOwner::Find;
         }
-        KeyOwner::Workspace
+        owner
+    }
+}
+
+impl App {
+    pub(super) fn modal_owner(&self) -> Option<KeyOwner> {
+        [
+            (self.session.commit_open, KeyOwner::Commit),
+            (self.keys.open, KeyOwner::Shortcuts),
+            (self.session.help_open, KeyOwner::Help),
+            (self.blame.popup.is_some(), KeyOwner::Blame),
+            (self.editing.active(), KeyOwner::Editor),
+            (self.tools.panel.is_some(), KeyOwner::Tools),
+            (self.session.context_menu.is_some(), KeyOwner::Menu),
+        ]
+        .into_iter()
+        .find_map(|(active, owner)| active.then_some(owner))
+    }
+
+    pub(super) fn modal_open(&self) -> bool {
+        self.modal_owner().is_some()
+    }
+
+    fn input_context(&self) -> InputContext {
+        InputContext {
+            modal: self.modal_owner(),
+            find_open: self.preview_state.find.open,
+            find_active: self.preview_state.find.input_active,
+            terminal_focused: self
+                .terminals
+                .active
+                .as_ref()
+                .is_some_and(|t| t.is_visible() && t.is_focused()),
+        }
+    }
+
+    pub(super) fn key_owner(&self, key: KeyEvent) -> KeyOwner {
+        self.input_context().owner(key)
+    }
+
+    /// Text/paste/cursor use the same owner without inventing a key event.
+    pub(super) fn typing_owner(&self) -> KeyOwner {
+        self.input_context().typing_owner()
+    }
+
+    /// Exclusive base input handoff. Modal ownership is an independent
+    /// temporary overlay and does not destroy the saved workspace focus.
+    fn transfer_input(&mut self, owner: KeyOwner) {
+        match owner {
+            KeyOwner::Find if self.preview_state.find.open => {
+                self.preview_state.find.input_active = true;
+                if let Some(term) = &mut self.terminals.active {
+                    term.set_focused(false);
+                }
+                self.session.focus = PaneFocus::Preview;
+            }
+            KeyOwner::Terminal => {
+                if let Some(term) = &mut self.terminals.active {
+                    term.set_focused(true);
+                    if term.is_focused() {
+                        self.preview_state.find.input_active = false;
+                    }
+                }
+            }
+            KeyOwner::Workspace => {
+                self.preview_state.find.input_active = false;
+                if let Some(term) = &mut self.terminals.active {
+                    term.set_focused(false);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    pub(super) fn focus_find_input(&mut self) {
+        self.transfer_input(KeyOwner::Find);
+    }
+
+    pub(super) fn focus_terminal_input(&mut self) {
+        self.transfer_input(KeyOwner::Terminal);
+    }
+
+    pub(super) fn focus_workspace_input(&mut self) {
+        self.transfer_input(KeyOwner::Workspace);
+    }
+
+    pub(super) fn release_terminal_input(&mut self) {
+        if let Some(term) = &mut self.terminals.active {
+            term.set_focused(false);
+        }
+    }
+
+    pub(super) fn blur_find_input(&mut self) {
+        self.preview_state.find.input_active = false;
+    }
+
+    /// Session activation is owned by TerminalSessions; reconcile its
+    /// successful activation through the same exclusive handoff.
+    pub(super) fn reconcile_terminal_focus(&mut self) {
+        if self
+            .terminals
+            .active
+            .as_ref()
+            .is_some_and(|t| t.is_visible() && t.is_focused())
+        {
+            self.focus_terminal_input();
+        }
+    }
+
+    pub(super) fn handle_paste(&mut self, text: &str) -> bool {
+        match self.typing_owner() {
+            KeyOwner::Shortcuts => self.keys.paste(text),
+            KeyOwner::Editor => self.handle_editor_paste(text),
+            KeyOwner::Tools => {
+                if self.tools.panel.as_ref().is_some_and(|p| p.is_input()) {
+                    for ch in text.chars().filter(|c| !c.is_control()) {
+                        self.handle_tools_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+                    }
+                }
+            }
+            KeyOwner::Find => self.handle_file_find_paste(text),
+            KeyOwner::Terminal => {
+                if let Some(term) = &mut self.terminals.active {
+                    if let Err(error) = term.paste(text) {
+                        term.set_focused(false);
+                        self.session.status = format!("Terminal paste failed: {error}");
+                    }
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn has_focused_marks(&self) -> bool {
@@ -138,7 +299,8 @@ impl App {
             && self.preview_state.commit_link_focus.is_some()
         {
             WorkspaceEscape::ClearCommitLinkFocus
-        } else if self.session.focus == PaneFocus::Preview && self.preview_state.selection.active()
+        } else if self.session.focus == PaneFocus::Preview
+            && self.preview_state.presentation.selection.active()
         {
             WorkspaceEscape::ClearPreviewSelection
         } else if self.has_focused_marks() {
@@ -166,7 +328,7 @@ impl App {
                 self.preview_state.commit_link_focus = None;
             }
             WorkspaceEscape::ClearPreviewSelection => {
-                self.preview_state.selection.clear();
+                self.preview_state.presentation.selection.clear();
                 self.session.status = "Preview selection cleared".into();
             }
             WorkspaceEscape::ClearMarks => {
@@ -188,5 +350,64 @@ impl App {
             }
             WorkspaceEscape::None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typing_owner_matches_ordinary_keys_for_every_focus_combination() {
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        for modal in [
+            None,
+            Some(KeyOwner::Editor),
+            Some(KeyOwner::Menu),
+            Some(KeyOwner::Commit),
+        ] {
+            for find_open in [false, true] {
+                for find_active in [false, true] {
+                    for terminal_focused in [false, true] {
+                        let ctx = InputContext {
+                            modal,
+                            find_open,
+                            find_active,
+                            terminal_focused,
+                        };
+                        let expected = modal.unwrap_or(if find_open && find_active {
+                            KeyOwner::Find
+                        } else if terminal_focused {
+                            KeyOwner::Terminal
+                        } else {
+                            KeyOwner::Workspace
+                        });
+                        assert_eq!(ctx.typing_owner(), expected);
+                        assert_eq!(ctx.owner(key), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn input_owner_is_independent_of_unfocused_domain_state() {
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let mut context = InputContext {
+            find_open: true,
+            terminal_focused: true,
+            ..Default::default()
+        };
+        assert_eq!(context.owner(esc), KeyOwner::Terminal);
+        context.find_active = true;
+        assert_eq!(context.owner(esc), KeyOwner::Find);
+        context.modal = Some(KeyOwner::Editor);
+        assert_eq!(context.owner(esc), KeyOwner::Editor);
+        context.terminal_focused = false;
+        assert_eq!(context.owner(esc), KeyOwner::Editor);
+        context.modal = None;
+        assert_eq!(context.owner(esc), KeyOwner::Find);
+        context.find_open = false;
+        assert_eq!(context.owner(esc), KeyOwner::Workspace);
     }
 }

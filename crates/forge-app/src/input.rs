@@ -2,28 +2,16 @@
 //! Business state is still owned by App; moving these methods changes no behavior.
 use super::*;
 use crate::embedded_terminal::MouseRouting;
+use crate::mouse_hit::{
+    terminal_at, FindHit, HeaderHit, HitGeometry, ListHitGeometry, PaneHit, RowHit, TerminalHit,
+};
 use crate::splitter::{Axis as SplitterAxis, Gesture as SplitterGesture};
 
 impl App {
-    pub(super) fn set_sidebar_visible(&mut self, visible: bool) {
-        // Reopening a hidden Git sidebar is a fresh entry, even if the
-        // activity tab has not changed (e.g. Ctrl+B or clicking Git again).
-        let refresh_git = visible && !self.session.sidebar_visible && self.in_git_sidebar();
-        self.session.sidebar_visible = visible;
-        self.session.focus = if visible {
-            PaneFocus::List
-        } else {
-            PaneFocus::Preview
-        };
-        if refresh_git {
-            self.request_status();
-        }
-    }
-
     fn activity_action(&mut self, action: ActivityAction) {
         match action {
             ActivityAction::Files => {
-                if !self.in_git_sidebar() && self.session.sidebar_visible {
+                if !self.in_git_sidebar() && self.layout_state.sidebar_visible() {
                     self.set_sidebar_visible(false);
                 } else {
                     if self.in_git_sidebar() {
@@ -33,7 +21,7 @@ impl App {
                 }
             }
             ActivityAction::Git => {
-                if self.in_git_sidebar() && self.session.sidebar_visible {
+                if self.in_git_sidebar() && self.layout_state.sidebar_visible() {
                     self.set_sidebar_visible(false);
                 } else {
                     if !self.in_git_sidebar() {
@@ -43,37 +31,36 @@ impl App {
                 }
             }
             ActivityAction::Search => self.open_tools(tools::PanelKind::Content),
-            ActivityAction::Terminal => {
-                self.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE))
-            }
+            ActivityAction::Terminal => self.toggle_terminal_panel(),
             ActivityAction::Settings => self.open_tools(tools::PanelKind::Settings),
             ActivityAction::Collapse => self.set_sidebar_visible(false),
         }
     }
 
-    fn resize_terminal_at(&mut self, row: u16) {
-        let height = self.session.layout.window.height;
-        if height < 14 {
-            return;
+    fn toggle_terminal_panel(&mut self) {
+        let restart = self.terminals.active.as_ref().is_none_or(|term| {
+            !term.is_visible() && term.ended.load(std::sync::atomic::Ordering::Acquire)
+        });
+        if restart {
+            let was_opened = self.terminals.active.is_some();
+            self.open_terminal_tab();
+            if was_opened
+                && self
+                    .terminals
+                    .active
+                    .as_ref()
+                    .is_some_and(|t| t.is_visible())
+            {
+                self.session.status = "Terminal restarted".into();
+            }
+        } else if let Some(term) = &mut self.terminals.active {
+            if term.is_visible() {
+                term.set_visible(false);
+            } else {
+                term.activate();
+            }
         }
-        // Footer starts immediately after the Terminal body. One row belongs
-        // to the splitter; pointer position determines the new body height.
-        let footer_y = self.session.layout.footer.y;
-        let requested = footer_y.saturating_sub(row.saturating_add(1));
-        self.session.terminal_height = Some(terminal_panel_height(height, Some(requested)));
-    }
-
-    fn resize_sidebar_at(&mut self, column: u16) {
-        let bar = self.session.layout.activity;
-        let max = self
-            .session
-            .layout
-            .window
-            .width
-            .saturating_sub(bar.width + 25)
-            .max(20);
-        let desired = column.saturating_sub(bar.right());
-        self.session.sidebar_width = desired.clamp(20, max);
+        self.reconcile_terminal_focus();
     }
 
     fn open_terminal_tab(&mut self) {
@@ -235,18 +222,13 @@ impl App {
         &mut self,
         profile: Option<&embedded_terminal::shell::ShellProfile>,
     ) {
-        if self.terminal_tabs.len() >= 7
-            && self
-                .terminal
-                .as_ref()
-                .is_some_and(|t| !t.ended.load(std::sync::atomic::Ordering::Acquire))
-        {
+        if !self.terminals.can_open() {
             self.session.status = "Terminal limit: 8 tabs (Ctrl+Shift+W closes one)".into();
             return;
         }
         let next = if let Some(profile) = profile {
             embedded_terminal::EmbeddedTerminal::start_with_profile(
-                &self.files.tree_root,
+                self.files.root(),
                 80,
                 12,
                 self.terminal_notify.clone(),
@@ -254,98 +236,52 @@ impl App {
             )
         } else {
             embedded_terminal::EmbeddedTerminal::start(
-                &self.files.tree_root,
+                self.files.root(),
                 80,
                 12,
                 self.terminal_notify.clone(),
             )
         };
         match next {
-            Ok(mut next) => {
-                next.maximized = self.terminal.as_ref().is_some_and(|t| t.maximized);
-                if let Some(previous) = self.terminal.take() {
-                    // A finished session is not a usable tab. Restart replaces
-                    // it rather than keeping a dead shell in tab history.
-                    if !previous.ended.load(std::sync::atomic::Ordering::Acquire) {
-                        self.terminal_tabs.push(previous);
-                    }
-                }
+            Ok(next) => {
+                self.terminals.install(next);
+                self.reconcile_terminal_focus();
                 self.session.status = "New terminal tab".into();
-                self.terminal = Some(next);
             }
             Err(error) => self.session.status = format!("Terminal: {error}"),
         }
     }
 
     fn activate_terminal_number(&mut self, position: usize) {
-        // The displayed numbers are ordered by creation id, not by rotation
-        // of the inactive sessions during F12 switching.
-        let mut ids = self.terminal_tabs.iter().map(|t| t.id).collect::<Vec<_>>();
-        if let Some(term) = &self.terminal {
-            ids.push(term.id);
-        }
-        ids.sort_unstable();
-        if let Some(id) = ids.get(position).copied() {
-            self.activate_terminal_tab(id);
-        }
+        self.terminals.activate_number(position);
+        self.reconcile_terminal_focus();
     }
 
     fn switch_terminal_tab(&mut self, backwards: bool) {
-        if self.terminal_tabs.is_empty() {
-            return;
-        }
-        let Some(active) = self.terminal.take() else {
-            return;
-        };
-        let new = if backwards {
-            self.terminal_tabs.pop().expect("nonempty terminal tab set")
-        } else {
-            self.terminal_tabs.remove(0)
-        };
-        self.terminal_tabs.push(active);
-        let mut new = new;
-        new.visible = true;
-        new.focused = !new.ended.load(std::sync::atomic::Ordering::Acquire);
-        self.terminal = Some(new);
+        self.terminals.switch(backwards);
+        self.reconcile_terminal_focus();
     }
 
     fn activate_terminal_tab(&mut self, id: u64) {
-        if self.terminal.as_ref().is_some_and(|term| term.id == id) {
-            if let Some(term) = &mut self.terminal {
-                term.focused = !term.ended.load(std::sync::atomic::Ordering::Acquire);
-            }
-            return;
-        }
-        let Some(index) = self.terminal_tabs.iter().position(|term| term.id == id) else {
-            return;
-        };
-        let Some(active) = self.terminal.take() else {
-            return;
-        };
-        let mut selected = self.terminal_tabs.remove(index);
-        selected.visible = true;
-        selected.focused = !selected.ended.load(std::sync::atomic::Ordering::Acquire);
-        selected.maximized = active.maximized;
-        self.terminal_tabs.push(active);
-        self.terminal = Some(selected);
+        self.terminals.activate(id);
+        self.reconcile_terminal_focus();
     }
 
     fn close_terminal_tab_by_id(&mut self, id: u64) {
-        if self.terminal.as_ref().is_some_and(|term| term.id == id) {
-            self.close_terminal_tab();
-        } else if let Some(index) = self.terminal_tabs.iter().position(|term| term.id == id) {
-            self.terminal_tabs.remove(index);
+        if self.terminals.close_by_id(id) {
+            self.reconcile_terminal_focus();
             self.session.status = "Terminal tab closed".into();
         }
     }
 
     fn open_terminal_help(&mut self) {
         self.terminal_help_return = self
-            .terminal
+            .terminals
+            .active
             .as_ref()
-            .is_some_and(|term| term.visible && term.focused);
-        if let Some(term) = &mut self.terminal {
-            term.focused = false;
+            .is_some_and(|term| term.is_visible() && term.is_focused());
+        if let Some(term) = &mut self.terminals.active {
+            term.set_focused(false);
         }
         self.session.help_open = true;
         self.session.help_reference = false;
@@ -353,7 +289,7 @@ impl App {
     }
 
     fn toggle_terminal_mouse_routing(&mut self) {
-        if let Some(term) = &mut self.terminal {
+        if let Some(term) = &mut self.terminals.active {
             self.session.status = match term.toggle_mouse_routing() {
                 MouseRouting::SelectText => {
                     "Terminal mouse: select text (Ctrl+drag for native drag)".into()
@@ -374,16 +310,15 @@ impl App {
             TerminalTabAction::Previous => self.switch_terminal_tab(true),
             TerminalTabAction::Next => self.switch_terminal_tab(false),
             TerminalTabAction::Maximize => {
-                if let Some(term) = &mut self.terminal {
+                if let Some(term) = &mut self.terminals.active {
                     term.maximized = !term.maximized;
                 }
             }
             TerminalTabAction::ToggleMouseRouting => self.toggle_terminal_mouse_routing(),
             TerminalTabAction::Help => self.open_terminal_help(),
             TerminalTabAction::Hide => {
-                if let Some(term) = &mut self.terminal {
-                    term.visible = false;
-                    term.focused = false;
+                if let Some(term) = &mut self.terminals.active {
+                    term.set_visible(false);
                 }
             }
         }
@@ -440,16 +375,10 @@ impl App {
     }
 
     fn close_terminal_tab(&mut self) {
-        if self.terminal.is_none() {
-            return;
+        if self.terminals.close_active() {
+            self.reconcile_terminal_focus();
+            self.session.status = "Terminal tab closed".into();
         }
-        self.terminal.take(); // Drop terminates the local PTY
-        if let Some(mut previous) = self.terminal_tabs.pop() {
-            previous.visible = true;
-            previous.focused = !previous.ended.load(std::sync::atomic::Ordering::Acquire);
-            self.terminal = Some(previous);
-        }
-        self.session.status = "Terminal tab closed".into();
     }
 
     fn handle_context_menu_key(&mut self, key: KeyEvent) {
@@ -504,8 +433,17 @@ impl App {
         // Esc followed by mouse movement/release must not finish a stale
         // Files/Git Activity Bar click.
         self.session.activity_pressed = None;
+        let owner = self.key_owner(key);
+        if self.pointer_capture().is_some()
+            && (self.modal_open()
+                || (owner != input_router::KeyOwner::Terminal
+                    && matches!(key.code, KeyCode::Esc | KeyCode::F(1) | KeyCode::F(2)))
+                || matches!(key.code, KeyCode::F(8) | KeyCode::F(11) | KeyCode::F(12)))
+        {
+            self.cancel_pointer_capture();
+        }
         // Resolve the keyboard owner before PTY shortcuts or workspace commands.
-        match self.key_owner(key) {
+        match owner {
             input_router::KeyOwner::Commit => return, // Component-local editor.
             input_router::KeyOwner::Shortcuts => {
                 self.keys.handle(key);
@@ -547,7 +485,11 @@ impl App {
         }
         // Alt+1..8 selects the *visible tab number* from anywhere in the
         // workspace while Terminal is shown. Do not steal modal/editor keys.
-        if self.terminal.as_ref().is_some_and(|term| term.visible)
+        if self
+            .terminals
+            .active
+            .as_ref()
+            .is_some_and(|term| term.is_visible())
             && !self.keys.open
             && !self.session.help_open
             && self.tools.panel.is_none()
@@ -577,9 +519,10 @@ impl App {
         if key.code == KeyCode::F(4)
             && key.modifiers.is_empty()
             && self
-                .terminal
+                .terminals
+                .active
                 .as_ref()
-                .is_some_and(|term| term.visible && term.focused)
+                .is_some_and(|term| term.is_visible() && term.is_focused())
         {
             self.open_terminal_help();
             return;
@@ -602,7 +545,11 @@ impl App {
         }
         if key.code == KeyCode::F(12)
             && matches!(key.modifiers, KeyModifiers::NONE | KeyModifiers::SHIFT)
-            && self.terminal.as_ref().is_some_and(|t| t.visible)
+            && self
+                .terminals
+                .active
+                .as_ref()
+                .is_some_and(|t| t.is_visible())
         {
             self.switch_terminal_tab(key.modifiers.contains(KeyModifiers::SHIFT));
             return;
@@ -617,29 +564,34 @@ impl App {
                     self.open_terminal_tab();
                     return;
                 }
-                KeyCode::Char('W' | 'w') if self.terminal.is_some() => {
+                KeyCode::Char('W' | 'w') if self.terminals.active.is_some() => {
                     self.close_terminal_tab();
                     return;
                 }
                 KeyCode::Char('M' | 'm')
                     if self
-                        .terminal
+                        .terminals
+                        .active
                         .as_ref()
-                        .is_some_and(|t| t.visible && t.focused) =>
+                        .is_some_and(|t| t.is_visible() && t.is_focused()) =>
                 {
                     self.toggle_terminal_mouse_routing();
                     return;
                 }
-                KeyCode::Left if self.terminal.is_some() => {
+                KeyCode::Left if self.terminals.active.is_some() => {
                     self.switch_terminal_tab(true);
                     return;
                 }
-                KeyCode::Right if self.terminal.is_some() => {
+                KeyCode::Right if self.terminals.active.is_some() => {
                     self.switch_terminal_tab(false);
                     return;
                 }
-                KeyCode::Char('C' | 'c') if self.terminal.is_some() => {
-                    let selected = self.terminal.as_ref().and_then(|t| t.selected_text());
+                KeyCode::Char('C' | 'c') if self.terminals.active.is_some() => {
+                    let selected = self
+                        .terminals
+                        .active
+                        .as_ref()
+                        .and_then(|t| t.selected_text());
                     if let Some(selected) = selected.filter(|s| !s.is_empty()) {
                         self.copy_terminal_text(&selected);
                     } else {
@@ -647,11 +599,17 @@ impl App {
                     }
                     return;
                 }
-                KeyCode::Char('V' | 'v') if self.terminal.as_ref().is_some_and(|t| t.visible) => {
+                KeyCode::Char('V' | 'v')
+                    if self
+                        .terminals
+                        .active
+                        .as_ref()
+                        .is_some_and(|t| t.is_visible()) =>
+                {
                     let pasted = arboard::Clipboard::new().and_then(|mut cb| cb.get_text());
                     match pasted {
                         Ok(text) => {
-                            if let Some(term) = &mut self.terminal {
+                            if let Some(term) = &mut self.terminals.active {
                                 if let Err(error) = term.paste(&text) {
                                     self.session.status = format!("Paste failed: {error}");
                                 }
@@ -664,9 +622,9 @@ impl App {
                 _ => {}
             }
         }
-        if let Some(term) = &mut self.terminal {
-            if term.visible
-                && term.focused
+        if let Some(term) = &mut self.terminals.active {
+            if term.is_visible()
+                && term.is_focused()
                 && !term.on_alternate_screen()
                 && key.modifiers.contains(KeyModifiers::SHIFT)
             {
@@ -697,10 +655,10 @@ impl App {
             || (key.code == KeyCode::Enter
                 && key.modifiers == KeyModifiers::CONTROL | KeyModifiers::SHIFT)
         {
-            if let Some(term) = &mut self.terminal {
-                if term.visible {
+            if let Some(term) = &mut self.terminals.active {
+                if term.is_visible() {
                     term.maximized = !term.maximized;
-                    term.focused = !term.ended.load(std::sync::atomic::Ordering::Acquire);
+                    self.focus_terminal_input();
                     return;
                 }
             }
@@ -710,30 +668,17 @@ impl App {
         if (key.code == KeyCode::F(8) && key.modifiers.is_empty())
             || (key.code == KeyCode::Char('`') && key.modifiers == KeyModifiers::CONTROL)
         {
-            let restart = self.terminal.as_ref().is_none_or(|term| {
-                !term.visible && term.ended.load(std::sync::atomic::Ordering::Acquire)
-            });
-            if restart {
-                let was_opened = self.terminal.is_some();
-                self.open_terminal_tab();
-                if was_opened && self.terminal.as_ref().is_some_and(|t| t.visible) {
-                    self.session.status = "Terminal restarted".into();
-                }
-            } else if let Some(term) = &mut self.terminal {
-                term.visible = !term.visible;
-                term.focused =
-                    term.visible && !term.ended.load(std::sync::atomic::Ordering::Acquire);
-            }
+            self.toggle_terminal_panel();
             return;
         }
-        if let Some(term) = &mut self.terminal {
-            if term.visible && term.focused {
+        if let Some(term) = &mut self.terminals.active {
+            if term.is_visible() && term.is_focused() {
                 // Ctrl+Shift+Tab returns focus to Forge without hiding PTY.
                 if key.code == KeyCode::BackTab && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    term.focused = false;
+                    term.set_focused(false);
                 } else if let Err(error) = term.send(key) {
                     self.session.status = format!("Terminal input failed: {error}");
-                    term.focused = false;
+                    term.set_focused(false);
                 }
                 return;
             }
@@ -749,11 +694,11 @@ impl App {
             && (key.code == KeyCode::Menu
                 || (key.code == KeyCode::F(10) && key.modifiers.contains(KeyModifiers::SHIFT)))
         {
-            let x = self.session.layout.list_inner.x.saturating_add(3);
-            let y = self.session.layout.list_inner.y.saturating_add(1);
+            let x = self.layout_state.geometry.list_inner.x.saturating_add(3);
+            let y = self.layout_state.geometry.list_inner.y.saturating_add(1);
             if self.session.focus == PaneFocus::Preview {
-                let x = self.session.layout.preview_inner.x.saturating_add(3);
-                let y = self.session.layout.preview_inner.y.saturating_add(1);
+                let x = self.layout_state.geometry.preview_inner.x.saturating_add(3);
+                let y = self.layout_state.geometry.preview_inner.y.saturating_add(1);
                 self.open_diff_context_menu(x, y);
             } else if self.in_git_sidebar() {
                 match self.selected_scm_row() {
@@ -772,6 +717,49 @@ impl App {
                 self.open_file_context_menu(self.files.selected, x, y);
             }
             return;
+        }
+        // Physical file shortcuts belong only to the Files tree, never to
+        // the editor, preview selection, Git or an embedded child terminal.
+        if self.sidebar_focused() && !self.in_git_sidebar() {
+            match (key.code, key.modifiers) {
+                (KeyCode::Char('c' | 'C'), KeyModifiers::CONTROL) => {
+                    self.capture_file_clipboard(true);
+                    return;
+                }
+                (KeyCode::Char('x' | 'X'), KeyModifiers::CONTROL) => {
+                    self.capture_file_clipboard(false);
+                    return;
+                }
+                (KeyCode::Char('v' | 'V'), KeyModifiers::CONTROL) => {
+                    self.paste_files(None);
+                    return;
+                }
+                (KeyCode::Char('a' | 'A'), KeyModifiers::CONTROL) => {
+                    self.run_command(tools::Command::MarkAll);
+                    return;
+                }
+                (KeyCode::Delete, KeyModifiers::NONE) => {
+                    self.trash_selected_files();
+                    return;
+                }
+                (KeyCode::Delete, KeyModifiers::SHIFT) => {
+                    self.permanently_delete_selected_files();
+                    return;
+                }
+                (KeyCode::Up | KeyCode::Down, KeyModifiers::SHIFT) => {
+                    let old = self.files.selected;
+                    self.move_sel(if key.code == KeyCode::Up { -1 } else { 1 });
+                    self.mark_file_range(old, self.files.selected, false);
+                    return;
+                }
+                (KeyCode::Esc, KeyModifiers::NONE) => {
+                    self.tools.file_selection_anchor = None;
+                }
+                (KeyCode::Up | KeyCode::Down, KeyModifiers::NONE) => {
+                    self.tools.file_selection_anchor = None;
+                }
+                _ => {}
+            }
         }
         let Some(key) = self.keys.remap(key, false) else {
             return;
@@ -827,17 +815,19 @@ impl App {
                         | KeyCode::End
                 )
             {
-                let scroll = self.preview_state.preview_scroll;
+                let scroll = self.preview_state.presentation.preview_scroll;
                 if let Some(row) = self
                     .preview_state
+                    .presentation
                     .selection
                     .keyboard_extend(key.code, scroll)
                 {
-                    let height = self.session.layout.preview_inner.height.max(1) as usize;
+                    let height = self.layout_state.geometry.preview_inner.height.max(1) as usize;
                     if row < scroll {
-                        self.preview_state.preview_scroll = row;
+                        self.preview_state.presentation.preview_scroll = row;
                     } else if row >= scroll + height {
-                        self.preview_state.preview_scroll = row.saturating_sub(height - 1);
+                        self.preview_state.presentation.preview_scroll =
+                            row.saturating_sub(height - 1);
                         self.maybe_request_preview_page();
                     }
                 }
@@ -867,29 +857,21 @@ impl App {
                 self.set_sidebar_visible(true);
             }
             KeyCode::Char('b' | 'B') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.set_sidebar_visible(!self.session.sidebar_visible);
+                self.set_sidebar_visible(!self.layout_state.sidebar_visible());
             }
             KeyCode::Left
                 if key
                     .modifiers
                     .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                self.session.sidebar_width = self.session.sidebar_width.saturating_sub(2).max(20);
+                self.layout_state.adjust_sidebar(-2);
             }
             KeyCode::Right
                 if key
                     .modifiers
                     .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
             {
-                let maximum = self
-                    .session
-                    .layout
-                    .window
-                    .width
-                    .saturating_sub(self.session.layout.activity.width + 25)
-                    .max(20);
-                self.session.sidebar_width =
-                    self.session.sidebar_width.saturating_add(2).min(maximum);
+                self.layout_state.adjust_sidebar(2);
             }
             KeyCode::F(3) => self.set_markdown_code(!self.preview_state.markdown_code),
             KeyCode::F(6) => self.open_blame_popup(),
@@ -953,7 +935,8 @@ impl App {
             }
             KeyCode::Char('q') => self.session.should_quit = true,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.session.focus == PaneFocus::Preview && self.preview_state.selection.active()
+                if self.session.focus == PaneFocus::Preview
+                    && self.preview_state.presentation.selection.active()
                 {
                     self.copy_preview_selection();
                 } else {
@@ -1046,27 +1029,11 @@ impl App {
                         PreviewMode::File | PreviewMode::Diff
                     ) =>
             {
-                let max_x = if matches!(self.preview_state.preview_mode, PreviewMode::Diff) {
-                    let visible =
-                        (self.session.layout.preview_inner.width as usize / 2).saturating_sub(7);
-                    if let Some(diff) = &self.preview_state.file_diff {
-                        self.preview_state
-                            .split_cache
-                            .max_code_columns(&diff.lines)
-                            .saturating_sub(visible)
-                    } else {
-                        0
-                    }
-                } else {
-                    let visible =
-                        self.session.layout.preview_inner.width.saturating_sub(5) as usize;
-                    self.preview_state
-                        .text_rows
-                        .max_code_columns()
-                        .saturating_sub(visible)
-                };
-                let previous_x = self.preview_state.preview_scroll_x;
-                let offset = &mut self.preview_state.preview_scroll_x;
+                let max_x = self
+                    .preview_state
+                    .max_horizontal_offset(self.layout_state.geometry.preview_inner.width);
+                let previous_x = self.preview_state.presentation.preview_scroll_x;
+                let offset = &mut self.preview_state.presentation.preview_scroll_x;
                 *offset = match key.code {
                     KeyCode::Left => offset.saturating_sub(8),
                     KeyCode::Right => offset.saturating_add(8).min(max_x),
@@ -1076,7 +1043,7 @@ impl App {
                 };
                 if previous_x != *offset {
                     // Old visual selection coordinates refer to a different horizontal window.
-                    self.preview_state.selection.clear();
+                    self.preview_state.presentation.selection.clear();
                 }
             }
             KeyCode::Char('h') | KeyCode::Backspace | KeyCode::Left => {
@@ -1093,14 +1060,14 @@ impl App {
             KeyCode::Char('r' | 'R') if key.modifiers == KeyModifiers::CONTROL => {
                 self.request_list();
                 self.request_status();
-                if self.in_git_sidebar() && self.history.expanded {
+                if self.in_git_sidebar() && self.history.expanded() {
                     self.request_history();
                 }
             }
             KeyCode::Tab | KeyCode::BackTab => {
                 self.preview_state.commit_link_focus = None;
                 // A collapsed Sidebar must not receive invisible keyboard focus.
-                if self.session.sidebar_visible {
+                if self.layout_state.sidebar_visible() {
                     self.session.focus = match self.session.focus {
                         PaneFocus::List | PaneFocus::Staging => PaneFocus::Preview,
                         PaneFocus::Preview => PaneFocus::List,
@@ -1111,15 +1078,16 @@ impl App {
             }
             KeyCode::Home => {
                 if self.session.focus == PaneFocus::Preview {
-                    self.preview_state.preview_scroll = 0;
+                    self.preview_state.presentation.preview_scroll = 0;
                 } else {
                     self.session.focus = PaneFocus::List;
                     if self.in_git_sidebar() {
-                        self.scm.pending_transfer = None;
+                        self.scm.cancel_transfer();
                         self.scm.follow_selection = true;
                         self.scm.scm_selected = 0;
                         self.request_diff_for_scm_selection();
                     } else {
+                        self.navigation.cancel_reveal();
                         self.files.follow_selection = true;
                         self.files.selected = 0;
                         self.request_preview_for_selection();
@@ -1128,19 +1096,20 @@ impl App {
             }
             KeyCode::End => {
                 if self.session.focus == PaneFocus::Preview {
-                    self.preview_state.preview_scroll = self
+                    self.preview_state.presentation.preview_scroll = self
                         .preview_total_lines()
-                        .saturating_sub(self.session.layout.preview_inner.height as usize);
+                        .saturating_sub(self.layout_state.geometry.preview_inner.height as usize);
                     self.maybe_request_preview_page();
                 } else {
                     self.session.focus = PaneFocus::List;
                     if self.in_git_sidebar() {
-                        self.scm.pending_transfer = None;
+                        self.scm.cancel_transfer();
                         self.scm.follow_selection = true;
                         self.scm.scm_selected = self.scm_rows().len().saturating_sub(1);
                         self.request_diff_for_scm_selection();
                         self.maybe_page_history();
                     } else {
+                        self.navigation.cancel_reveal();
                         self.files.follow_selection = true;
                         self.files.selected = self.files.visible.len().saturating_sub(1);
                         self.request_preview_for_selection();
@@ -1152,8 +1121,8 @@ impl App {
                 match self.session.focus {
                     PaneFocus::Preview => {
                         let page = self
-                            .session
-                            .layout
+                            .layout_state
+                            .geometry
                             .preview_inner
                             .height
                             .saturating_sub(2)
@@ -1162,8 +1131,8 @@ impl App {
                     }
                     PaneFocus::List | PaneFocus::Staging if self.in_git_sidebar() => {
                         let page = self
-                            .session
-                            .layout
+                            .layout_state
+                            .geometry
                             .list_inner
                             .height
                             .saturating_sub(2)
@@ -1172,8 +1141,8 @@ impl App {
                     }
                     _ => {
                         let page = self
-                            .session
-                            .layout
+                            .layout_state
+                            .geometry
                             .list_inner
                             .height
                             .saturating_sub(2)
@@ -1212,24 +1181,101 @@ impl App {
     /// is being rebuilt. Pointer motion never calls the action itself.
     fn activity_at(&self, column: u16, row: u16) -> Option<ActivityAction> {
         let point = ratatui::layout::Position::new(column, row);
-        self.activity_hits.action_at(column, row).or_else(|| {
-            let layout = &self.session.layout;
-            if layout.files_tab.contains(point) {
-                Some(ActivityAction::Files)
-            } else if layout.git_tab.contains(point) {
-                Some(ActivityAction::Git)
-            } else if layout.search_tab.contains(point) {
-                Some(ActivityAction::Search)
-            } else if layout.terminal_activity.contains(point) {
-                Some(ActivityAction::Terminal)
-            } else if layout.settings_tab.contains(point) {
-                Some(ActivityAction::Settings)
-            } else if layout.sidebar_toggle.contains(point) {
-                Some(ActivityAction::Collapse)
-            } else {
-                None
+        self.activity_hits
+            .action_at(column, row)
+            .or_else(|| HitGeometry::new(&self.layout_state.geometry).activity(point))
+    }
+
+    fn pointer_capture(&self) -> Option<input_router::PointerCapture> {
+        input_router::PointerCapture::resolve(
+            self.layout_state.splitter.captured(),
+            self.terminals
+                .active
+                .as_ref()
+                .is_some_and(|t| t.is_visible() && t.captures_left_drag()),
+            self.scrollbar_drag.is_some(),
+            self.preview_state.presentation.selection.is_dragging(),
+            self.session.activity_pressed.is_some(),
+        )
+    }
+
+    fn cancel_pointer_capture(&mut self) {
+        self.layout_state.splitter.cancel();
+        self.scrollbar_drag = None;
+        self.preview_state.presentation.selection.end_drag();
+        self.session.activity_pressed = None;
+        if let Some(term) = &mut self.terminals.active {
+            if term.captures_left_drag() {
+                term.cancel_pointer_capture();
             }
-        })
+        }
+    }
+
+    fn captured_preview_mouse(&mut self, mouse: MouseEvent) {
+        let release = matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left));
+        self.preview_state.presentation.selection.move_to(
+            self.layout_state.geometry.preview_inner,
+            self.preview_state.presentation.preview_scroll,
+            mouse.column,
+            mouse.row,
+            release,
+        );
+        if release && self.preview_state.presentation.selection.active() {
+            self.session.status = "Preview selection ready · Ctrl-C Copy · Esc Clear".into();
+        }
+    }
+
+    /// Deliver continuation events before fresh hit testing. A drag/release
+    /// is never routed by the pane under the current pointer.
+    fn route_captured_mouse(&mut self, mouse: MouseEvent, modal: bool) -> bool {
+        use input_router::PointerCapture::*;
+        let Some(owner) = self.pointer_capture() else {
+            return false;
+        };
+        if modal || matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.cancel_pointer_capture();
+            return false;
+        }
+        let continuation = matches!(
+            mouse.kind,
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+        );
+        match owner {
+            Splitter => false, // Existing splitter handler owns its gesture.
+            Terminal => {
+                if continuation
+                    || matches!(
+                        mouse.kind,
+                        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                    ) && self
+                        .terminals
+                        .active
+                        .as_ref()
+                        .is_some_and(|t| t.captures_host_selection())
+                {
+                    if let Some(term) = &mut self.terminals.active {
+                        let result = term.mouse(mouse);
+                        if term.selection_autoscroll_active() {
+                            self.selection_scroll_notify.notify_one();
+                        }
+                        match result {
+                            Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
+                            Err(error) => self.session.status = format!("Terminal mouse: {error}"),
+                            _ => {}
+                        }
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+            Scrollbar if continuation => self.handle_scrollbar_mouse(mouse),
+            PreviewSelection if continuation => {
+                self.captured_preview_mouse(mouse);
+                true
+            }
+            _ => false, // Activity release/drag handled by its click policy.
+        }
     }
 
     pub(super) fn handle_mouse(&mut self, mouse: MouseEvent) {
@@ -1251,22 +1297,16 @@ impl App {
             }
             // Preserve xterm mouse-tracking for an embedded PTY, but it owns
             // its own focus; motion alone cannot focus it or the workspace.
-            let modal = self.blame.popup.is_some()
-                || self.keys.open
-                || self.editing.active()
-                || self.tools.panel.is_some()
-                || self.session.help_open
-                || self.session.commit_open
-                || self.session.context_menu.is_some();
-            self.session.splitter.hover(
-                &self.session.layout,
-                self.session.sidebar_visible,
+            let modal = self.modal_open();
+            self.layout_state.splitter.hover(
+                &self.layout_state.geometry,
+                self.layout_state.sidebar_visible(),
                 point,
                 modal,
             );
             if !modal {
-                if let Some(term) = &mut self.terminal {
-                    if term.visible && term.area.contains(point) {
+                if let Some(term) = &mut self.terminals.active {
+                    if term.is_visible() && term.area.contains(point) {
                         match term.mouse(mouse) {
                             Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
                             Err(error) => self.session.status = format!("Terminal mouse: {error}"),
@@ -1277,27 +1317,24 @@ impl App {
             }
             return;
         }
-        if self.session.help_open {
+        let modal = self.modal_open();
+        if self.route_captured_mouse(mouse, modal) {
+            return;
+        }
+        if self.modal_owner() == Some(input_router::KeyOwner::Help) {
             self.terminal_tab_hits.clear_hover();
             self.handle_help_mouse(mouse);
             return;
         }
         // Input ownership must follow the clicked pane, not visibility of
         // the embedded terminal. Popups always take priority over the PTY.
-        let modal = self.blame.popup.is_some()
-            || self.keys.open
-            || self.editing.active()
-            || self.tools.panel.is_some()
-            || self.session.help_open
-            || self.session.commit_open
-            || self.session.context_menu.is_some();
         // Both dividers share one pointer-capturing splitter component.
         // It owns a gesture until release (including outside the hit region)
         // and prevents accidental file clicks or PTY mouse injection.
-        let splitter_gesture = self.session.splitter.mouse(
+        let splitter_gesture = self.layout_state.splitter.mouse(
             mouse,
-            &self.session.layout,
-            self.session.sidebar_visible,
+            &self.layout_state.geometry,
+            self.layout_state.sidebar_visible(),
             modal,
         );
         match splitter_gesture {
@@ -1307,42 +1344,15 @@ impl App {
             }
             SplitterGesture::Moved(SplitterAxis::Horizontal, row)
             | SplitterGesture::Released(SplitterAxis::Horizontal, row) => {
-                self.resize_terminal_at(row);
+                self.layout_state.resize_terminal_at(row);
                 return;
             }
             SplitterGesture::Moved(SplitterAxis::Vertical, column)
             | SplitterGesture::Released(SplitterAxis::Vertical, column) => {
-                self.resize_sidebar_at(column);
+                self.layout_state.resize_sidebar_at(column);
                 return;
             }
             SplitterGesture::None => {}
-        }
-        // Keep the original Terminal as the owner of an in-progress text
-        // drag, even when the pointer crosses into the sidebar or tab strip.
-        // Otherwise the release is lost and the child remains in drag state.
-        if !modal {
-            if let Some(term) = &mut self.terminal {
-                let captured = match mouse.kind {
-                    MouseEventKind::Drag(MouseButton::Left)
-                    | MouseEventKind::Up(MouseButton::Left) => term.captures_left_drag(),
-                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                        term.captures_host_selection()
-                    }
-                    _ => false,
-                };
-                if term.visible && captured {
-                    let result = term.mouse(mouse);
-                    if term.selection_autoscroll_active() {
-                        self.selection_scroll_notify.notify_one();
-                    }
-                    match result {
-                        Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
-                        Err(error) => self.session.status = format!("Terminal mouse: {error}"),
-                        _ => {}
-                    }
-                    return;
-                }
-            }
         }
         // Activity Bar is a click target, never an on-press navigation target.
         // A stray press reported during mouse movement must not switch Files/Git.
@@ -1359,9 +1369,7 @@ impl App {
                     if let Some(pressed) = self.session.activity_pressed.take() {
                         if self.activity_at(mouse.column, mouse.row) == Some(pressed) {
                             if pressed != ActivityAction::Terminal {
-                                if let Some(term) = &mut self.terminal {
-                                    term.focused = false;
-                                }
+                                self.focus_workspace_input();
                             }
                             self.activity_action(pressed);
                         }
@@ -1380,59 +1388,48 @@ impl App {
         } else {
             self.session.activity_pressed = None;
         }
-        if !modal && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-            let tab_strip = self.terminal_tab_bar.contains(point);
-            let terminal_area = self
-                .terminal
+        let terminal_hit = terminal_at(
+            point,
+            self.terminals
+                .active
                 .as_ref()
-                .is_some_and(|t| t.visible && t.area.contains(point));
-            let workspace_click = self.session.layout.contains_list(mouse.column, mouse.row)
-                || self
-                    .session
-                    .layout
-                    .contains_preview(mouse.column, mouse.row)
-                || self.session.layout.activity.contains(point)
-                || self.session.layout.files_tab.contains(point)
-                || self.session.layout.git_tab.contains(point)
-                || self.session.layout.sidebar_toggle.contains(point);
-            if workspace_click && !tab_strip && !terminal_area {
-                if let Some(term) = &mut self.terminal {
-                    term.focused = false;
+                .filter(|term| term.is_visible())
+                .map(|term| term.area),
+            self.terminal_tab_bar,
+        );
+        if !modal && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            if terminal_hit == TerminalHit::Outside
+                && HitGeometry::new(&self.layout_state.geometry).workspace(point)
+            {
+                if self.preview_state.find.open
+                    && HitGeometry::new(&self.layout_state.geometry)
+                        .find(point)
+                        .is_some()
+                {
+                    self.release_terminal_input();
+                } else {
+                    self.focus_workspace_input();
                 }
+            } else if terminal_hit == TerminalHit::Body {
+                self.focus_terminal_input();
             }
         }
         // Route terminal mouse events to the child when it enabled tracking.
         // Otherwise scroll/drag select in the host and copy on release.
         // Shift always overrides child tracking for host text selection.
-        if !modal {
-            if let Some(term) = &mut self.terminal {
-                if term.visible && term.area.contains(point) {
-                    // Also focus when the child has enabled mouse reporting;
-                    // that mode does not pass through the host selection path.
-                    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
-                        term.focused = !term.ended.load(std::sync::atomic::Ordering::Acquire);
-                    }
-                    match term.mouse(mouse) {
-                        Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
-                        Err(error) => self.session.status = format!("Terminal mouse: {error}"),
-                        _ => {}
-                    }
-                    return;
+        if !modal && terminal_hit == TerminalHit::Body {
+            if let Some(term) = &mut self.terminals.active {
+                match term.mouse(mouse) {
+                    Ok(Some(text)) if !text.is_empty() => self.copy_terminal_text(&text),
+                    Err(error) => self.session.status = format!("Terminal mouse: {error}"),
+                    _ => {}
                 }
+                return;
             }
         }
         // The tab strip is part of Forge, not of the nested terminal's PTY.
         // Hit boxes are produced by the same frame renderer that paints them.
-        if !modal
-            && self.terminal.as_ref().is_some_and(|term| term.visible)
-            && self.tools.panel.is_none()
-            && !self.keys.open
-            && !self.session.help_open
-            && !self.editing.active()
-            && self
-                .terminal_tab_bar
-                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
-        {
+        if !modal && terminal_hit == TerminalHit::Tabs {
             let action = self.terminal_tab_hits.action_at(mouse.column, mouse.row);
             match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left) => {
@@ -1453,84 +1450,29 @@ impl App {
             }
             return;
         }
-        if self.scrollbar_drag.is_some() && self.handle_scrollbar_mouse(mouse) {
-            return;
-        }
-        if self.blame.popup.is_some() {
-            match mouse.kind {
-                MouseEventKind::ScrollDown => self.scroll_blame(3),
-                MouseEventKind::ScrollUp => self.scroll_blame(-3),
-                _ => {}
+        match self.modal_owner() {
+            Some(input_router::KeyOwner::Commit | input_router::KeyOwner::Shortcuts) => return,
+            Some(input_router::KeyOwner::Help) => {
+                self.handle_help_mouse(mouse);
+                return;
             }
-            return;
-        }
-        if self.keys.open {
-            return;
-        }
-        if self.editing.active() {
-            self.handle_editor_mouse(mouse);
-            return;
-        }
-        if self.tools.panel.is_some() {
-            self.handle_tools_mouse(mouse);
-            return;
-        }
-        if self.session.help_open {
-            match mouse.kind {
-                MouseEventKind::ScrollDown => self.scroll_help(3),
-                MouseEventKind::ScrollUp => self.scroll_help(-3),
-                _ => {}
-            }
-            return;
-        }
-        if self.preview_state.find.open
-            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-        {
-            let rect = self.session.layout.file_find_rect;
-            if rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row)) {
-                if mouse.row == rect.y + 1 {
-                    self.preview_state.find.input_active = true;
-                } else if mouse.row == rect.y + 2 {
-                    let x = mouse.column.saturating_sub(rect.x);
-                    let w = rect.width;
-                    if w >= 34 && x >= w.saturating_sub(3) {
-                        self.close_file_find();
-                    } else if w >= 34 && x >= w.saturating_sub(9) {
-                        self.navigate_file_find(true);
-                    } else if w >= 34 && x >= w.saturating_sub(16) {
-                        self.navigate_file_find(false);
-                    } else if (2..6).contains(&x) {
-                        self.preview_state.find.match_case = !self.preview_state.find.match_case;
-                        self.start_file_find();
-                    } else if (7..11).contains(&x) {
-                        self.preview_state.find.whole_word = !self.preview_state.find.whole_word;
-                        self.start_file_find();
-                    } else if (12..17).contains(&x) {
-                        self.preview_state.find.regex = !self.preview_state.find.regex;
-                        self.start_file_find();
-                    }
+            Some(input_router::KeyOwner::Blame) => {
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => self.scroll_blame(3),
+                    MouseEventKind::ScrollUp => self.scroll_blame(-3),
+                    _ => {}
                 }
                 return;
             }
-            self.preview_state.find.input_active = false;
-        }
-        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            && !self.inline_popup_contains(mouse.column, mouse.row)
-            && self
-                .session
-                .layout
-                .preview_inner
-                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
-        {
-            if let Some(path) = self.blame_path() {
-                let scroll = self.preview_state.preview_scroll;
-                let row = scroll
-                    + mouse
-                        .row
-                        .saturating_sub(self.session.layout.preview_inner.y)
-                        as usize;
-                self.blame.cursor = Some((path, row, scroll));
+            Some(input_router::KeyOwner::Editor) => {
+                self.handle_editor_mouse(mouse);
+                return;
             }
+            Some(input_router::KeyOwner::Tools) => {
+                self.handle_tools_mouse(mouse);
+                return;
+            }
+            _ => {}
         }
         let col = mouse.column;
         let row = mouse.row;
@@ -1583,6 +1525,51 @@ impl App {
             return;
         }
 
+        if self.preview_state.find.open
+            && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+        {
+            if let Some(hit) = HitGeometry::new(&self.layout_state.geometry).find(point) {
+                match hit {
+                    FindHit::Input => self.focus_find_input(),
+                    FindHit::Close => self.close_file_find(),
+                    FindHit::Next => self.navigate_file_find(true),
+                    FindHit::Previous => self.navigate_file_find(false),
+                    FindHit::MatchCase => {
+                        self.preview_state.find.match_case = !self.preview_state.find.match_case;
+                        self.start_file_find();
+                    }
+                    FindHit::WholeWord => {
+                        self.preview_state.find.whole_word = !self.preview_state.find.whole_word;
+                        self.start_file_find();
+                    }
+                    FindHit::Regex => {
+                        self.preview_state.find.regex = !self.preview_state.find.regex;
+                        self.start_file_find();
+                    }
+                    FindHit::Background => {}
+                }
+                return;
+            }
+            self.blur_find_input();
+        }
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && !self.inline_popup_contains(mouse.column, mouse.row)
+            && self
+                .layout_state
+                .geometry
+                .preview_inner
+                .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+        {
+            if let Some(path) = self.blame_path() {
+                let scroll = self.preview_state.presentation.preview_scroll;
+                let row = scroll
+                    + mouse
+                        .row
+                        .saturating_sub(self.layout_state.geometry.preview_inner.y)
+                        as usize;
+                self.blame.cursor = Some((path, row, scroll));
+            }
+        }
         self.handle_mouse_content(mouse);
     }
 
@@ -1595,72 +1582,55 @@ impl App {
                 self.jump_commit_detail_file(file);
                 return;
             }
-            if self.session.layout.git_sync_status.contains(point) {
-                // Clicking the branch / divergence indicator opens the
-                // existing Sync panel. It must never silently Push/Pull.
-                self.run_command(tools::Command::Sync);
-                return;
-            }
-            if self.session.layout.open_file_tab.contains(point) {
-                self.open_selected_worktree_file();
-                return;
-            }
-            if self.session.layout.markdown_preview_tab.contains(point) {
-                self.set_markdown_code(false);
-                self.session.focus = PaneFocus::Preview;
-                return;
-            }
-            if self.session.layout.markdown_code_tab.contains(point) {
-                self.set_markdown_code(true);
-                self.session.focus = PaneFocus::Preview;
+            if let Some(hit) = HitGeometry::new(&self.layout_state.geometry).header(point) {
+                match hit {
+                    HeaderHit::Sync => self.run_command(tools::Command::Sync),
+                    HeaderHit::OpenFile => self.open_selected_worktree_file(),
+                    HeaderHit::MarkdownPreview | HeaderHit::MarkdownCode => {
+                        self.set_markdown_code(hit == HeaderHit::MarkdownCode);
+                        self.session.focus = PaneFocus::Preview;
+                    }
+                }
                 return;
             }
         }
         if self.handle_scrollbar_mouse(mouse) {
             return;
         }
-        let over_list = self.session.layout.contains_list(col, row);
-        let over_preview = self.session.layout.contains_preview(col, row);
+        let point = ratatui::layout::Position::new(col, row);
+        let hit = HitGeometry::new(&self.layout_state.geometry).pane(point);
+        let over_list = hit == PaneHit::List;
+        let over_preview = hit == PaneHit::Preview;
         let git = self.in_git_sidebar();
         // The terminal is in mouse-capture mode, so native OS text selection
         // cannot work. Preview selection owns left drag events instead.
-        let region = self.session.layout.preview_inner;
-        let ruler = self.session.layout.overview_ruler;
+        let region = self.layout_state.geometry.preview_inner;
+        if matches!(
+            mouse.kind,
+            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
+        ) && self.preview_state.presentation.selection.is_dragging()
+        {
+            self.captured_preview_mouse(mouse);
+            return;
+        }
         if self.config.show_overview_ruler
-            && ruler.contains(ratatui::layout::Position::new(col, row))
             && matches!(
                 mouse.kind,
                 MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left)
             )
         {
-            if let Some(target) = self
-                .overview_click_target(row.saturating_sub(ruler.y) as usize, ruler.height as usize)
+            if let Some((offset, height)) =
+                HitGeometry::new(&self.layout_state.geometry).overview(point)
             {
-                self.session.focus = PaneFocus::Preview;
-                self.preview_state.pending_overview_line = Some(target);
-                self.advance_overview_jump();
+                if let Some(target) = self.overview_click_target(offset, height) {
+                    self.session.focus = PaneFocus::Preview;
+                    self.preview_state.navigation.pending_overview_line = Some(target);
+                    self.advance_overview_jump();
+                }
+                return;
             }
-            return;
         }
-        if !self.preview_state.selection.is_dragging() && self.inline_mouse(mouse) {
-            return;
-        }
-        if matches!(
-            mouse.kind,
-            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left)
-        ) && self.preview_state.selection.is_dragging()
-        {
-            let release = matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left));
-            self.preview_state.selection.move_to(
-                region,
-                self.preview_state.preview_scroll,
-                col,
-                row,
-                release,
-            );
-            if release && self.preview_state.selection.active() {
-                self.session.status = "Preview selection ready · Ctrl-C Copy · Esc Clear".into();
-            }
+        if self.inline_mouse(mouse) {
             return;
         }
 
@@ -1670,14 +1640,17 @@ impl App {
                     self.open_diff_context_menu(col, row);
                 } else if over_list && git {
                     let rows = self.scm_rows();
-                    if let Some(flat) = sticky_index_at(
-                        self.session.layout.list_inner,
-                        self.scm.scroll_scm,
-                        &self.scm.sticky_headers,
-                        rows.len(),
-                        col,
-                        row,
-                    ) {
+                    if let Some(RowHit {
+                        index: flat,
+                        pinned: _,
+                    }) = (ListHitGeometry {
+                        area: self.layout_state.geometry.list_inner,
+                        scroll: self.scm.scroll_scm,
+                        sticky: &self.scm.sticky_headers,
+                        len: rows.len(),
+                    })
+                    .row(point)
+                    {
                         if let Some(ScmRow::Change { column, index, .. }) = rows.get(flat) {
                             self.open_staging_context_menu(*column, *index, col, row);
                         } else if let Some(ScmRow::Folder { .. }) = rows.get(flat) {
@@ -1687,14 +1660,14 @@ impl App {
                         }
                     }
                 } else if over_list {
-                    if let Some(index) = sticky_index_at(
-                        self.session.layout.list_inner,
-                        self.files.scroll,
-                        &self.files.sticky_headers,
-                        self.files.visible.len(),
-                        col,
-                        row,
-                    ) {
+                    if let Some(RowHit { index, pinned: _ }) = (ListHitGeometry {
+                        area: self.layout_state.geometry.list_inner,
+                        scroll: self.files.scroll,
+                        sticky: &self.files.sticky_headers,
+                        len: self.files.visible.len(),
+                    })
+                    .row(point)
+                    {
                         self.open_file_context_menu(index, col, row);
                     } else {
                         self.open_file_root_menu(col, row);
@@ -1705,19 +1678,20 @@ impl App {
                 if over_list && git {
                     self.session.focus = PaneFocus::List;
                     let rows = self.scm_rows();
-                    if let Some(flat) = sticky_index_at(
-                        self.session.layout.list_inner,
-                        self.scm.scroll_scm,
-                        &self.scm.sticky_headers,
-                        rows.len(),
-                        col,
-                        row,
-                    ) {
-                        let pinned = ((row - self.session.layout.list_inner.y) as usize)
-                            < self.scm.sticky_headers.len();
+                    if let Some(RowHit {
+                        index: flat,
+                        pinned,
+                    }) = (ListHitGeometry {
+                        area: self.layout_state.geometry.list_inner,
+                        scroll: self.scm.scroll_scm,
+                        sticky: &self.scm.sticky_headers,
+                        len: rows.len(),
+                    })
+                    .row(point)
+                    {
                         let same = flat == self.scm.scm_selected;
                         self.scm.scm_selected = flat;
-                        self.scm.pending_transfer = None;
+                        self.scm.cancel_transfer();
                         self.scm.follow_selection = true;
                         if pinned {
                             // Clicking a sticky title navigates to its real
@@ -1780,21 +1754,48 @@ impl App {
                     }
                 } else if over_list {
                     self.session.focus = PaneFocus::List;
+                    self.navigation.cancel_reveal();
                     // Stay in Files when clicking the file tree.
                     if !matches!(self.session.activity, ActivityTab::Files) {
                         self.session.activity = ActivityTab::Files;
                         self.preview_state.preview_mode = PreviewMode::File;
                     }
-                    if let Some(index) = sticky_index_at(
-                        self.session.layout.list_inner,
-                        self.files.scroll,
-                        &self.files.sticky_headers,
-                        self.files.visible.len(),
-                        col,
-                        row,
-                    ) {
-                        let pinned = ((row - self.session.layout.list_inner.y) as usize)
-                            < self.files.sticky_headers.len();
+                    if let Some(RowHit { index, pinned }) = (ListHitGeometry {
+                        area: self.layout_state.geometry.list_inner,
+                        scroll: self.files.scroll,
+                        sticky: &self.files.sticky_headers,
+                        len: self.files.visible.len(),
+                    })
+                    .row(point)
+                    {
+                        if mouse
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                        {
+                            let old = self.files.selected;
+                            self.files.selected = index;
+                            self.files.follow_selection = true;
+                            self.files.last_list_click = None;
+                            if mouse.modifiers.contains(KeyModifiers::SHIFT) {
+                                self.mark_file_range(
+                                    old,
+                                    index,
+                                    mouse.modifiers.contains(KeyModifiers::CONTROL),
+                                );
+                            } else {
+                                if self.tools.marks.files.is_empty() && old != index {
+                                    if let Some(previous) = self.files.visible.get(old) {
+                                        self.tools.marks.files.insert(previous.entry.path.clone());
+                                    }
+                                }
+                                self.tools.file_selection_anchor = self.current_path();
+                                self.toggle_mark();
+                            }
+                            self.request_preview_for_selection();
+                            return;
+                        }
+                        self.tools.file_selection_anchor =
+                            self.files.visible.get(index).map(|r| r.entry.path.clone());
                         if pinned {
                             self.files.follow_selection = true;
                             self.files.selected = index;
@@ -1833,9 +1834,9 @@ impl App {
                     }
                 } else if over_preview {
                     self.session.focus = PaneFocus::Preview;
-                    self.preview_state.selection.begin(
+                    self.preview_state.presentation.selection.begin(
                         region,
-                        self.preview_state.preview_scroll,
+                        self.preview_state.presentation.preview_scroll,
                         col,
                         row,
                     );
@@ -1910,7 +1911,7 @@ impl App {
             return;
         };
         let rela = forge_model::path_to_rela(rel);
-        let side = if let Some(snap) = &self.scm.git_status {
+        let side = if let Some(snap) = self.scm.status() {
             if snap.unstaged.iter().any(|c| c.path == rela) {
                 DiffSide::Unstaged
             } else if snap.staged.iter().any(|c| c.path == rela) {
@@ -1931,7 +1932,7 @@ impl App {
     }
 
     pub(super) fn copy_preview_selection(&mut self) {
-        let Some(text) = self.preview_state.selection.selected_text() else {
+        let Some(text) = self.preview_state.presentation.selection.selected_text() else {
             self.session.status =
                 "Select preview text with Shift+Arrows or mouse drag first".into();
             return;
@@ -1972,8 +1973,8 @@ impl App {
     pub(super) fn scrollbar(&self, target: ScrollbarTarget) -> Option<VerticalScrollbar> {
         match target {
             ScrollbarTarget::Preview => Some(VerticalScrollbar::new(
-                self.session.layout.preview_scrollbar,
-                self.preview_state.preview_scroll,
+                self.layout_state.geometry.preview_scrollbar,
+                self.preview_state.presentation.preview_scroll,
                 self.preview_total_lines(),
             )),
             ScrollbarTarget::Sidebar => {
@@ -1983,7 +1984,7 @@ impl App {
                     (self.files.scroll, self.files.visible.len())
                 };
                 Some(VerticalScrollbar::new(
-                    self.session.layout.sidebar_scrollbar,
+                    self.layout_state.geometry.sidebar_scrollbar,
                     first,
                     total,
                 ))
@@ -1993,11 +1994,11 @@ impl App {
     }
 
     pub(super) fn horizontal_scrollbar(&self) -> HorizontalScrollbar {
-        let area = self.session.layout.preview_horizontal_scrollbar;
+        let area = self.layout_state.geometry.preview_horizontal_scrollbar;
         HorizontalScrollbar::new(
             area,
-            self.preview_state.preview_scroll_x,
-            (area.width as usize).saturating_add(self.session.layout.preview_horizontal_max),
+            self.preview_state.presentation.preview_scroll_x,
+            (area.width as usize).saturating_add(self.layout_state.geometry.preview_horizontal_max),
         )
     }
 
@@ -2019,12 +2020,12 @@ impl App {
         let Some(scroll) = scroll else { return };
         match target {
             ScrollbarTarget::PreviewHorizontal => {
-                self.preview_state.preview_scroll_x = scroll;
+                self.preview_state.presentation.preview_scroll_x = scroll;
                 self.session.focus = PaneFocus::Preview;
             }
             ScrollbarTarget::Preview => {
-                let old = self.preview_state.preview_scroll;
-                self.preview_state.preview_scroll = scroll;
+                let old = self.preview_state.presentation.preview_scroll;
+                self.preview_state.presentation.preview_scroll = scroll;
                 self.session.focus = PaneFocus::Preview;
                 if scroll > old {
                     self.maybe_request_preview_page();
@@ -2070,22 +2071,20 @@ impl App {
         if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
             return false;
         }
-        // The horizontal lane is intentionally outside preview_inner; catch
-        // it before a code-selection drag can start.
-        if let Some(drag) = self
-            .horizontal_scrollbar()
-            .begin_drag(mouse.column, mouse.row)
-        {
-            let target = ScrollbarTarget::PreviewHorizontal;
-            self.scrollbar_drag = Some((target, drag));
-            self.seek_scrollbar(target, mouse.column, mouse.row, drag);
-            return true;
-        }
-        for target in [ScrollbarTarget::Preview, ScrollbarTarget::Sidebar] {
-            if let Some(drag) = self
-                .scrollbar(target)
-                .and_then(|bar| bar.begin_drag(mouse.column, mouse.row))
-            {
+        // Reject non-scrollbar clicks using geometry before computing any
+        // domain-dependent row counts or preview lengths.
+        let point = ratatui::layout::Position::new(mouse.column, mouse.row);
+        let candidates = HitGeometry::new(&self.layout_state.geometry).scrollbar_candidates(point);
+        for target in candidates {
+            let drag = match target {
+                ScrollbarTarget::PreviewHorizontal => self
+                    .horizontal_scrollbar()
+                    .begin_drag(mouse.column, mouse.row),
+                _ => self
+                    .scrollbar(target)
+                    .and_then(|bar| bar.begin_drag(mouse.column, mouse.row)),
+            };
+            if let Some(drag) = drag {
                 self.scrollbar_drag = Some((target, drag));
                 self.seek_scrollbar(target, mouse.column, mouse.row, drag);
                 return true;
@@ -2096,34 +2095,26 @@ impl App {
 
     pub(super) fn scroll_preview(&mut self, delta: isize) {
         let total = self.preview_total_lines();
-        let viewport = self.session.layout.preview_inner.height as usize;
+        let viewport = self.layout_state.geometry.preview_inner.height as usize;
         let max_scroll = total.saturating_sub(viewport);
-        let next = (self.preview_state.preview_scroll as isize)
+        let next = (self.preview_state.presentation.preview_scroll as isize)
             .saturating_add(delta)
             .clamp(0, max_scroll as isize) as usize;
-        self.preview_state.preview_scroll = next;
+        self.preview_state.presentation.preview_scroll = next;
         if delta > 0 {
             self.maybe_request_preview_page();
         }
     }
 
     pub(super) fn move_sel(&mut self, delta: isize) {
-        self.files.compact_expand_pending = None;
-        self.files.follow_selection = true;
-        self.files.external_anchor = None;
-        if self.files.visible.is_empty() {
-            return;
-        }
-        let len = self.files.visible.len() as isize;
-        let next = (self.files.selected as isize + delta).clamp(0, len - 1) as usize;
-        if next != self.files.selected {
-            self.files.selected = next;
+        self.navigation.cancel_reveal();
+        if self.files.move_selection(delta) {
             self.request_preview_for_selection();
         }
     }
 
     pub(super) fn move_scm(&mut self, delta: isize) {
-        self.scm.pending_transfer = None;
+        self.scm.cancel_transfer();
         self.scm.follow_selection = true;
         let len = self.scm_rows().len();
         if len == 0 {
@@ -2141,26 +2132,7 @@ impl App {
     /// directories. Missing listings are requested by request_missing_expanded
     /// and resumed on arrival; one click is enough even on a cold tree.
     pub(super) fn advance_compact_folder_expansion(&mut self) -> Option<PathBuf> {
-        let mut path = self.files.compact_expand_pending.take()?;
-        for _ in 0..128 {
-            if !self.files.expanded.contains(&path) {
-                break;
-            }
-            let Some(children) = self.files.children.get(&path) else {
-                self.files.compact_expand_pending = Some(path.clone());
-                break;
-            };
-            if children.len() != 1 || !matches!(children[0].kind, EntryKind::Directory) {
-                break;
-            }
-            let next = children[0].path.clone();
-            if !next.starts_with(&path) || next == path {
-                break;
-            }
-            self.files.expanded.insert(next.clone());
-            path = next;
-        }
-        Some(path)
+        self.files.advance_compact_folder_expansion()
     }
 
     pub(super) fn toggle_expand_at(&mut self, index: usize) {
@@ -2174,7 +2146,7 @@ impl App {
         let path = row.entry.path.clone();
         let was_expanded = self.files.expanded.contains(&path);
         // A later listing must not continue an expansion the user canceled.
-        self.files.compact_expand_pending = None;
+        self.files.cancel_compact_expansion();
         let target = if was_expanded {
             self.files.expanded.remove(&path);
             // Collapsing a compact row also clears any hidden descendants,
@@ -2185,11 +2157,11 @@ impl App {
             path.clone()
         } else {
             self.files.expanded.insert(path.clone());
-            if !self.files.children.contains_key(&path) {
+            if !self.files.has_listing(&path) {
                 self.request_dir(path.clone());
             }
             if self.config.compact_folders {
-                self.files.compact_expand_pending = Some(path.clone());
+                self.files.begin_compact_expansion(path.clone());
                 self.advance_compact_folder_expansion()
                     .unwrap_or(path.clone())
             } else {
@@ -2213,6 +2185,7 @@ impl App {
     }
 
     pub(super) fn open_selected(&mut self) {
+        self.navigation.cancel_reveal();
         let Some(row) = self.files.visible.get(self.files.selected) else {
             return;
         };
@@ -2228,6 +2201,7 @@ impl App {
     /// parent within the current workspace. The workspace root never changes
     /// as a side effect of tree navigation.
     pub(super) fn tree_back(&mut self) {
+        self.navigation.cancel_reveal();
         self.files.follow_selection = true;
         let Some(row) = self.files.visible.get(self.files.selected).cloned() else {
             return;
@@ -2265,7 +2239,7 @@ mod keyboard_navigation_tests {
         let mut app = create_workspace_at(ColorMode::Ansi16, root.clone());
         app.files.pending_lists.clear();
         app.scm.pending_status = None;
-        app.files.children.insert(
+        app.files.install_listing(
             root.clone(),
             vec![
                 Entry {
@@ -2282,7 +2256,7 @@ mod keyboard_navigation_tests {
                 },
             ],
         );
-        app.files.children.insert(
+        app.files.install_listing(
             folder.clone(),
             vec![Entry {
                 id: forge_model::PathId(3),
@@ -2312,7 +2286,7 @@ mod keyboard_navigation_tests {
         for code in [KeyCode::Left, KeyCode::Char('h'), KeyCode::Backspace] {
             for _ in 0..3 {
                 app.handle_key(KeyEvent::new(code, KeyModifiers::NONE));
-                assert_eq!(app.files.tree_root, root, "{code:?} changed workspace root");
+                assert_eq!(app.files.root(), root, "{code:?} changed workspace root");
                 assert_eq!(
                     app.files.selected, original,
                     "{code:?} moved top-level selection"
@@ -2344,10 +2318,10 @@ mod keyboard_navigation_tests {
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
         assert!(!app.files.expanded.contains(&folder));
         assert_eq!(app.files.visible[app.files.selected].entry.path, folder);
-        assert_eq!(app.files.tree_root, root);
+        assert_eq!(app.files.root(), root);
 
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(app.files.tree_root, root);
+        assert_eq!(app.files.root(), root);
         assert_eq!(app.files.visible[app.files.selected].entry.path, folder);
     }
 
@@ -2357,14 +2331,14 @@ mod keyboard_navigation_tests {
         let root = dir.path().to_path_buf();
         app.files.visible.clear();
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(app.files.tree_root, root);
+        assert_eq!(app.files.root(), root);
         assert!(app.files.visible.is_empty());
 
         app.session.focus = PaneFocus::Preview;
-        app.session.sidebar_visible = false;
+        app.layout_state.set_sidebar_visible(false);
         app.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
-        assert_eq!(app.files.tree_root, root);
-        assert!(app.session.sidebar_visible);
+        assert_eq!(app.files.root(), root);
+        assert!(app.layout_state.sidebar_visible());
         assert_eq!(app.session.focus, PaneFocus::List);
     }
 
@@ -2407,7 +2381,7 @@ changed
         let mut app = create_workspace_at(ColorMode::Ansi16, root.to_path_buf());
         app.files.pending_lists.clear();
         app.scm.pending_status = None;
-        app.files.children.insert(
+        app.files.install_listing(
             root.to_path_buf(),
             vec![Entry {
                 id: forge_model::PathId(41),
@@ -2417,7 +2391,8 @@ changed
             }],
         );
         app.rebuild_visible();
-        app.scm.git_status = Some(app.services.git.status(root).unwrap());
+        app.scm
+            .set_status(Some(app.services.git.status(root).unwrap()));
 
         app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         assert_eq!(app.session.activity, ActivityTab::Files);
@@ -2442,7 +2417,7 @@ changed
         assert_eq!(app.session.activity, ActivityTab::Files);
         assert_eq!(app.session.focus, PaneFocus::Preview);
         assert!(matches!(app.preview_state.preview_mode, PreviewMode::File));
-        assert_eq!(app.files.tree_root, root);
+        assert_eq!(app.files.root(), root);
         app.handle_key(esc());
         assert_eq!(
             app.session.focus,
@@ -2461,7 +2436,7 @@ changed
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
         app.session.activity = ActivityTab::Files;
         app.session.focus = PaneFocus::Preview;
-        app.session.sidebar_visible = false;
+        app.layout_state.set_sidebar_visible(false);
         app.preview_state.preview_mode = PreviewMode::Diff;
         assert_eq!(
             app.workspace_escape(),
@@ -2472,20 +2447,20 @@ changed
         assert!(matches!(app.preview_state.preview_mode, PreviewMode::File));
         assert_eq!(app.session.focus, PaneFocus::Preview);
         assert!(
-            !app.session.sidebar_visible,
+            !app.layout_state.sidebar_visible(),
             "first Esc only closes the diff"
         );
 
         app.handle_key(esc());
         assert_eq!(app.session.focus, PaneFocus::Preview);
         assert!(
-            !app.session.sidebar_visible,
+            !app.layout_state.sidebar_visible(),
             "Esc must not expand the hidden sidebar"
         );
 
         // Ctrl+B explicitly restores and focuses the hidden sidebar.
         app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
-        assert!(app.session.sidebar_visible);
+        assert!(app.layout_state.sidebar_visible());
         assert_eq!(app.session.focus, PaneFocus::List);
         app.preview_state.preview_mode = PreviewMode::Diff;
         app.handle_key(esc());
@@ -2514,7 +2489,7 @@ changed
         // pane navigation; Tab must explicitly focus the Git list first.
         app.session.activity = ActivityTab::Git;
         app.session.focus = PaneFocus::Preview;
-        app.session.sidebar_visible = true;
+        app.layout_state.set_sidebar_visible(true);
         app.handle_key(esc());
         assert_eq!(app.session.focus, PaneFocus::Preview);
         assert_eq!(app.tools.marks.git.len(), 1);
@@ -2555,14 +2530,72 @@ changed
     }
 
     #[tokio::test]
+    async fn preview_and_scrollbar_capture_survive_drag_into_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        let preview = Rect::new(30, 2, 60, 15);
+        let terminal = Rect::new(30, 20, 60, 10);
+        app.terminals.active.as_mut().unwrap().area = terminal;
+        app.layout_state.geometry.preview = preview;
+        app.layout_state.geometry.preview_inner = preview;
+        app.layout_state.geometry.preview_scrollbar = Rect::new(90, 2, 1, 15);
+        let path = dir.path().join("long.txt");
+        app.preview_state.preview = Some(Preview {
+            path,
+            content: PreviewContent::Text {
+                lines: (0..200).map(|i| format!("line {i}")).collect(),
+                truncated: false,
+                bytes_read: 1000,
+            },
+        });
+        let event = |kind, column, row| MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        let down = MouseEventKind::Down(MouseButton::Left);
+        let drag = MouseEventKind::Drag(MouseButton::Left);
+        let up = MouseEventKind::Up(MouseButton::Left);
+        app.handle_mouse(event(down, 36, 5));
+        assert_eq!(
+            app.pointer_capture(),
+            Some(input_router::PointerCapture::PreviewSelection)
+        );
+        app.handle_mouse(event(drag, 65, 25));
+        app.handle_mouse(event(up, 65, 25));
+        assert!(!app.preview_state.presentation.selection.is_dragging());
+        assert!(!app.terminals.active.as_ref().unwrap().captures_left_drag());
+        app.handle_mouse(event(down, 90, 5));
+        assert_eq!(
+            app.pointer_capture(),
+            Some(input_router::PointerCapture::Scrollbar)
+        );
+        app.handle_mouse(event(drag, 60, 28));
+        app.handle_mouse(event(up, 60, 28));
+        assert!(app.scrollbar_drag.is_none());
+        assert!(!app.terminals.active.as_ref().unwrap().captures_left_drag());
+        assert!(app.preview_state.presentation.preview_scroll > 0);
+        // A new press supersedes a lost release and transfers focus exactly once.
+        app.handle_mouse(event(down, 36, 5));
+        assert!(app.preview_state.presentation.selection.is_dragging());
+        app.handle_mouse(event(down, 36, 25));
+        assert!(!app.preview_state.presentation.selection.is_dragging());
+        assert_eq!(app.typing_owner(), input_router::KeyOwner::Terminal);
+        app.handle_mouse(event(up, 36, 25));
+        assert!(app.pointer_capture().is_none());
+    }
+
+    #[tokio::test]
     async fn terminal_splitter_resizes_without_leaking_mouse_to_other_panes() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        app.session.layout.window = Rect::new(0, 0, 120, 43);
-        app.session.layout.footer = Rect::new(0, 40, 120, 3);
-        app.session.layout.terminal_divider = Rect::new(0, 21, 120, 1);
-        app.session.layout.preview = Rect::new(35, 1, 85, 20);
+        app.layout_state.geometry.window = Rect::new(0, 0, 120, 43);
+        app.layout_state.geometry.footer = Rect::new(0, 40, 120, 3);
+        app.layout_state.geometry.terminal_divider = Rect::new(0, 21, 120, 1);
+        app.layout_state.geometry.preview = Rect::new(35, 1, 85, 20);
         let down = MouseEventKind::Down(MouseButton::Left);
         let drag = MouseEventKind::Drag(MouseButton::Left);
         let up = MouseEventKind::Up(MouseButton::Left);
@@ -2576,34 +2609,46 @@ changed
         };
         assert_eq!(terminal_panel_height(43, None), 14);
         send(&mut app, down, 55, 21);
-        assert!(app.session.splitter.dragging(SplitterAxis::Horizontal));
+        assert!(app.layout_state.splitter.dragging(SplitterAxis::Horizontal));
         assert!(
-            app.session.terminal_height.is_none(),
+            app.layout_state.terminal_height().is_none(),
             "press only captures the grip"
         );
         send(&mut app, drag, 2, 14); // over sidebar, still owns splitter
-        assert_eq!(app.session.terminal_height, Some(25));
+        assert_eq!(app.layout_state.terminal_height(), Some(25));
         send(&mut app, drag, 100, 0); // protect minimum workspace height
-        assert_eq!(app.session.terminal_height, Some(34));
+        assert_eq!(app.layout_state.terminal_height(), Some(34));
         send(&mut app, up, 55, 150); // release far outside and clamp
-        assert_eq!(app.session.terminal_height, Some(5));
-        assert!(!app.session.splitter.dragging(SplitterAxis::Horizontal));
+        assert_eq!(app.layout_state.terminal_height(), Some(5));
+        assert!(!app.layout_state.splitter.dragging(SplitterAxis::Horizontal));
         assert!(!app.session.should_quit);
-        assert!(!app.terminal.as_ref().unwrap().captures_left_drag());
+        assert!(!app.terminals.active.as_ref().unwrap().captures_left_drag());
         // A stray release after capture ends cannot resize the panel.
         send(&mut app, up, 35, 3);
-        assert_eq!(app.session.terminal_height, Some(5));
+        assert_eq!(app.layout_state.terminal_height(), Some(5));
         // Hover is visual-only, never activates the child or changes focus.
-        app.session.layout.terminal_divider = Rect::new(0, 21, 120, 1);
+        app.layout_state.geometry.terminal_divider = Rect::new(0, 21, 120, 1);
         send(&mut app, MouseEventKind::Moved, 50, 21);
-        assert!(app.session.splitter.highlighted(SplitterAxis::Horizontal));
+        assert!(app
+            .layout_state
+            .splitter
+            .highlighted(SplitterAxis::Horizontal));
         send(&mut app, MouseEventKind::Moved, 50, 20);
-        assert!(!app.session.splitter.highlighted(SplitterAxis::Horizontal));
+        assert!(!app
+            .layout_state
+            .splitter
+            .highlighted(SplitterAxis::Horizontal));
         // The preference survives closing and re-opening Terminal and clamps
         // safely when the outer terminal is resized smaller.
-        assert_eq!(terminal_panel_height(15, app.session.terminal_height), 5);
+        assert_eq!(
+            terminal_panel_height(15, app.layout_state.terminal_height()),
+            5
+        );
         assert_eq!(terminal_panel_height(30, Some(50)), 21);
-        assert_eq!(terminal_panel_height(13, app.session.terminal_height), 0);
+        assert_eq!(
+            terminal_panel_height(13, app.layout_state.terminal_height()),
+            0
+        );
     }
 
     #[tokio::test]
@@ -2612,8 +2657,8 @@ changed
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
         let files = Rect::new(1, 2, 3, 1);
         let git = Rect::new(1, 4, 3, 1);
-        app.session.layout.files_tab = files;
-        app.session.layout.git_tab = git;
+        app.layout_state.geometry.files_tab = files;
+        app.layout_state.geometry.git_tab = git;
         let event = |kind, column, row| MouseEvent {
             kind,
             column,
@@ -2670,12 +2715,12 @@ changed
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
         app.session.activity = ActivityTab::Git;
         app.session.focus = PaneFocus::Preview;
-        app.session.sidebar_visible = true;
-        app.session.layout.activity = Rect::new(0, 1, 5, 26);
-        app.session.layout.list = Rect::new(5, 1, 25, 26);
-        app.session.layout.list_inner = Rect::new(6, 3, 23, 23);
-        app.session.layout.preview = Rect::new(31, 1, 69, 26);
-        app.session.layout.preview_inner = Rect::new(33, 3, 65, 23);
+        app.layout_state.set_sidebar_visible(true);
+        app.layout_state.geometry.activity = Rect::new(0, 1, 5, 26);
+        app.layout_state.geometry.list = Rect::new(5, 1, 25, 26);
+        app.layout_state.geometry.list_inner = Rect::new(6, 3, 23, 23);
+        app.layout_state.geometry.preview = Rect::new(31, 1, 69, 26);
+        app.layout_state.geometry.preview_inner = Rect::new(33, 3, 65, 23);
         app.preview_state.preview_mode = PreviewMode::Diff;
         // Simulate the precise sequence: multiple Esc, then moving the
         // pointer over the Git tree, divider, preview and activity bar.
@@ -2710,7 +2755,7 @@ changed
                 "Hover at ({column}, {row}) took keyboard focus"
             );
             assert!(
-                app.session.sidebar_visible,
+                app.layout_state.sidebar_visible(),
                 "Hover at ({column}, {row}) changed sidebar"
             );
             assert!(matches!(app.preview_state.preview_mode, PreviewMode::Diff));
@@ -2732,12 +2777,12 @@ changed
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
         app.session.focus = PaneFocus::Preview;
         let area = Rect::new(0, 0, 16, 3);
-        app.session.layout.preview_inner = area;
+        app.layout_state.geometry.preview_inner = area;
         let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
         terminal
             .draw(|frame| {
                 frame.render_widget(Paragraph::new("A中B"), area);
-                app.preview_state.selection.observe(
+                app.preview_state.presentation.selection.observe(
                     frame,
                     area,
                     0,
@@ -2751,7 +2796,11 @@ changed
         app.handle_key(key(KeyCode::Right, KeyModifiers::SHIFT));
         app.handle_key(key(KeyCode::Right, KeyModifiers::SHIFT));
         assert_eq!(
-            app.preview_state.selection.selected_text().as_deref(),
+            app.preview_state
+                .presentation
+                .selection
+                .selected_text()
+                .as_deref(),
             Some("A中")
         );
         app.handle_key(key(KeyCode::Char('c'), KeyModifiers::CONTROL));
@@ -2761,7 +2810,7 @@ changed
             app.session.status
         );
         app.handle_key(esc());
-        assert!(!app.preview_state.selection.active());
+        assert!(!app.preview_state.presentation.selection.active());
         assert_eq!(app.workspace_escape(), input_router::WorkspaceEscape::None);
     }
 
@@ -2826,8 +2875,8 @@ changed
     async fn escape_followed_by_brackets_and_mouse_motion_cannot_open_git_from_files() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
-        app.session.layout.list = Rect::new(5, 2, 27, 28);
-        app.session.layout.preview = Rect::new(33, 2, 60, 28);
+        app.layout_state.geometry.list = Rect::new(5, 2, 27, 28);
+        app.layout_state.geometry.preview = Rect::new(33, 2, 60, 28);
         app.session.focus = PaneFocus::List;
 
         // Reproduce both observed incidents: Esc followed ~8 ms later by
@@ -2866,9 +2915,9 @@ changed
     async fn repeated_escape_then_pointer_motion_never_switches_files_to_git() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_path_buf());
-        app.session.layout.list = Rect::new(5, 2, 25, 27);
-        app.session.layout.preview = Rect::new(31, 2, 70, 27);
-        app.session.layout.preview_inner = Rect::new(33, 3, 65, 24);
+        app.layout_state.geometry.list = Rect::new(5, 2, 25, 27);
+        app.layout_state.geometry.preview = Rect::new(31, 2, 70, 27);
+        app.layout_state.geometry.preview_inner = Rect::new(33, 3, 65, 24);
         app.session.focus = PaneFocus::Preview;
         for _ in 0..12 {
             app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
@@ -2891,7 +2940,7 @@ changed
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.session.activity = ActivityTab::Git;
         app.session.focus = PaneFocus::List;
-        app.session.sidebar_visible = true;
+        app.layout_state.set_sidebar_visible(true);
         app.handle_key(esc());
         assert!(app.in_git_sidebar());
         assert_eq!(app.session.focus, PaneFocus::List);
@@ -2923,17 +2972,25 @@ changed
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        let term = app.terminal.as_ref().expect("terminal should open").id;
-        assert!(app.terminal.as_ref().unwrap().focused);
+        let term = app
+            .terminals
+            .active
+            .as_ref()
+            .expect("terminal should open")
+            .id;
+        assert!(app.terminals.active.as_ref().unwrap().is_focused());
         app.open_tools(tools::PanelKind::Settings);
 
         app.handle_key(KeyEvent::new(
             KeyCode::Char('W'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         ));
-        assert_eq!(app.terminal.as_ref().unwrap().id, term);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, term);
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        assert!(app.terminal.as_ref().unwrap().visible, "dialog owns F8");
+        assert!(
+            app.terminals.active.as_ref().unwrap().is_visible(),
+            "dialog owns F8"
+        );
         assert!(
             app.tools.panel.is_some(),
             "host chords must not dismiss the dialog"
@@ -2943,7 +3000,7 @@ changed
         assert!(app.tools.panel.is_none());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
         assert!(
-            !app.terminal.as_ref().unwrap().visible,
+            !app.terminals.active.as_ref().unwrap().is_visible(),
             "host shortcut works after modal closes"
         );
     }
@@ -2953,7 +3010,7 @@ changed
         let root = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, root.path().to_path_buf());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        assert!(app.terminal.as_ref().unwrap().focused);
+        assert!(app.terminals.active.as_ref().unwrap().is_focused());
         for letter in ['p', 'P'] {
             app.handle_key(KeyEvent::new(
                 KeyCode::Char(letter),
@@ -2965,7 +3022,7 @@ changed
             ));
             app.handle_key(esc());
             assert!(app.tools.panel.is_none());
-            assert!(app.terminal.as_ref().unwrap().focused);
+            assert!(app.terminals.active.as_ref().unwrap().is_focused());
         }
     }
 
@@ -3018,6 +3075,71 @@ changed
     }
 
     #[tokio::test]
+    async fn find_terminal_pointer_handoff_has_one_typing_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+        let id = app.terminals.active.as_ref().unwrap().id;
+        app.terminals.active.as_mut().unwrap().area = Rect::new(0, 24, 100, 10);
+        app.layout_state.geometry.file_find_rect = Rect::new(40, 2, 35, 4);
+        app.preview_state.find.open = true;
+        app.focus_find_input();
+        assert_eq!(app.typing_owner(), input_router::KeyOwner::Find);
+        assert!(!app.terminals.active.as_ref().unwrap().is_focused());
+        assert!(app.handle_paste("needle"));
+
+        let click = |column, row| MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.handle_mouse(click(10, 26));
+        assert_eq!(app.typing_owner(), input_router::KeyOwner::Terminal);
+        assert!(app.preview_state.find.open);
+        assert!(!app.preview_state.find.input_active);
+        assert!(app.handle_paste("terminal-only"));
+        assert_eq!(app.preview_state.find.query, "needle");
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            ..click(10, 26)
+        });
+
+        app.handle_mouse(click(45, 3));
+        assert_eq!(app.typing_owner(), input_router::KeyOwner::Find);
+        assert!(!app.terminals.active.as_ref().unwrap().is_focused());
+        assert!(app.handle_paste("-again"));
+        assert_eq!(app.preview_state.find.query, "needle-again");
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, id);
+        app.activity_action(ActivityAction::Terminal);
+        assert!(!app.terminals.active.as_ref().unwrap().is_visible());
+        app.activity_action(ActivityAction::Terminal);
+        assert_eq!(app.typing_owner(), input_router::KeyOwner::Terminal);
+        assert!(!app.preview_state.find.input_active);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, id);
+    }
+
+    #[tokio::test]
+    async fn modal_mouse_cannot_focus_find_behind_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        app.preview_state.find.open = true;
+        app.preview_state.find.input_active = false;
+        app.layout_state.geometry.file_find_rect = Rect::new(40, 2, 35, 4);
+        app.session.commit_open = true;
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 45,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.typing_owner(), input_router::KeyOwner::Commit);
+        assert!(!app.preview_state.find.input_active);
+        assert!(!app.handle_paste("ignored by workspace"));
+        assert!(app.preview_state.find.query.is_empty());
+    }
+
+    #[tokio::test]
     async fn file_find_takes_esc_before_focused_terminal() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
@@ -3026,6 +3148,6 @@ changed
         app.preview_state.find.input_active = true;
         app.handle_key(esc());
         assert!(!app.preview_state.find.open);
-        assert!(app.terminal.as_ref().unwrap().visible);
+        assert!(app.terminals.active.as_ref().unwrap().is_visible());
     }
 }

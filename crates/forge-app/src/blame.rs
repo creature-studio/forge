@@ -278,9 +278,10 @@ impl App {
                                 // Small, fully loaded files retain the existing
                                 // blame-driven external edit refresh behavior.
                                 self.preview_state.preview = Some(fresh);
-                                self.preview_state.markdown = MarkdownPreview::default();
-                                self.preview_state.text_rows.clear();
-                                self.preview_state.selection.clear();
+                                self.preview_state.presentation.markdown =
+                                    MarkdownPreview::default();
+                                self.preview_state.presentation.text_rows.clear();
+                                self.preview_state.presentation.selection.clear();
                                 self.blame.cursor = None;
                             }
                         }
@@ -318,9 +319,18 @@ impl App {
             .blame
             .cursor
             .as_ref()
-            .filter(|(p, _, scroll)| p == &path && *scroll == self.preview_state.preview_scroll)
-            .map_or(self.preview_state.preview_scroll, |(_, row, _)| *row);
-        let line = self.preview_state.text_rows.source_line_at(row)?;
+            .filter(|(p, _, scroll)| {
+                p == &path && *scroll == self.preview_state.presentation.preview_scroll
+            })
+            .map_or(
+                self.preview_state.presentation.preview_scroll,
+                |(_, row, _)| *row,
+            );
+        let line = self
+            .preview_state
+            .presentation
+            .text_rows
+            .source_line_at(row)?;
         let cached = self.blame.active.as_ref().filter(|c| c.key.path == path)?;
         let blame = cached.lines.as_ref().ok()?.get(line.saturating_sub(1))?;
         if blame.uncommitted() && !self.config.git.blame.show_uncommitted {

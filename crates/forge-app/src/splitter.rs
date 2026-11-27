@@ -92,6 +92,15 @@ impl SplitterState {
         Gesture::None
     }
 
+    pub(super) fn captured(&self) -> bool {
+        self.active.is_some()
+    }
+
+    pub(super) fn cancel(&mut self) {
+        self.active = None;
+        self.hovered = None;
+    }
+
     pub(super) fn highlighted(&self, axis: Axis) -> bool {
         self.active == Some(axis) || self.hovered == Some(axis)
     }

@@ -39,11 +39,12 @@ pub(super) fn draw_tab_strip(
         ratatui::widgets::Block::default().style(Style::default().bg(palette.bg)),
         bar,
     );
-    let current = model.terminal.as_ref().map(|t| t.id);
+    let current = model.terminals.active.as_ref().map(|t| t.id);
     let mut tabs: Vec<_> = model
-        .terminal_tabs
+        .terminals
+        .inactive()
         .iter()
-        .chain(model.terminal.iter())
+        .chain(model.terminals.active.iter())
         .map(|t| Label {
             id: t.id,
             name: t.draw_tab_title(),
@@ -58,7 +59,8 @@ pub(super) fn draw_tab_strip(
     tabs.sort_by_key(|t| t.id);
     // At narrow widths, give the active tab priority over secondary buttons.
     let mouse_mode_label = if model
-        .terminal
+        .terminals
+        .active
         .as_ref()
         .is_some_and(|t| t.mouse_routing == MouseRouting::Native)
     {
@@ -169,7 +171,12 @@ pub(super) fn draw_tab_strip(
     let mut right = area.right().saturating_sub(control_width);
     // Maximized Terminal has no workspace footer. Keep an always-visible
     // keyboard hint in the spare strip between tabs and action buttons.
-    if model.terminal.as_ref().is_some_and(|term| term.maximized) {
+    if model
+        .terminals
+        .active
+        .as_ref()
+        .is_some_and(|term| term.maximized)
+    {
         let hint = " Alt+1-8 tabs   Shift+F8 new   F12 next   F4 help ";
         let room = right.saturating_sub(x);
         let text = if room as usize >= hint.width() {
@@ -246,7 +253,11 @@ pub(super) fn draw_tab_tooltip(frame: &mut Frame<'_>, area: Rect, model: &App, p
     let Some((anchor, action)) = model.terminal_tab_hits.hovered() else {
         return;
     };
-    if !model.terminal.as_ref().is_some_and(|t| t.visible)
+    if !model
+        .terminals
+        .active
+        .as_ref()
+        .is_some_and(|t| t.is_visible())
         || model.keys.open
         || model.session.help_open
         || model.editing.active()
@@ -271,9 +282,10 @@ pub(super) fn draw_tab_tooltip(frame: &mut Frame<'_>, area: Rect, model: &App, p
 
 fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<String>) {
     let mut tabs: Vec<_> = model
-        .terminal_tabs
+        .terminals
+        .inactive()
         .iter()
-        .chain(model.terminal.iter())
+        .chain(model.terminals.active.iter())
         .collect();
     tabs.sort_by_key(|tab| tab.id);
     match action {
@@ -296,7 +308,11 @@ fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<St
                 .find(|tab| tab.id == id)
                 .map(|tab| tab.display_title())
                 .unwrap_or_else(|| "Terminal".into());
-            let active = model.terminal.as_ref().is_some_and(|tab| tab.id == id);
+            let active = model
+                .terminals
+                .active
+                .as_ref()
+                .is_some_and(|tab| tab.id == id);
             (
                 format!("Close terminal: {label}"),
                 active.then(|| "Ctrl+Shift+W".into()),
@@ -311,7 +327,8 @@ fn tab_action_hint(model: &App, action: TerminalTabAction) -> (String, Option<St
         TerminalTabAction::Maximize => ("Toggle terminal maximize".into(), Some("F11".into())),
         TerminalTabAction::ToggleMouseRouting => {
             let is_native = model
-                .terminal
+                .terminals
+                .active
                 .as_ref()
                 .is_some_and(|t| t.mouse_routing == MouseRouting::Native);
             (
@@ -367,7 +384,7 @@ mod tests {
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.config.terminal = forge_config::TerminalConfig::default();
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        let first = app.terminal.as_ref().unwrap().id;
+        let first = app.terminals.active.as_ref().unwrap().id;
         paint(&mut app, 100);
         click(&mut app, TerminalTabAction::Profiles);
         assert!(matches!(
@@ -394,7 +411,7 @@ mod tests {
             .any(|i| i.action == ContextAction::ShellDefaultMenu));
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(app.session.context_menu.is_none());
-        assert_eq!(app.terminal.as_ref().unwrap().id, first);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, first);
         app.handle_key(KeyEvent::new(
             KeyCode::F(8),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -402,9 +419,9 @@ mod tests {
         assert!(app.session.context_menu.is_some());
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(app.session.context_menu.is_none());
-        assert_ne!(app.terminal.as_ref().unwrap().id, first);
-        assert_eq!(app.terminal_tabs.len(), 1);
-        assert_eq!(app.terminal_tabs[0].id, first);
+        assert_ne!(app.terminals.active.as_ref().unwrap().id, first);
+        assert_eq!(app.terminals.inactive().len(), 1);
+        assert_eq!(app.terminals.inactive()[0].id, first);
     }
 
     #[tokio::test]
@@ -412,9 +429,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        let first = app.terminal.as_ref().unwrap().id;
+        let first = app.terminals.active.as_ref().unwrap().id;
         assert_eq!(
-            app.terminal.as_ref().unwrap().mouse_routing,
+            app.terminals.active.as_ref().unwrap().mouse_routing,
             MouseRouting::Native
         );
         paint(&mut app, 95);
@@ -427,7 +444,7 @@ mod tests {
         assert!(button.width >= 5);
         click(&mut app, TerminalTabAction::ToggleMouseRouting);
         assert_eq!(
-            app.terminal.as_ref().unwrap().mouse_routing,
+            app.terminals.active.as_ref().unwrap().mouse_routing,
             MouseRouting::SelectText
         );
         assert!(app.session.status.contains("select text"));
@@ -436,22 +453,22 @@ mod tests {
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
         ));
         assert_eq!(
-            app.terminal.as_ref().unwrap().mouse_routing,
+            app.terminals.active.as_ref().unwrap().mouse_routing,
             MouseRouting::Native
         );
 
         // The preference belongs to the tab and cannot affect other panes.
         click(&mut app, TerminalTabAction::ToggleMouseRouting);
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
-        assert_ne!(app.terminal.as_ref().unwrap().id, first);
+        assert_ne!(app.terminals.active.as_ref().unwrap().id, first);
         assert_eq!(
-            app.terminal.as_ref().unwrap().mouse_routing,
+            app.terminals.active.as_ref().unwrap().mouse_routing,
             MouseRouting::Native
         );
         paint(&mut app, 95);
         click(&mut app, TerminalTabAction::Activate(first));
         assert_eq!(
-            app.terminal.as_ref().unwrap().mouse_routing,
+            app.terminals.active.as_ref().unwrap().mouse_routing,
             MouseRouting::SelectText
         );
     }
@@ -525,7 +542,7 @@ mod tests {
                 .join("\n")
         };
         assert!(!render(&mut app).contains("New terminal"));
-        let before = app.terminal.as_ref().unwrap().id;
+        let before = app.terminals.active.as_ref().unwrap().id;
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column: new_button.x,
@@ -535,7 +552,7 @@ mod tests {
         let hovered = render(&mut app);
         assert!(hovered.contains("New terminal"), "{hovered}");
         assert!(hovered.contains("Shift+F8"), "{hovered}");
-        assert_eq!(app.terminal.as_ref().unwrap().id, before);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, before);
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column: 40,
@@ -550,8 +567,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        app.terminal.as_mut().unwrap().name = "very-long-terminal-label".into();
-        let id = app.terminal.as_ref().unwrap().id;
+        app.terminals.active.as_mut().unwrap().name = "very-long-terminal-label".into();
+        let id = app.terminals.active.as_ref().unwrap().id;
         let (hint, key) = tab_action_hint(&app, TerminalTabAction::Activate(id));
         assert!(hint.contains("very-long-terminal-label"));
         assert_eq!(key.as_deref(), Some("Alt+1"));
@@ -596,9 +613,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        let first = app.terminal.as_ref().unwrap().id;
+        let first = app.terminals.active.as_ref().unwrap().id;
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
-        let active_before = app.terminal.as_ref().unwrap().id;
+        let active_before = app.terminals.active.as_ref().unwrap().id;
         paint(&mut app, 95);
         let inactive_rect = app
             .terminal_tab_hits
@@ -640,7 +657,7 @@ mod tests {
             workspace_palette().selection
         );
         assert_eq!(
-            app.terminal.as_ref().unwrap().id,
+            app.terminals.active.as_ref().unwrap().id,
             active_before,
             "hover must not activate tab"
         );
@@ -665,9 +682,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        let first = app.terminal.as_ref().unwrap().id;
+        let first = app.terminals.active.as_ref().unwrap().id;
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
-        let second = app.terminal.as_ref().unwrap().id;
+        let second = app.terminals.active.as_ref().unwrap().id;
         paint(&mut app, 95);
         let first_body = app
             .terminal_tab_hits
@@ -683,18 +700,18 @@ mod tests {
             .0;
         assert_eq!(first_body.right(), first_close.x);
         click(&mut app, TerminalTabAction::Activate(first));
-        assert_eq!(app.terminal.as_ref().unwrap().id, first);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, first);
         paint(&mut app, 95);
         click(&mut app, TerminalTabAction::Close(second));
-        assert_eq!(app.terminal.as_ref().unwrap().id, first);
-        assert!(app.terminal_tabs.is_empty());
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, first);
+        assert!(app.terminals.inactive().is_empty());
         paint(&mut app, 95);
         click(&mut app, TerminalTabAction::New);
-        assert_ne!(app.terminal.as_ref().unwrap().id, first);
-        assert_eq!(app.terminal_tabs.len(), 1);
+        assert_ne!(app.terminals.active.as_ref().unwrap().id, first);
+        assert_eq!(app.terminals.inactive().len(), 1);
         paint(&mut app, 95);
         click(&mut app, TerminalTabAction::Hide);
-        assert!(!app.terminal.as_ref().unwrap().visible);
+        assert!(!app.terminals.active.as_ref().unwrap().is_visible());
     }
 
     #[tokio::test]
@@ -702,20 +719,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-        let first = app.terminal.as_ref().unwrap().id;
+        let first = app.terminals.active.as_ref().unwrap().id;
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
-        let second = app.terminal.as_ref().unwrap().id;
+        let second = app.terminals.active.as_ref().unwrap().id;
         app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
-        let third = app.terminal.as_ref().unwrap().id;
+        let third = app.terminals.active.as_ref().unwrap().id;
         app.handle_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::ALT));
-        assert_eq!(app.terminal.as_ref().unwrap().id, first);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, first);
         app.handle_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
-        assert_eq!(app.terminal.as_ref().unwrap().id, third);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, third);
         app.handle_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::ALT));
-        assert_eq!(app.terminal.as_ref().unwrap().id, second);
+        assert_eq!(app.terminals.active.as_ref().unwrap().id, second);
         app.handle_key(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::ALT));
         assert_eq!(
-            app.terminal.as_ref().unwrap().id,
+            app.terminals.active.as_ref().unwrap().id,
             second,
             "missing numbered tab must be no-op"
         );
@@ -725,11 +742,11 @@ mod tests {
         assert!(footer.iter().any(|s| s.key == "F4" && s.label == "Help"));
         app.handle_key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE));
         assert!(app.session.help_open);
-        assert!(!app.terminal.as_ref().unwrap().focused);
+        assert!(!app.terminals.active.as_ref().unwrap().is_focused());
         assert!(app.terminal_help_return);
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.session.help_open);
-        assert!(app.terminal.as_ref().unwrap().focused);
+        assert!(app.terminals.active.as_ref().unwrap().is_focused());
         assert!(!app.terminal_help_return);
     }
 
@@ -784,14 +801,14 @@ mod tests {
         assert!(close.width > 0);
         help_mouse(&mut app, close.x, close.y);
         assert!(!app.session.help_open);
-        assert!(app.terminal.as_ref().unwrap().focused);
+        assert!(app.terminals.active.as_ref().unwrap().is_focused());
 
         paint(&mut app, 110);
         click(&mut app, TerminalTabAction::Help);
         render_help(&mut app);
         help_mouse(&mut app, 0, 0); // Clicking outside overlay closes it.
         assert!(!app.session.help_open);
-        assert!(app.terminal.as_ref().unwrap().focused);
+        assert!(app.terminals.active.as_ref().unwrap().is_focused());
 
         // A stale file-find must not steal Esc when Help owns keyboard focus.
         app.preview_state.find.open = true;
@@ -801,7 +818,7 @@ mod tests {
         assert!(app.session.help_open);
         app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.session.help_open);
-        assert!(app.terminal.as_ref().unwrap().focused);
+        assert!(app.terminals.active.as_ref().unwrap().is_focused());
     }
 
     #[tokio::test]
@@ -832,7 +849,7 @@ mod tests {
         for _ in 0..6 {
             app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::SHIFT));
         }
-        let current = app.terminal.as_ref().unwrap().id;
+        let current = app.terminals.active.as_ref().unwrap().id;
         for width in [10, 20, 36, 60, 120] {
             paint(&mut app, width);
             assert!(

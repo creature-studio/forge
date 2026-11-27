@@ -292,8 +292,8 @@ fn foreground_owner(_master: &dyn MasterPty) -> Option<i32> {
 
 pub struct EmbeddedTerminal {
     pub id: u64,
-    pub visible: bool,
-    pub focused: bool,
+    visible: bool,
+    focused: bool,
     pub maximized: bool,
     pub revision: Arc<AtomicU64>,
     pub drawn_revision: u64,
@@ -327,6 +327,33 @@ pub struct EmbeddedTerminal {
 }
 
 impl EmbeddedTerminal {
+    /// The workspace retains its last pane focus while the PTY owns input.
+    /// Visibility and terminal focus are changed only through these methods.
+    pub(super) fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    pub(super) fn is_focused(&self) -> bool {
+        self.focused
+    }
+
+    pub(super) fn set_focused(&mut self, focused: bool) {
+        self.focused = focused && self.visible && !self.ended.load(Ordering::Acquire);
+    }
+
+    pub(super) fn set_visible(&mut self, visible: bool) {
+        self.visible = visible;
+        if !visible {
+            self.cancel_pointer_capture();
+            self.set_focused(false);
+        }
+    }
+
+    pub(super) fn activate(&mut self) {
+        self.set_visible(true);
+        self.set_focused(true);
+    }
+
     pub fn start(
         cwd: &Path,
         width: u16,
@@ -744,6 +771,27 @@ impl EmbeddedTerminal {
         self.left_gesture.is_some()
     }
 
+    /// End a previous gesture before a new press or a modal handoff.
+    /// A native child receives its release; a pending click is discarded.
+    pub(super) fn cancel_pointer_capture(&mut self) {
+        if self.left_gesture == Some(LeftGesture::ChildMouse) {
+            let (x, y) = self
+                .native_highlight
+                .map(|(_, end)| end)
+                .or(self.native_press)
+                .unwrap_or_default();
+            let _ = self.mouse(MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: self.area.x.saturating_add(x),
+                row: self.area.y.saturating_add(y),
+                modifiers: KeyModifiers::NONE,
+            });
+        }
+        self.left_gesture = None;
+        self.selection_edge = None;
+        self.native_press = None;
+    }
+
     /// Toggle this tab between selection-first and protocol-first routing.
     /// A gesture already in progress keeps its existing owner until release.
     pub(super) fn toggle_mouse_routing(&mut self) -> MouseRouting {
@@ -922,7 +970,7 @@ impl EmbeddedTerminal {
         }
 
         if matches!(event.kind, MouseEventKind::Down(MouseButton::Left)) {
-            self.focused = true;
+            self.set_focused(true);
             self.selection = None;
             self.selection_edge = None;
             self.native_highlight = None;
@@ -2007,7 +2055,7 @@ mod tests {
             .lock()
             .unwrap()
             .process(b"\x1b[3;3HTERMINAL SELECTION");
-        app.terminal = Some(terminal);
+        app.terminals.active = Some(terminal);
         let send = |app: &mut crate::App, kind: MouseEventKind, column, row| {
             app.handle_mouse(MouseEvent {
                 kind,
@@ -2018,18 +2066,23 @@ mod tests {
         };
         send(&mut app, MouseEventKind::Down(MouseButton::Left), 22, 7);
         send(&mut app, MouseEventKind::Drag(MouseButton::Left), 26, 7);
-        assert!(app.terminal.as_ref().unwrap().captures_left_drag());
+        assert!(app.terminals.active.as_ref().unwrap().captures_left_drag());
         assert_eq!(
-            app.terminal.as_ref().unwrap().selection,
+            app.terminals.active.as_ref().unwrap().selection,
             Some(((2, 2), (6, 2)))
         );
         send(&mut app, MouseEventKind::Up(MouseButton::Left), 26, 7);
         assert_eq!(
-            app.terminal.as_ref().unwrap().selected_text().as_deref(),
+            app.terminals
+                .active
+                .as_ref()
+                .unwrap()
+                .selected_text()
+                .as_deref(),
             Some("TERMI")
         );
         assert_eq!(app.session.status, "Terminal selected 5 characters");
-        assert!(!app.terminal.as_ref().unwrap().captures_left_drag());
+        assert!(!app.terminals.active.as_ref().unwrap().captures_left_drag());
 
         send(&mut app, MouseEventKind::Down(MouseButton::Left), 22, 7);
         send(&mut app, MouseEventKind::Drag(MouseButton::Left), 26, 7);
@@ -2038,10 +2091,10 @@ mod tests {
         // pressed state into the next interaction.
         send(&mut app, MouseEventKind::Up(MouseButton::Left), 1, 4);
         assert_eq!(
-            app.terminal.as_ref().unwrap().selection,
+            app.terminals.active.as_ref().unwrap().selection,
             Some(((2, 2), (0, 0)))
         );
-        assert!(!app.terminal.as_ref().unwrap().captures_left_drag());
+        assert!(!app.terminals.active.as_ref().unwrap().captures_left_drag());
         assert!(app.session.status.contains("Terminal selected"));
     }
 
@@ -2095,19 +2148,19 @@ mod tests {
             &mut term.writer,
             Arc::new(InputWriter::capture(Box::new(Capture(recorded.clone())))),
         );
-        app.terminal = Some(term);
+        app.terminals.active = Some(term);
 
         // Forge cannot infer the child's own selection state. Let Codex (or
         // any mouse-aware TUI) handle Ctrl+C without stealing the shortcut.
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert_eq!(&*recorded.lock().unwrap(), b"\x03");
         assert!(!app.session.should_quit);
-        assert!(app.terminal.as_ref().unwrap().selection.is_none());
+        assert!(app.terminals.active.as_ref().unwrap().selection.is_none());
         assert!(app.session.terminal_copy_notice.is_none());
 
         // Forge's explicit host shortcut copies a host selection without
         // sending anything new to the foreground process.
-        app.terminal.as_mut().unwrap().selection = Some(((0, 0), (12, 0)));
+        app.terminals.active.as_mut().unwrap().selection = Some(((0, 0), (12, 0)));
         app.handle_key(KeyEvent::new(
             KeyCode::Char('c'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT,
@@ -2120,7 +2173,7 @@ mod tests {
             "Copied to clipboard"
         );
 
-        let term = app.terminal.as_mut().unwrap();
+        let term = app.terminals.active.as_mut().unwrap();
         term.writer = original;
     }
 

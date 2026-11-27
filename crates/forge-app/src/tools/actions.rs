@@ -7,7 +7,7 @@ impl App {
         let paths = self.operation_paths();
         let current = self.current_path();
         let relative = |p: &Path| {
-            p.strip_prefix(&self.files.tree_root)
+            p.strip_prefix(self.files.root())
                 .unwrap_or(p)
                 .to_string_lossy()
                 .into_owned()
@@ -21,8 +21,8 @@ impl App {
                     p.parent().unwrap_or(p).to_owned()
                 }
             })
-            .unwrap_or_else(|| self.files.tree_root.clone());
-        let prefix = if parent == self.files.tree_root {
+            .unwrap_or_else(|| self.files.root().to_path_buf());
+        let prefix = if parent == self.files.root() {
             String::new()
         } else {
             format!("{}/", relative(&parent))
@@ -34,9 +34,9 @@ impl App {
                 match next.save() {
                     Ok(()) => {
                         self.config = next;
-                        self.preview_state.text_rows.clear();
-                        self.preview_state.preview_scroll_x = 0;
-                        self.preview_state.preview_scroll = 0;
+                        self.preview_state.presentation.text_rows.clear();
+                        self.preview_state.presentation.preview_scroll_x = 0;
+                        self.preview_state.presentation.preview_scroll = 0;
                         self.reset_blame();
                         self.reset_inline_diff();
                         self.session.status = format!("Code auto wrap: {} · saved", if self.config.wrap_code { "On" } else { "Off" });
@@ -57,7 +57,7 @@ impl App {
                     Ok(()) => {
                         self.config = next;
                         // A changed preview width is measured on the next draw.
-                        self.preview_state.text_rows.clear();
+                        self.preview_state.presentation.text_rows.clear();
                         self.blame.cursor = None;
                         self.session.status = format!("Focus Overview: {} · saved",
                             if self.config.show_overview_ruler { "On" } else { "Off" });
@@ -106,7 +106,7 @@ impl App {
                 match next.save() {
                     Ok(()) => {
                         self.config = next;
-                        self.preview_state.text_rows.clear();
+                        self.preview_state.presentation.text_rows.clear();
                         self.session.status = format!("Theme: {theme} · saved");
                         let selected = self.tools.panel.as_ref().map_or(0, |p| p.selected);
                         self.reload_tools();
@@ -136,7 +136,7 @@ impl App {
                     Ok(()) => {
                         let current = self.selected_scm_row();
                         self.config = next;
-                        self.files.compact_expand_pending = None;
+                        self.files.cancel_compact_expansion();
                         self.rebuild_visible_preserving_selection();
                         let rows = self.scm_rows();
                         let target = current.as_ref().and_then(|old| {
@@ -251,8 +251,8 @@ impl App {
                 match next.save() {
                     Ok(()) => {
                         self.config = next;
-                        self.tools.filter.show_hidden = self.config.show_hidden_files;
-                        self.files.revealed_path = None;
+                        self.workspace_filter.show_hidden = self.config.show_hidden_files;
+                        self.files.clear_reveal_override();
                         self.rebuild_visible_preserving_selection();
                         self.request_missing_expanded();
                         self.request_list();
@@ -276,12 +276,12 @@ impl App {
             }
             All | Modified | Untracked => {
                 // Explicit filter changes supersede any one-off Reveal override.
-                self.files.revealed_path = None;
-                match command { All => { self.tools.filter.status = 0; self.tools.filter.extension.clear(); }, Modified => self.tools.filter.status = 1, Untracked => self.tools.filter.status = 2, _=>{} }
+                self.files.clear_reveal_override();
+                match command { All => { self.workspace_filter.status = 0; self.workspace_filter.extension.clear(); }, Modified => self.workspace_filter.status = 1, Untracked => self.workspace_filter.status = 2, _=>{} }
                 self.rebuild_visible_preserving_selection(); self.close_tools(); self.request_preview_for_selection();
             }
-            Extension => self.prompt(PromptAction::Extension,"Filter extension",self.tools.filter.extension.clone(),"Extension without wildcard, e.g. rs or ts · empty clears"),
-            Exclusions => self.prompt(PromptAction::Exclusions,"Excluded directory names",if self.tools.filter.excluded.is_empty() { "target,node_modules".into() } else { self.tools.filter.excluded.clone() },"Comma-separated names · .git is always hidden · use a comma alone to clear defaults"),
+            Extension => self.prompt(PromptAction::Extension,"Filter extension",self.workspace_filter.extension.clone(),"Extension without wildcard, e.g. rs or ts · empty clears"),
+            Exclusions => self.prompt(PromptAction::Exclusions,"Excluded directory names",if self.workspace_filter.excluded.is_empty() { "target,node_modules".into() } else { self.workspace_filter.excluded.clone() },"Comma-separated names · .git is always hidden · use a comma alone to clear defaults"),
             Discard => self.discard_selection(),
             Branches => self.open_tools(PanelKind::Git(GitQuery::Branches)), Stashes => self.open_tools(PanelKind::Git(GitQuery::Stashes)), Conflicts => self.open_tools(PanelKind::Git(GitQuery::Conflicts)),
             Amend => self.prompt(PromptAction::Amend,"Amend latest commit",String::new(),"New commit message · includes ALL staged changes · rewrites HEAD · confirmation follows"),
@@ -321,7 +321,7 @@ impl App {
                 if path.is_absolute() {
                     path
                 } else {
-                    self.files.tree_root.join(path)
+                    self.files.root().join(path)
                 }
             };
             let path = match path.canonicalize() {
@@ -350,11 +350,11 @@ impl App {
             return;
         }
         if matches!(action, Extension | Exclusions) {
-            self.files.revealed_path = None;
+            self.files.clear_reveal_override();
             if matches!(action, Extension) {
-                self.tools.filter.extension = value.trim().trim_start_matches('.').into();
+                self.workspace_filter.extension = value.trim().trim_start_matches('.').into();
             } else {
-                self.tools.filter.excluded = value;
+                self.workspace_filter.excluded = value;
             }
             self.close_tools();
             self.rebuild_visible_preserving_selection();
@@ -364,6 +364,36 @@ impl App {
         if value.trim().is_empty() {
             if let Some(p) = &mut self.tools.panel {
                 p.message = "Value is required".into();
+            }
+            return;
+        }
+        if let PasteConflict {
+            paths,
+            destination,
+            copy,
+        } = action
+        {
+            let conflict = match value.trim().to_ascii_lowercase().as_str() {
+                "skip" => ConflictPolicy::Skip,
+                "keep" => ConflictPolicy::KeepBoth,
+                "replace" => ConflictPolicy::Replace,
+                _ => {
+                    if let Some(panel) = &mut self.tools.panel {
+                        panel.message = "Enter skip, keep, or replace".into();
+                    }
+                    return;
+                }
+            };
+            let operation = Operation::Files(FileOperation::Paste {
+                paths,
+                destination,
+                copy,
+                conflict,
+            });
+            if conflict == ConflictPolicy::Replace {
+                self.confirm(operation, "Replace conflicting regular files? Existing contents will be removed. Directories and links are never replaced.".into(), None);
+            } else {
+                self.start_tool_operation(operation, None);
             }
             return;
         }
@@ -394,7 +424,7 @@ impl App {
             Worktree => Operation::Git(GitAction::AddWorktree(if path.is_absolute() {
                 path
             } else {
-                self.files.tree_root.join(path)
+                self.files.root().join(path)
             })),
             _ => return,
         };
@@ -450,7 +480,7 @@ impl App {
             );
             return;
         }
-        let Some(snapshot) = &self.scm.git_status else {
+        let Some(snapshot) = self.scm.status() else {
             self.session.status = "Refresh Git status first".into();
             return;
         };
@@ -489,9 +519,9 @@ impl App {
                     .and_then(|entry| self.repo_root().map(|root| root.join(&entry.path))),
                 Some(ScmRow::CommitFile { commit, index, .. }) => self
                     .history
-                    .commits
+                    .commits()
                     .get(commit)
-                    .and_then(|c| self.history.files.get(&c.id))
+                    .and_then(|c| self.history.files().get(&c.id))
                     .and_then(|files| files.get(index))
                     .and_then(|entry| self.repo_root().map(|root| root.join(&entry.path))),
                 _ if self.session.focus == PaneFocus::Preview
@@ -534,15 +564,14 @@ impl App {
         // Loading a preview normally focuses the right pane. For Open file
         // retain the Files tree so the expanded/selected path stays visible,
         // particularly on narrow terminals showing only one pane.
-        self.tools.return_focus = Some(PaneFocus::List);
-        self.reveal_file(path.clone(), 1);
+        self.reveal_file_with_focus(path.clone(), 1, PaneFocus::List);
         self.session.status = format!("Opening {}", path.display());
     }
 
     /// Discard only tracked, unstaged, non-conflicted files under an exact file
     /// or directory path. The index and untracked files remain untouched.
     pub(crate) fn has_discardable_changes_under(&self, scope: &Path) -> bool {
-        self.scm.git_status.as_ref().is_some_and(|snap| {
+        self.scm.status().as_ref().is_some_and(|snap| {
             scope.starts_with(&snap.repo_root)
                 && snap.unstaged.iter().any(|e| {
                     !matches!(
@@ -554,7 +583,7 @@ impl App {
     }
 
     pub(crate) fn discard_scope(&mut self, selected: Vec<PathBuf>) {
-        let Some(snapshot) = &self.scm.git_status else {
+        let Some(snapshot) = self.scm.status() else {
             self.session.status = "Refresh Git status first".into();
             return;
         };
@@ -663,10 +692,14 @@ impl App {
             return;
         }
         self.cancel_tool_read();
-        let root = self.files.tree_root.clone();
+        let root = self.files.root().to_path_buf();
         let repo = self.repo_root().unwrap_or_else(|| root.clone());
         let git = self.services.git;
         let fetch = matches!(operation, Operation::Git(GitAction::Fetch));
+        self.tools.paste_in_progress = matches!(
+            &operation,
+            Operation::Files(FileOperation::Paste { copy: false, .. })
+        );
         self.tools.after = after;
         self.tools.pending_task = Some(self.services.jobs.spawn(
             JobPriority::High,

@@ -151,8 +151,52 @@ pub(super) fn relevant(event: &notify::Event, root: &Path) -> bool {
     })
 }
 
+/// An open document has its own watch identity, even when its file-tree
+/// ancestors are collapsed or hidden by a filter.
+pub(super) fn touches_document(event: &notify::Event, document: &Path) -> bool {
+    !matches!(event.kind, notify::EventKind::Access(_))
+        && event.paths.iter().any(|path| document.starts_with(path))
+}
+
+impl super::App {
+    pub(super) fn watched_document(&self, git_root: &Path) -> Option<PathBuf> {
+        use super::{DiffSource, PreviewMode};
+        match self.preview_state.preview_mode {
+            PreviewMode::File => self
+                .preview_state
+                .pending_preview
+                .as_ref()
+                .map(|p| p.path.clone())
+                .or_else(|| self.preview_state.preview.as_ref().map(|p| p.path.clone())),
+            PreviewMode::Diff => {
+                if let Some(pending) = &self.preview_state.pending_diff {
+                    return matches!(pending.source, DiffSource::Working(_))
+                        .then(|| git_root.join(&pending.path));
+                }
+                matches!(self.preview_state.diff_source, DiffSource::Working(_))
+                    .then(|| {
+                        self.preview_state
+                            .file_diff
+                            .as_ref()
+                            .map(|diff| git_root.join(&diff.path))
+                    })
+                    .flatten()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_document_watch_is_path_scoped_not_tree_scoped() {
+        let document = Path::new("/repo/collapsed/a.rs");
+        assert!(touches_document(&event("/repo/collapsed/a.rs"), document));
+        assert!(touches_document(&event("/repo/collapsed"), document));
+        assert!(!touches_document(&event("/repo/collapsed/b.rs"), document));
+        assert!(!touches_document(&event("/repo/other"), document));
+    }
+
     #[test]
     fn bounded_mailbox_signals_overflow_and_recovers() {
         let (queue, mut receiver) = super::WatchMailbox::new(1);
@@ -271,7 +315,7 @@ mod selection_tests {
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         app.files.pending_lists.clear();
         app.scm.pending_status = None;
-        app.scm.status_rerun = false;
+        app.scm.take_deferred_status_refresh();
 
         app.request_status();
         let first = app
@@ -281,7 +325,10 @@ mod selection_tests {
             .expect("first status job")
             .id;
         app.request_status();
-        assert!(app.scm.status_rerun, "overlapping request must be deferred");
+        assert!(
+            app.scm.status_refresh_deferred(),
+            "overlapping request must be deferred"
+        );
         assert_eq!(
             app.scm.pending_status.as_ref().unwrap().id,
             first,
@@ -306,7 +353,7 @@ mod selection_tests {
         .await
         .expect("deferred status job should start");
 
-        assert!(!app.scm.status_rerun);
+        assert!(!app.scm.status_refresh_deferred());
         tokio::time::timeout(Duration::from_secs(5), async {
             while app.scm.pending_status.is_some() {
                 app.poll_pending_status();
@@ -369,7 +416,7 @@ mod selection_tests {
         })
         .await
         .expect("initial status");
-        assert!(app.scm.git_status.as_ref().unwrap().unstaged.is_empty());
+        assert!(app.scm.status().as_ref().unwrap().unstaged.is_empty());
 
         // No watcher callback is delivered in this test.
         std::fs::write(&tracked, "changed elsewhere\n").unwrap();
@@ -386,14 +433,21 @@ mod selection_tests {
         })
         .await
         .expect("status on Git entry");
-        assert_eq!(app.scm.git_status.as_ref().unwrap().unstaged.len(), 1);
+        assert_eq!(app.scm.status().as_ref().unwrap().unstaged.len(), 1);
 
         app.set_sidebar_visible(false);
         std::fs::write(&tracked, "original\n").unwrap();
         app.set_sidebar_visible(true);
         assert!(
+            app.scm.pending_status.is_none(),
+            "layout must not schedule a Git read"
+        );
+        assert!(!app.periodic_git_status_due(Instant::now()));
+        app.set_sidebar_visible(false);
+        app.tick_git_status_at(Instant::now() + Duration::from_secs(16));
+        assert!(
             app.scm.pending_status.is_some(),
-            "reopening Git should request status"
+            "freshness reconciles while hidden"
         );
         tokio::time::timeout(Duration::from_secs(5), async {
             while app.scm.pending_status.is_some() {
@@ -402,8 +456,8 @@ mod selection_tests {
             }
         })
         .await
-        .expect("status on Git reopen");
-        assert!(app.scm.git_status.as_ref().unwrap().unstaged.is_empty());
+        .expect("independent periodic reconciliation");
+        assert!(app.scm.status().as_ref().unwrap().unstaged.is_empty());
     }
 
     async fn flush_preview(app: &mut App) {
@@ -418,6 +472,73 @@ mod selection_tests {
         })
         .await
         .expect("file preview should finish");
+    }
+
+    #[tokio::test]
+    async fn empty_or_changed_file_projection_cannot_reset_open_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("reading.rs");
+        let other = dir.path().join("other.txt");
+        let content = |prefix: &str| {
+            (0..1500)
+                .map(|i| format!("{prefix} line {i}\n"))
+                .collect::<String>()
+        };
+        std::fs::write(&file, content("old")).unwrap();
+        std::fs::write(&other, "other document").unwrap();
+        let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
+        flush_lists(&mut app).await;
+        app.files.selected = app
+            .files
+            .visible
+            .iter()
+            .position(|row| row.entry.path == file)
+            .unwrap();
+        app.request_preview_for_selection();
+        app.workspace_filter.extension = "no-such-extension".into();
+        app.rebuild_visible_preserving_selection();
+        assert!(app.files.visible.is_empty());
+        flush_preview(&mut app).await;
+        assert_eq!(app.preview_state.preview.as_ref().unwrap().path, file);
+        app.preview_state.presentation.preview_scroll = 25;
+        std::fs::write(&file, content("new")).unwrap();
+        app.request_list();
+        assert_eq!(app.preview_state.presentation.preview_scroll, 25);
+        flush_lists(&mut app).await;
+        flush_preview(&mut app).await;
+        assert!(app.files.visible.is_empty());
+        assert_eq!(app.preview_state.preview.as_ref().unwrap().path, file);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 25);
+        assert!(
+            matches!(&app.preview_state.preview.as_ref().unwrap().content,
+            PreviewContent::Text { lines, .. } if lines[25].starts_with("new"))
+        );
+        app.workspace_filter.extension = "txt".into();
+        app.rebuild_visible_preserving_selection();
+        assert_eq!(app.selected_entry().unwrap().path, other);
+        app.request_list();
+        flush_lists(&mut app).await;
+        flush_preview(&mut app).await;
+        assert_eq!(app.preview_state.preview.as_ref().unwrap().path, file);
+        app.layout_state.geometry.preview_inner.height = 25;
+        app.scroll_preview(isize::MAX - 1);
+        assert!(app.preview_state.pending_page.is_some());
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while app.preview_state.pending_page.is_some() {
+                app.poll_pending_page();
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            matches!(&app.preview_state.preview.as_ref().unwrap().content,
+            PreviewContent::Text { lines, .. } if lines.len() > 400)
+        );
+        assert_eq!(app.preview_state.preview.as_ref().unwrap().path, file);
+        app.request_preview_for_selection();
+        flush_preview(&mut app).await;
+        assert_eq!(app.preview_state.preview.as_ref().unwrap().path, other);
     }
 
     #[tokio::test]
@@ -480,7 +601,7 @@ mod selection_tests {
             .unwrap();
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
-        app.preview_state.preview_scroll = 125;
+        app.preview_state.presentation.preview_scroll = 125;
         assert!(app.preview_total_lines() >= 250);
         let before = app.preview_state.preview.clone();
 
@@ -490,7 +611,7 @@ mod selection_tests {
         app.refresh_external_changes(false);
         flush_lists(&mut app).await;
         assert_eq!(app.selected_entry().unwrap().path, file);
-        assert_eq!(app.preview_state.preview_scroll, 125);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 125);
         assert!(app.preview_state.pending_preview.is_none());
         assert_eq!(app.preview_state.preview, before);
 
@@ -503,7 +624,7 @@ mod selection_tests {
             .position(|row| row.entry.path == other)
             .unwrap();
         app.request_preview_for_selection();
-        assert_eq!(app.preview_state.preview_scroll, 0);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     }
 
     #[tokio::test]
@@ -533,7 +654,7 @@ mod selection_tests {
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
         assert!(app.preview_total_lines() >= 250);
-        app.preview_state.preview_scroll = 88;
+        app.preview_state.presentation.preview_scroll = 88;
 
         std::fs::write(&file, new_content).unwrap();
         app.refresh_external_changes(false);
@@ -542,11 +663,11 @@ mod selection_tests {
             !app.preview_state.preview_loading,
             "keep the previous preview on screen while reloading"
         );
-        assert_eq!(app.preview_state.preview_scroll, 88);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 88);
         flush_lists(&mut app).await;
         flush_preview(&mut app).await;
         assert_eq!(app.selected_entry().unwrap().path, file);
-        assert_eq!(app.preview_state.preview_scroll, 88);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 88);
         match &app.preview_state.preview.as_ref().unwrap().content {
             PreviewContent::Text { lines, .. } => assert!(lines[0].contains("new line 0")),
             other => panic!("expected updated text preview, got {other:?}"),
@@ -568,13 +689,13 @@ mod selection_tests {
             .unwrap();
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
-        app.preview_state.preview_scroll = 1;
+        app.preview_state.presentation.preview_scroll = 1;
         app.refresh_preview_if_affected(&[
             dir.path().join(".git/index"),
             dir.path().join("other.rs"),
         ]);
         assert!(app.preview_state.pending_preview.is_none());
-        assert_eq!(app.preview_state.preview_scroll, 1);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 1);
     }
 
     #[tokio::test]
@@ -598,7 +719,7 @@ mod selection_tests {
             .unwrap();
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
-        app.session.layout.preview_inner.height = 25;
+        app.layout_state.geometry.preview_inner.height = 25;
         let mut iterations = 0;
         loop {
             let more = matches!(
@@ -636,7 +757,7 @@ mod selection_tests {
         assert_eq!(lines.len(), 2400);
         assert_eq!(lines[2399], "let row_2399 = 2399;");
         assert!(!truncated);
-        assert!(app.preview_state.preview_scroll > 0);
+        assert!(app.preview_state.presentation.preview_scroll > 0);
     }
 
     #[tokio::test]
@@ -673,7 +794,7 @@ mod selection_tests {
             .position(|row| row.entry.path == folder)
             .unwrap();
         app.request_preview_for_selection(); // Directory deliberately leaves previous preview intact.
-        app.session.layout.preview_inner.height = 25;
+        app.layout_state.geometry.preview_inner.height = 25;
         app.scroll_preview(isize::MAX - 1);
         assert!(app.preview_state.pending_page.is_some());
         tokio::time::timeout(Duration::from_secs(5), async {
@@ -712,7 +833,7 @@ mod selection_tests {
             .unwrap();
         app.request_preview_for_selection();
         flush_preview(&mut app).await;
-        app.session.layout.preview_inner.height = 18;
+        app.layout_state.geometry.preview_inner.height = 18;
         app.scroll_preview(isize::MAX - 1);
         assert!(app.preview_state.pending_page.is_some());
         app.files.selected = app
@@ -754,7 +875,7 @@ mod selection_tests {
             .iter()
             .position(|row| row.entry.path == target)
             .unwrap();
-        app.session.layout.list_inner.height = 14;
+        app.layout_state.geometry.list_inner.height = 14;
         app.files.scroll = app.files.selected - 5;
         let original_scroll = app.files.scroll;
         let original_count = app.files.visible.len();
@@ -791,7 +912,7 @@ mod selection_tests {
             flush_lists(&mut app).await;
             assert_eq!(app.selected_entry().unwrap().path, target);
             assert_eq!(app.files.scroll, original_scroll);
-            assert!(app.files.external_anchor.is_none());
+            assert!(app.files.refresh_anchor_path().is_none());
         }
     }
 
@@ -837,8 +958,8 @@ mod selection_tests {
         assert!(matches!(&preview.content,
             PreviewContent::Text { lines, .. } if lines.len() >= 2000));
         app.preview_state.preview = Some(preview);
-        app.preview_state.preview_scroll = 1580;
-        app.session.layout.preview_inner.height = 25;
+        app.preview_state.presentation.preview_scroll = 1580;
+        app.layout_state.geometry.preview_inner.height = 25;
 
         std::fs::write(
             &file,
@@ -853,14 +974,14 @@ mod selection_tests {
             !app.preview_state.preview_loading,
             "refresh should continue displaying the old scrolled content"
         );
-        assert_eq!(app.preview_state.preview_scroll, 1580);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 1580);
         assert!(
             matches!(&app.preview_state.preview.as_ref().unwrap().content,
             PreviewContent::Text { lines, .. } if lines[1580].starts_with("old"))
         );
         flush_preview(&mut app).await;
         flush_lists(&mut app).await;
-        assert_eq!(app.preview_state.preview_scroll, 1580);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 1580);
         assert_eq!(app.selected_entry().unwrap().path, file);
         assert!(
             matches!(&app.preview_state.preview.as_ref().unwrap().content,
@@ -869,10 +990,10 @@ mod selection_tests {
         );
         // Manual refresh must also retain the same viewport.
         app.request_list();
-        assert_eq!(app.preview_state.preview_scroll, 1580);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 1580);
         flush_lists(&mut app).await;
         flush_preview(&mut app).await;
-        assert_eq!(app.preview_state.preview_scroll, 1580);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 1580);
     }
 
     #[tokio::test]

@@ -145,9 +145,8 @@ impl App {
             self.preview_state.markdown_code = true;
         }
         self.preview_state.find.open = true;
-        self.preview_state.find.input_active = true;
+        self.focus_find_input();
         self.preview_state.find.cursor = self.preview_state.find.query.len();
-        self.session.focus = PaneFocus::Preview;
         if !self.preview_state.find.query.is_empty() && self.preview_state.find.matches.is_empty() {
             self.start_file_find();
         }
@@ -155,7 +154,7 @@ impl App {
 
     pub(super) fn close_file_find(&mut self) {
         self.preview_state.find.open = false;
-        self.preview_state.find.input_active = false;
+        self.blur_find_input();
         self.preview_state.find.jump_target = None;
         self.preview_state.find.pending = None;
         self.services.jobs.cancel_key("fs:file-find");
@@ -297,14 +296,18 @@ impl App {
         };
         if lines.len() >= line {
             self.preview_state.find.jump_target = None;
-            self.preview_state.pending_source_line = Some(line);
-            self.preview_state.pending_find_byte = self
+            self.preview_state.navigation.pending_source_line = Some(line);
+            self.preview_state.navigation.pending_find_byte = self
                 .preview_state
                 .find
                 .active
                 .and_then(|i| self.preview_state.find.matches.get(i))
                 .map(|hit| hit.start);
-            self.preview_state.preview_scroll = self.preview_state.text_rows.source_to_row(line);
+            self.preview_state.presentation.preview_scroll = self
+                .preview_state
+                .presentation
+                .text_rows
+                .source_to_row(line);
         } else if *truncated {
             self.maybe_request_preview_page();
         } else {
@@ -327,7 +330,7 @@ impl App {
             return;
         }
         if matches!(key.code, KeyCode::Tab) {
-            self.preview_state.find.input_active = false;
+            self.blur_find_input();
             return;
         }
         if matches!(key.code, KeyCode::F(3)) {
@@ -527,8 +530,8 @@ mod tests {
         std::fs::write(&file, content).unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         ready_file(&mut app, &file).await;
-        app.session.layout.preview_inner.height = 20;
-        app.session.layout.preview_inner.width = 40;
+        app.layout_state.geometry.preview_inner.height = 20;
+        app.layout_state.geometry.preview_inner.width = 40;
         app.open_file_find();
         assert!(app.preview_state.find.open);
         app.preview_state.find.query = "needle".into();
@@ -551,9 +554,9 @@ mod tests {
         assert_eq!(app.preview_state.find.matches.len(), 1);
         assert_eq!(app.preview_state.find.active, Some(0));
         assert_eq!(app.preview_state.find.matches[0].line, 1744);
-        assert_eq!(app.preview_state.pending_source_line, Some(1744));
+        assert_eq!(app.preview_state.navigation.pending_source_line, Some(1744));
         let byte = app.preview_state.find.matches[0].start;
-        assert_eq!(app.preview_state.pending_find_byte, Some(byte));
+        assert_eq!(app.preview_state.navigation.pending_find_byte, Some(byte));
         assert!(matches!(
             &app.preview_state.preview.as_ref().unwrap().content,
             PreviewContent::Text { lines, .. } if lines.len() >= 1744
@@ -564,7 +567,7 @@ mod tests {
         assert_eq!(app.preview_state.find.active, Some(0));
         app.handle_file_find_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         assert!(!app.preview_state.find.open);
-        assert_eq!(app.preview_state.pending_source_line, Some(1744));
+        assert_eq!(app.preview_state.navigation.pending_source_line, Some(1744));
     }
 
     #[tokio::test]
@@ -581,7 +584,7 @@ mod tests {
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         ready_file(&mut app, &file).await;
         app.session.focus = PaneFocus::Preview;
-        app.preview_state.preview_scroll = 10;
+        app.preview_state.presentation.preview_scroll = 10;
         app.open_file_find();
         app.preview_state.find.query = "search".into();
         app.start_file_find();
@@ -592,7 +595,7 @@ mod tests {
         assert!(app.preview_state.find.jump_target.is_none());
         tokio::time::sleep(Duration::from_millis(200)).await;
         app.poll_file_find();
-        assert_eq!(app.preview_state.preview_scroll, 10);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 10);
         assert!(app.preview_state.find.matches.is_empty());
 
         // Reopen keeps the previous query but starts a fresh scan.

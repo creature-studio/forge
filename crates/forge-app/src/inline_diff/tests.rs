@@ -45,7 +45,7 @@ async fn app(root: &Path, path: &Path) -> App {
         bytes_read,
     } = &read.fresh.content
     {
-        app.preview_state.text_rows.ensure(
+        app.preview_state.presentation.text_rows.ensure(
             &forge_theme::Theme::modern_ide(),
             lines,
             *truncated,
@@ -185,9 +185,9 @@ async fn staged_and_unstaged_marks_are_both_visible_and_mapped() {
         Some((_, DiffSide::Staged))
     ));
     app.close_inline_peek();
-    app.session.layout.preview_inner = Rect::new(10, 2, 46, 12);
+    app.layout_state.geometry.preview_inner = Rect::new(10, 2, 46, 12);
     let line = app.inline_active().unwrap().staged_hunks[0].marks[0].0;
-    let y = 2 + app.preview_state.text_rows.source_to_row(line) as u16;
+    let y = 2 + app.preview_state.presentation.text_rows.source_to_row(line) as u16;
     assert!(app.inline_mouse(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 10,
@@ -256,7 +256,8 @@ async fn multiple_hunks_and_git_display_preferences_keep_source_coordinates() {
         app.inline_active().unwrap().hunks[1].marks,
         [(35, Change::Modified)]
     );
-    app.preview_state.preview_scroll = app.preview_state.text_rows.source_to_row(30);
+    app.preview_state.presentation.preview_scroll =
+        app.preview_state.presentation.text_rows.source_to_row(30);
     app.toggle_inline_peek();
     assert_eq!(app.inline_diff.open, Some(1));
     assert!(app.inline_active().unwrap().hunks[1]
@@ -270,11 +271,14 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
     let (dir, path) = fixture("old\nsecond\nthird\n");
     std::fs::write(&path, format!("{}\nsecond\nthird\n", "中文".repeat(30))).unwrap();
     let mut app = app(dir.path(), &path).await;
-    app.session.layout.preview_inner = Rect::new(10, 2, 24, 14);
-    let second = app.preview_state.text_rows.source_to_row(2);
+    app.layout_state.geometry.preview_inner = Rect::new(10, 2, 24, 14);
+    let second = app.preview_state.presentation.text_rows.source_to_row(2);
     assert!(second > 1);
     assert_eq!(
-        app.preview_state.text_rows.source_line_at(second - 1),
+        app.preview_state
+            .presentation
+            .text_rows
+            .source_line_at(second - 1),
         Some(1)
     );
     let click = |row| MouseEvent {
@@ -289,7 +293,7 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
     let backend = ratatui::backend::TestBackend::new(40, 20);
     let mut terminal = ratatui::Terminal::new(backend).unwrap();
     terminal
-        .draw(|f| app.draw_inline_diff(f, app.session.layout.preview_inner))
+        .draw(|f| app.draw_inline_diff(f, app.layout_state.geometry.preview_inner))
         .unwrap();
     let buffer = terminal.backend().buffer();
     // Both layers overlap on a newly added (uncommitted) file. The staged
@@ -302,7 +306,10 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
         "continuation must not be marked"
     );
     assert!(app.inline_diff.popup.width > 0);
-    assert_eq!(app.preview_state.text_rows.source_to_row(2), second);
+    assert_eq!(
+        app.preview_state.presentation.text_rows.source_to_row(2),
+        second
+    );
     let popup = app.inline_diff.popup;
     assert!(app.inline_mouse(MouseEvent {
         column: popup.x + 3,
@@ -337,7 +344,7 @@ async fn wrap_gutter_click_overlay_and_markdown_exclusion() {
     terminal
         .draw(|f| {
             let before = f.buffer_mut().clone();
-            app.draw_inline_diff(f, app.session.layout.preview_inner);
+            app.draw_inline_diff(f, app.layout_state.geometry.preview_inner);
             rendered = before != *f.buffer_mut();
         })
         .unwrap();
@@ -467,13 +474,13 @@ async fn overview_git_marks_cover_paged_files() {
         crossterm::event::KeyModifiers::ALT,
     ));
     assert!(
-        app.preview_state.pending_source_line == Some(550)
-            || app.preview_state.pending_overview_line == Some(550),
+        app.preview_state.navigation.pending_source_line == Some(550)
+            || app.preview_state.navigation.pending_overview_line == Some(550),
         "keyboard mark jump must retain source line 550",
     );
     // A focus jump can target an unloaded line without losing its identity.
-    app.preview_state.pending_overview_line = Some(550);
-    assert!(app.preview_state.pending_source_line.is_none());
+    app.preview_state.navigation.pending_overview_line = Some(550);
+    assert!(app.preview_state.navigation.pending_source_line.is_none());
 }
 
 #[tokio::test]
@@ -506,11 +513,11 @@ async fn long_hunk_peek_aligns_with_selected_blame_line_and_clicked_gutter() {
     std::fs::write(&path, changed).unwrap();
     let mut app = app(dir.path(), &path).await;
     let region = Rect::new(10, 3, 77, 30);
-    app.session.layout.preview_inner = region;
-    let source_row = |app: &App, line| app.preview_state.text_rows.source_to_row(line);
-    app.preview_state.preview_scroll = source_row(&app, 40);
+    app.layout_state.geometry.preview_inner = region;
+    let source_row = |app: &App, line| app.preview_state.presentation.text_rows.source_to_row(line);
+    app.preview_state.presentation.preview_scroll = source_row(&app, 40);
     let target = 64;
-    let scroll = app.preview_state.preview_scroll;
+    let scroll = app.preview_state.presentation.preview_scroll;
     app.blame.cursor = Some((path.clone(), source_row(&app, target), scroll));
 
     app.toggle_inline_peek();

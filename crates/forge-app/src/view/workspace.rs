@@ -12,7 +12,7 @@ pub(super) fn draw_workspace_header(
     // for complementary workspace counts instead of duplicating or cropping
     // a raw "## branch...origin" line.
     let branch = if area.width >= 70 {
-        if let Some(status) = &model.scm.git_status {
+        if let Some(status) = model.scm.status() {
             Line::from(vec![
                 Span::styled(
                     format!("{} changed", status.unstaged.len()),
@@ -44,11 +44,7 @@ pub(super) fn draw_workspace_header(
             ),
             Span::styled("  /  ", Style::default().fg(p.fg_dim)),
             Span::styled(
-                fit_label(
-                    &model.files.tree_root.display().to_string(),
-                    path_width,
-                    true,
-                ),
+                fit_label(&model.files.root().display().to_string(), path_width, true),
                 Style::default().fg(p.fg_dim),
             ),
         ]),
@@ -106,9 +102,9 @@ pub(super) fn draw_preview_heading(
     model: &mut App,
     p: Palette,
 ) -> Rect {
-    model.session.layout.markdown_preview_tab = Rect::default();
-    model.session.layout.markdown_code_tab = Rect::default();
-    model.session.layout.open_file_tab = Rect::default();
+    model.layout_state.geometry.markdown_preview_tab = Rect::default();
+    model.layout_state.geometry.markdown_code_tab = Rect::default();
+    model.layout_state.geometry.open_file_tab = Rect::default();
     let open_file_chip = if area.width >= 34
         && matches!(model.preview_state.preview_mode, PreviewMode::Diff)
         && model.preview_state.file_diff.as_ref().is_some_and(|diff| {
@@ -160,7 +156,7 @@ pub(super) fn draw_preview_heading(
             ),
             rect,
         );
-        model.session.layout.open_file_tab = rect;
+        model.layout_state.geometry.open_file_tab = rect;
     }
     if tabs_width > 0 {
         draw_markdown_tabs(
@@ -216,8 +212,8 @@ pub(super) fn draw_markdown_tabs(frame: &mut Frame<'_>, area: Rect, model: &mut 
             Rect::new(code.right() + 1, area.y, 2, area.height.min(1)),
         );
     }
-    model.session.layout.markdown_preview_tab = preview;
-    model.session.layout.markdown_code_tab = code;
+    model.layout_state.geometry.markdown_preview_tab = preview;
+    model.layout_state.geometry.markdown_code_tab = code;
 }
 
 /// A compact branch/tracking chip. Counts come only from the Git status
@@ -230,7 +226,7 @@ pub(super) fn git_status_chip(
     use super::git_sync_badge::GitSyncBadge;
     use unicode_width::UnicodeWidthStr;
     let badge = GitSyncBadge::parse(&model.scm.branch, &model.tools.sync)?;
-    if model.scm.git_status.is_none() || max_width < 10 {
+    if model.scm.status().is_none() || max_width < 10 {
         return None;
     }
 

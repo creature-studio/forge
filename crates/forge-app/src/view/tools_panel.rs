@@ -113,7 +113,7 @@ pub(super) fn draw_tools(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: 
             frame,
             body,
             panel,
-            &model.files.tree_root,
+            model.files.root(),
             context_path,
             context,
             loading,

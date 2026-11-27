@@ -44,7 +44,7 @@ fn fixture() -> (tempfile::TempDir, App) {
     app.scm.pending_status = None;
     app.session.activity = ActivityTab::Git;
     app.session.status.clear();
-    app.files.children.insert(
+    app.files.install_listing(
         root.to_owned(),
         vec![Entry {
             id: forge_model::PathId(1),
@@ -54,13 +54,15 @@ fn fixture() -> (tempfile::TempDir, App) {
         }],
     );
     app.rebuild_visible();
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     (dir, app)
 }
 
 async fn show_diff(app: &mut App, side: DiffSide) {
-    let root = app.files.tree_root.clone();
-    app.scm.git_status = Some(app.services.git.status(&root).unwrap());
+    let root = app.files.root().to_path_buf();
+    app.scm
+        .set_status(Some(app.services.git.status(&root).unwrap()));
     let column = if side == DiffSide::Unstaged {
         StagingColumn::Unstaged
     } else {
@@ -169,7 +171,7 @@ async fn finish_write_and_status(app: &mut App) {
             app.poll_pending_list();
             if app.scm.pending_write.is_none()
                 && app.scm.pending_status.is_none()
-                && !app.scm.status_rerun
+                && !app.scm.status_refresh_deferred()
                 && app.preview_state.pending_diff.is_none()
                 && app.files.pending_lists.is_empty()
             {
@@ -205,13 +207,13 @@ async fn stage_then_unstage_follows_same_file_across_git_sections() {
         app.selected_scm_row(),
         Some(ScmRow::Change { .. })
     ));
-    assert!(app.scm.pending_transfer.is_none());
+    assert!(!app.scm.transfer_pending());
 
     press(&mut app, 'u');
     finish_write_and_status(&mut app).await;
     assert_eq!(app.selected_scm_entry().unwrap().path, "a.txt");
     assert_eq!(app.selected_scm_entry().unwrap().side, DiffSide::Unstaged);
-    assert!(app.scm.pending_transfer.is_none());
+    assert!(!app.scm.transfer_pending());
     assert_eq!(
         git(dir.path(), &["show", "HEAD:a.txt"]),
         git(dir.path(), &["show", ":a.txt"])
@@ -224,11 +226,11 @@ async fn manual_navigation_cancels_pending_stage_focus_transfer() {
     app.scm.scm_selected = scm_jump_to_column(&app.scm_rows(), StagingColumn::Unstaged);
     app.session.focus = PaneFocus::List;
     press(&mut app, 's');
-    assert!(app.scm.pending_transfer.is_some());
+    assert!(app.scm.transfer_pending());
     // Moving away while the write is pending must not steal the user's focus
     // after the asynchronous Git status response.
     app.move_scm(-1);
-    assert!(app.scm.pending_transfer.is_none());
+    assert!(!app.scm.transfer_pending());
     finish_write_and_status(&mut app).await;
     assert!(matches!(
         app.selected_scm_row(),
@@ -317,7 +319,7 @@ async fn invalid_loading_stale_and_empty_targets_never_start_writes() {
 
     app.dismiss_menu();
     app.session.focus = PaneFocus::List;
-    app.scm.git_status.as_mut().unwrap().push_change(
+    app.scm.test_status_mut().as_mut().unwrap().push_change(
         "folder/a.txt",
         forge_model::GitStatus::Modified,
         DiffSide::Unstaged,
@@ -399,8 +401,9 @@ async fn an_empty_workspace_has_no_stage_actions() {
 }
 
 fn select_folder(app: &mut App, path: &str, activity: ActivityTab, side: DiffSide) {
-    let root = app.files.tree_root.clone();
-    app.scm.git_status = Some(app.services.git.status(&root).unwrap());
+    let root = app.files.root().to_path_buf();
+    app.scm
+        .set_status(Some(app.services.git.status(&root).unwrap()));
     app.session.activity = activity;
     app.session.focus = PaneFocus::List;
     app.session.status.clear();
@@ -466,7 +469,7 @@ async fn folder_actions_cover_descendants_and_preserve_neighbor_changes() {
                 .unwrap();
                 std::fs::write(root.join("folder/new.txt"), "new file\n").unwrap();
                 std::fs::write(root.join("folder/ignored.txt"), "ignored\n").unwrap();
-                app.files.children.insert(
+                app.files.install_listing(
                     root.to_owned(),
                     vec![Entry {
                         id: forge_model::PathId(2),
@@ -477,8 +480,12 @@ async fn folder_actions_cover_descendants_and_preserve_neighbor_changes() {
                 );
                 app.rebuild_visible();
                 if expanded {
-                    app.scm.scm_expanded_unstaged.insert("folder".into());
-                    app.scm.scm_expanded_staged.insert("folder".into());
+                    app.scm
+                        .expanded_mut(StagingColumn::Unstaged)
+                        .insert("folder".into());
+                    app.scm
+                        .expanded_mut(StagingColumn::Staged)
+                        .insert("folder".into());
                 }
                 for (side, key, action, label) in [
                     (
@@ -502,8 +509,9 @@ async fn folder_actions_cover_descendants_and_preserve_neighbor_changes() {
                     if menu {
                         if activity == ActivityTab::Git {
                             app.scm.scroll_scm = 0;
-                            app.session.layout.list = ratatui::layout::Rect::new(0, 0, 40, 40);
-                            app.session.layout.list_inner = app.session.layout.list;
+                            app.layout_state.geometry.list =
+                                ratatui::layout::Rect::new(0, 0, 40, 40);
+                            app.layout_state.geometry.list_inner = app.layout_state.geometry.list;
                             app.handle_mouse_content(MouseEvent {
                                 kind: MouseEventKind::Down(MouseButton::Right),
                                 column: 1,
@@ -625,7 +633,7 @@ async fn clean_and_stale_folder_targets_never_start_writes() {
     let (dir, mut app) = fixture();
     let root = dir.path();
     std::fs::create_dir(root.join("clean")).unwrap();
-    app.files.children.insert(
+    app.files.install_listing(
         root.to_owned(),
         vec![Entry {
             id: forge_model::PathId(2),
@@ -658,7 +666,8 @@ async fn clean_and_stale_folder_targets_never_start_writes() {
     app.open_staging_folder_menu(app.scm.scm_selected, 0, 0);
     // The folder vanishes while its menu is open: do not operate on another row.
     std::fs::remove_file(root.join("clean/new.txt")).unwrap();
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     app.apply_context_action(ContextAction::StageFolder);
     assert!(app.scm.pending_write.is_none());
     assert!(app.session.status.contains("select the folder again"));
@@ -670,7 +679,7 @@ async fn clean_and_stale_folder_targets_never_start_writes() {
     app.open_file_context_menu(app.files.selected, 0, 0);
     std::fs::create_dir(root.join("neighbor")).unwrap();
     std::fs::write(root.join("neighbor/keep.txt"), "do not stage\n").unwrap();
-    app.files.children.insert(
+    app.files.install_listing(
         root.to_owned(),
         vec![Entry {
             id: forge_model::PathId(3),
@@ -680,7 +689,8 @@ async fn clean_and_stale_folder_targets_never_start_writes() {
         }],
     );
     app.rebuild_visible();
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     app.apply_context_action(ContextAction::DeleteDirectory);
     assert!(app.scm.pending_write.is_none());
     assert!(app

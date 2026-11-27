@@ -167,7 +167,7 @@ fn fixture(root: &Path) -> App {
     let mut app = create_workspace_at(ColorMode::TrueColor, root.to_owned());
     app.files.pending_lists.clear();
     app.scm.pending_status = None;
-    app.files.children.insert(
+    app.files.install_listing(
         root.to_owned(),
         vec![Entry {
             id: forge_model::PathId(1),
@@ -207,7 +207,7 @@ fn text(buffer: &ratatui::buffer::Buffer) -> String {
 
 fn markdown_fixture(root: &Path) -> App {
     let mut app = fixture(root);
-    let entry = &mut app.files.children.get_mut(root).unwrap()[0];
+    let entry = &mut app.files.test_listings_mut().get_mut(root).unwrap()[0];
     entry.name = "README.MD".into();
     entry.path = root.join("README.MD");
     app.rebuild_visible();
@@ -226,7 +226,8 @@ fn markdown_fixture(root: &Path) -> App {
 async fn footer_git_chip_shows_upstream_counts_and_opens_sync_panel() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = fixture(dir.path());
-    app.scm.git_status = Some(StatusSnapshot::new(dir.path().to_owned()));
+    app.scm
+        .set_status(Some(StatusSnapshot::new(dir.path().to_owned())));
     app.scm.branch = "dev".into();
     app.tools.sync = "dev...origin/dev [ahead 1]".into();
 
@@ -266,7 +267,7 @@ async fn footer_git_chip_shows_upstream_counts_and_opens_sync_panel() {
             .collect::<String>(),
         " ⎇ dev ↓0 ↑1 ↻ "
     );
-    app.session.layout.git_sync_status = Rect::new(0, 11, chip.1 as u16, 1);
+    app.layout_state.geometry.git_sync_status = Rect::new(0, 11, chip.1 as u16, 1);
     app.handle_mouse_content(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 5,
@@ -287,7 +288,8 @@ async fn footer_git_chip_shows_upstream_counts_and_opens_sync_panel() {
 async fn footer_git_chip_handles_no_upstream_and_narrow_or_non_git_windows() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = fixture(dir.path());
-    app.scm.git_status = Some(StatusSnapshot::new(dir.path().to_owned()));
+    app.scm
+        .set_status(Some(StatusSnapshot::new(dir.path().to_owned())));
     app.scm.branch = "new-branch".into();
     app.tools.sync = "new-branch".into();
     let (line, width) = git_status_chip(&app, workspace_palette(), 35).unwrap();
@@ -306,7 +308,7 @@ async fn footer_git_chip_handles_no_upstream_and_narrow_or_non_git_windows() {
     let (line, _) = git_status_chip(&app, workspace_palette(), 40).unwrap();
     assert!(line.spans.iter().any(|s| s.content.contains("gone")));
     assert!(git_status_chip(&app, workspace_palette(), 9).is_none());
-    app.scm.git_status = None;
+    app.scm.set_status(None);
     assert!(git_status_chip(&app, workspace_palette(), 40).is_none());
     app.scm.branch.clear();
     assert!(git_status_chip(&app, workspace_palette(), 40).is_none());
@@ -323,7 +325,7 @@ async fn diff_heading_open_file_is_clickable_and_keeps_directory_rules() {
         forge_model::GitStatus::Modified,
         DiffSide::Unstaged,
     );
-    app.scm.git_status = Some(snapshot);
+    app.scm.set_status(Some(snapshot));
     app.session.activity = ActivityTab::Git;
     app.session.focus = PaneFocus::Preview;
     app.scm.scm_selected = scm_jump_to_column(&app.scm_rows(), StagingColumn::Unstaged);
@@ -346,7 +348,7 @@ async fn diff_heading_open_file_is_clickable_and_keeps_directory_rules() {
             );
         })
         .unwrap();
-    let chip = app.session.layout.open_file_tab;
+    let chip = app.layout_state.geometry.open_file_tab;
     assert_eq!(chip.width, 14);
     let first_line = (chip.x..chip.right())
         .map(|x| terminal.backend().buffer()[(x, chip.y)].symbol())
@@ -409,9 +411,9 @@ async fn preview_scrollbar_click_drag_release_and_clamp() {
             bytes_read: 1600,
         },
     });
-    app.session.layout.preview = Rect::new(30, 2, 70, 24);
-    app.session.layout.preview_inner = Rect::new(31, 3, 67, 20);
-    app.session.layout.preview_scrollbar = Rect::new(99, 3, 1, 20);
+    app.layout_state.geometry.preview = Rect::new(30, 2, 70, 24);
+    app.layout_state.geometry.preview_inner = Rect::new(31, 3, 67, 20);
+    app.layout_state.geometry.preview_scrollbar = Rect::new(99, 3, 1, 20);
     let mouse = |kind, column, row| MouseEvent {
         kind,
         column,
@@ -420,22 +422,22 @@ async fn preview_scrollbar_click_drag_release_and_clamp() {
     };
     // Clicking the bottom track should jump to the last visible page.
     app.handle_mouse_content(mouse(MouseEventKind::Down(MouseButton::Left), 99, 22));
-    assert_eq!(app.preview_state.preview_scroll, 180);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 180);
     assert!(matches!(
         app.scrollbar_drag,
         Some((ScrollbarTarget::Preview, _))
     ));
     // Dragging outside the 1-column lane must keep scrolling.
     app.handle_mouse_content(mouse(MouseEventKind::Drag(MouseButton::Left), 90, 3));
-    assert_eq!(app.preview_state.preview_scroll, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     app.handle_mouse_content(mouse(MouseEventKind::Drag(MouseButton::Left), 101, 99));
-    assert_eq!(app.preview_state.preview_scroll, 180);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 180);
     app.handle_mouse_content(mouse(MouseEventKind::Up(MouseButton::Left), 101, 99));
     assert!(app.scrollbar_drag.is_none());
     // Releasing the mouse ends capture; subsequent drags don't scroll.
     app.handle_mouse_content(mouse(MouseEventKind::Drag(MouseButton::Left), 101, 3));
-    assert_eq!(app.preview_state.preview_scroll, 180);
-    assert!(!app.preview_state.selection.is_dragging());
+    assert_eq!(app.preview_state.presentation.preview_scroll, 180);
+    assert!(!app.preview_state.presentation.selection.is_dragging());
 }
 
 #[tokio::test]
@@ -475,10 +477,10 @@ async fn file_preview_horizontal_scrollbar_click_drag_release_and_clamp() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = fixture(dir.path());
     app.config.wrap_code = false;
-    app.session.layout.preview = Rect::new(30, 2, 70, 24);
-    app.session.layout.preview_inner = Rect::new(31, 3, 67, 19);
-    app.session.layout.preview_horizontal_scrollbar = Rect::new(36, 22, 62, 1);
-    app.session.layout.preview_horizontal_max = 180;
+    app.layout_state.geometry.preview = Rect::new(30, 2, 70, 24);
+    app.layout_state.geometry.preview_inner = Rect::new(31, 3, 67, 19);
+    app.layout_state.geometry.preview_horizontal_scrollbar = Rect::new(36, 22, 62, 1);
+    app.layout_state.geometry.preview_horizontal_max = 180;
     app.session.focus = PaneFocus::List;
     let event = |kind, column, row| MouseEvent {
         kind,
@@ -489,28 +491,28 @@ async fn file_preview_horizontal_scrollbar_click_drag_release_and_clamp() {
 
     // Track click centers the thumb and immediately moves the viewport.
     app.handle_mouse_content(event(MouseEventKind::Down(MouseButton::Left), 97, 22));
-    assert_eq!(app.preview_state.preview_scroll_x, 180);
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 180);
     assert_eq!(app.session.focus, PaneFocus::Preview);
     assert!(matches!(
         app.scrollbar_drag,
         Some((ScrollbarTarget::PreviewHorizontal, _))
     ));
-    assert!(!app.preview_state.selection.is_dragging());
+    assert!(!app.preview_state.presentation.selection.is_dragging());
     // Capture stays alive far outside the lane, in either direction.
     app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 0, 90));
-    assert_eq!(app.preview_state.preview_scroll_x, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 0);
     app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 999, 0));
-    assert_eq!(app.preview_state.preview_scroll_x, 180);
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 180);
     app.handle_mouse_content(event(MouseEventKind::Up(MouseButton::Left), 0, 90));
-    assert_eq!(app.preview_state.preview_scroll_x, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 0);
     assert!(app.scrollbar_drag.is_none());
     app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 999, 0));
-    assert_eq!(app.preview_state.preview_scroll_x, 0);
-    assert!(!app.preview_state.selection.is_dragging());
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 0);
+    assert!(!app.preview_state.presentation.selection.is_dragging());
 
     // A hidden/disabled bar is not a mouse target.
-    app.session.layout.preview_horizontal_scrollbar = Rect::default();
-    app.session.layout.preview_horizontal_max = 0;
+    app.layout_state.geometry.preview_horizontal_scrollbar = Rect::default();
+    app.layout_state.geometry.preview_horizontal_max = 0;
     app.handle_mouse_content(event(MouseEventKind::Down(MouseButton::Left), 97, 22));
     assert!(app.scrollbar_drag.is_none());
 }
@@ -521,10 +523,10 @@ async fn git_diff_horizontal_scrollbar_shares_preview_offset_and_capture() {
     let mut app = fixture(dir.path());
     app.session.activity = ActivityTab::Git;
     app.preview_state.preview_mode = PreviewMode::Diff;
-    app.session.layout.preview = Rect::new(30, 2, 70, 24);
-    app.session.layout.preview_inner = Rect::new(31, 3, 67, 19);
-    app.session.layout.preview_horizontal_scrollbar = Rect::new(31, 22, 68, 1);
-    app.session.layout.preview_horizontal_max = 100;
+    app.layout_state.geometry.preview = Rect::new(30, 2, 70, 24);
+    app.layout_state.geometry.preview_inner = Rect::new(31, 3, 67, 19);
+    app.layout_state.geometry.preview_horizontal_scrollbar = Rect::new(31, 22, 68, 1);
+    app.layout_state.geometry.preview_horizontal_max = 100;
     let event = |kind, column| MouseEvent {
         kind,
         column,
@@ -532,13 +534,13 @@ async fn git_diff_horizontal_scrollbar_shares_preview_offset_and_capture() {
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(event(MouseEventKind::Down(MouseButton::Left), 98));
-    assert_eq!(app.preview_state.preview_scroll_x, 100);
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 100);
     assert!(matches!(
         app.scrollbar_drag,
         Some((ScrollbarTarget::PreviewHorizontal, _))
     ));
     app.handle_mouse(event(MouseEventKind::Drag(MouseButton::Left), 31));
-    assert_eq!(app.preview_state.preview_scroll_x, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll_x, 0);
     app.handle_mouse(event(MouseEventKind::Up(MouseButton::Left), 31));
     assert!(app.scrollbar_drag.is_none());
 }
@@ -552,9 +554,9 @@ async fn files_sidebar_scrollbar_captures_far_horizontal_drag() {
     let row = app.files.visible[0].clone();
     app.files.visible = vec![row; 200];
     app.files.follow_selection = true;
-    app.session.layout.list = Rect::new(0, 2, 30, 24);
-    app.session.layout.list_inner = Rect::new(0, 3, 29, 20);
-    app.session.layout.sidebar_scrollbar = Rect::new(29, 2, 1, 24);
+    app.layout_state.geometry.list = Rect::new(0, 2, 30, 24);
+    app.layout_state.geometry.list_inner = Rect::new(0, 3, 29, 20);
+    app.layout_state.geometry.sidebar_scrollbar = Rect::new(29, 2, 1, 24);
     let event = |kind, column, row| MouseEvent {
         kind,
         column,
@@ -591,14 +593,14 @@ async fn git_sidebar_scrollbar_reuses_same_drag_behavior() {
             DiffSide::Unstaged,
         );
     }
-    app.scm.git_status = Some(status);
+    app.scm.set_status(Some(status));
     app.session.activity = ActivityTab::Git;
     app.scm.follow_selection = true;
     let total = app.scm_rows().len();
     assert!(total > 25);
-    app.session.layout.list = Rect::new(0, 2, 30, 24);
-    app.session.layout.list_inner = Rect::new(0, 3, 29, 20);
-    app.session.layout.sidebar_scrollbar = Rect::new(29, 2, 1, 24);
+    app.layout_state.geometry.list = Rect::new(0, 2, 30, 24);
+    app.layout_state.geometry.list_inner = Rect::new(0, 3, 29, 20);
+    app.layout_state.geometry.sidebar_scrollbar = Rect::new(29, 2, 1, 24);
     let event = |kind, column, row| MouseEvent {
         kind,
         column,
@@ -627,10 +629,10 @@ async fn git_diff_scrollbar_moves_shared_split_viewport() {
         side: DiffSide::Unstaged,
         lines: vec![],
     });
-    app.preview_state.diff_row_count = 240;
-    app.session.layout.preview = Rect::new(30, 2, 70, 24);
-    app.session.layout.preview_inner = Rect::new(31, 3, 67, 20);
-    app.session.layout.preview_scrollbar = Rect::new(99, 3, 1, 20);
+    app.preview_state.set_test_diff_row_count(240);
+    app.layout_state.geometry.preview = Rect::new(30, 2, 70, 24);
+    app.layout_state.geometry.preview_inner = Rect::new(31, 3, 67, 20);
+    app.layout_state.geometry.preview_scrollbar = Rect::new(99, 3, 1, 20);
     let event = |kind, y| MouseEvent {
         kind,
         column: 99,
@@ -638,10 +640,10 @@ async fn git_diff_scrollbar_moves_shared_split_viewport() {
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse_content(event(MouseEventKind::Down(MouseButton::Left), 22));
-    assert_eq!(app.preview_state.preview_scroll, 220);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 220);
     assert_eq!(app.session.focus, PaneFocus::Preview);
     app.handle_mouse_content(event(MouseEventKind::Drag(MouseButton::Left), 3));
-    assert_eq!(app.preview_state.preview_scroll, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     app.handle_mouse_content(event(MouseEventKind::Up(MouseButton::Left), 3));
     assert!(app.scrollbar_drag.is_none());
 }
@@ -663,11 +665,11 @@ async fn markdown_tabs_switch_source_with_mouse_and_keyboard() {
             assert_eq!(body, Rect::new(0, 2, 40, 8));
         })
         .unwrap();
-    let tab = app.session.layout.markdown_code_tab;
+    let tab = app.layout_state.geometry.markdown_code_tab;
     assert_eq!(tab.y, 0);
-    assert!(app.session.layout.markdown_preview_tab.x >= 40 / 2 - 4);
+    assert!(app.layout_state.geometry.markdown_preview_tab.x >= 40 / 2 - 4);
     assert!(text(terminal.backend().buffer()).contains("F3"));
-    app.preview_state.preview_scroll = 10;
+    app.preview_state.presentation.preview_scroll = 10;
     app.handle_mouse_content(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: tab.x + 1,
@@ -675,7 +677,7 @@ async fn markdown_tabs_switch_source_with_mouse_and_keyboard() {
         modifiers: KeyModifiers::NONE,
     });
     assert!(app.preview_state.markdown_code);
-    assert_eq!(app.preview_state.preview_scroll, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     assert_eq!(app.session.focus, PaneFocus::Preview);
     assert!(matches!(
         preview_content(&app).1,
@@ -687,15 +689,15 @@ async fn markdown_tabs_switch_source_with_mouse_and_keyboard() {
     app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
     assert!(!app.preview_state.markdown_code);
     // Clicking the selected tab preserves the current position.
-    let tab = app.session.layout.markdown_preview_tab;
-    app.preview_state.preview_scroll = 2;
+    let tab = app.layout_state.geometry.markdown_preview_tab;
+    app.preview_state.presentation.preview_scroll = 2;
     app.handle_mouse_content(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: tab.x + 1,
         row: tab.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert_eq!(app.preview_state.preview_scroll, 2);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     app.preview_state.preview_mode = PreviewMode::Diff;
     app.handle_key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
     assert!(!app.preview_state.markdown_code);
@@ -749,14 +751,14 @@ async fn markdown_reveal_uses_source_lines_and_refresh_clears_layout() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = markdown_fixture(dir.path());
     let path = dir.path().join("README.MD");
-    app.tools.reveal = Some((path.clone(), 3));
+    app.navigation.request(path.clone(), 3, PaneFocus::Preview);
     let preview = app.preview_state.preview.clone().unwrap();
     app.apply_preview_result(path, Ok(Ok(preview)));
     assert!(app.preview_state.markdown_code);
-    assert_eq!(app.preview_state.preview_scroll, 2);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     assert_eq!(app.preview_source_line(), 3);
     app.set_markdown_code(false);
-    app.preview_state.markdown.ensure(
+    app.preview_state.presentation.markdown.ensure(
         &["text ".repeat(50)],
         false,
         250,
@@ -765,12 +767,12 @@ async fn markdown_reveal_uses_source_lines_and_refresh_clears_layout() {
     );
     let total = app.preview_total_lines();
     assert!(total > 3);
-    app.session.layout.preview_inner = Rect::new(0, 0, 12, 3);
+    app.layout_state.geometry.preview_inner = Rect::new(0, 0, 12, 3);
     app.scroll_preview(isize::MAX);
-    assert_eq!(app.preview_state.preview_scroll, total - 3);
+    assert_eq!(app.preview_state.presentation.preview_scroll, total - 3);
     assert_eq!(app.preview_source_line(), 1);
     app.request_preview_for_selection();
-    assert_eq!(app.preview_state.markdown.line_count(), 0);
+    assert_eq!(app.preview_state.presentation.markdown.line_count(), 0);
 }
 
 #[tokio::test]
@@ -794,8 +796,8 @@ async fn sticky_title_click_jumps_to_directory_without_replacing_preview() {
     app.files.selected = 1;
     app.files.scroll = 1;
     app.files.sticky_headers = vec![0];
-    app.session.layout.list = Rect::new(0, 2, 30, 15);
-    app.session.layout.list_inner = Rect::new(0, 2, 30, 15);
+    app.layout_state.geometry.list = Rect::new(0, 2, 30, 15);
+    app.layout_state.geometry.list_inner = Rect::new(0, 2, 30, 15);
     app.handle_mouse_content(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Left),
         column: 5,
@@ -893,9 +895,9 @@ async fn sidebar_history_renders_lanes_badges_and_commit_files() {
     };
     let oid = head.id.clone();
     app.session.activity = ActivityTab::Git;
-    app.history.expanded = true;
+    app.history.set_expanded(true);
     app.history.seed(vec![head, base]);
-    app.history.files.insert(
+    app.history.test_files_mut().insert(
         oid.clone(),
         vec![forge_git::CommitChange {
             path: "crates/forge-ui/src/graph.rs".into(),
@@ -903,10 +905,10 @@ async fn sidebar_history_renders_lanes_badges_and_commit_files() {
             kind: forge_git::CommitChangeKind::Modified,
         }],
     );
-    app.history.expanded_commits.insert(oid.clone());
+    app.history.test_expanded_commits_mut().insert(oid.clone());
     for dir in ["crates", "crates/forge-ui", "crates/forge-ui/src"] {
         app.history
-            .expanded_dirs
+            .test_expanded_dirs_mut()
             .insert(forge_ui::dir_key(&oid, dir));
     }
 
@@ -958,10 +960,10 @@ async fn footer_shows_local_actions_instead_of_global_history_entry() {
         "{footer}"
     );
     let mut app = fixture(dir.path());
-    assert!(app.history.expanded);
+    assert!(app.history.expanded());
     app.handle_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::ALT));
     assert!(app.in_git_sidebar());
-    assert!(app.history.expanded);
+    assert!(app.history.expanded());
 }
 
 #[tokio::test]
@@ -1075,16 +1077,20 @@ async fn files_and_git_keep_separate_previews_without_rendering_directory_detail
     let dir = tempfile::tempdir().unwrap();
     let mut app = fixture(dir.path());
     let original = app.preview_state.preview.clone();
-    app.preview_state.preview_scroll = 2;
-    app.files.children.get_mut(dir.path()).unwrap().insert(
-        0,
-        Entry {
-            id: forge_model::PathId(3),
-            name: "src".into(),
-            path: dir.path().join("src"),
-            kind: EntryKind::Directory,
-        },
-    );
+    app.preview_state.presentation.preview_scroll = 2;
+    app.files
+        .test_listings_mut()
+        .get_mut(dir.path())
+        .unwrap()
+        .insert(
+            0,
+            Entry {
+                id: forge_model::PathId(3),
+                name: "src".into(),
+                path: dir.path().join("src"),
+                kind: EntryKind::Directory,
+            },
+        );
     app.rebuild_visible();
     app.files.selected = 0; // Deliberately select a directory.
     app.enter_git_sidebar();
@@ -1092,7 +1098,7 @@ async fn files_and_git_keep_separate_previews_without_rendering_directory_detail
     app.preview_state.preview = None;
     app.leave_git_sidebar();
     assert_eq!(app.preview_state.preview, original);
-    assert_eq!(app.preview_state.preview_scroll, 2);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     assert!(app.files.pending_lists.is_empty());
     assert!(app.preview_state.pending_preview.is_none());
 }
@@ -1397,9 +1403,9 @@ async fn sidebar_drag_and_toggle_preserve_files_and_git_scroll_state() {
     let mut app = fixture(dir.path());
     app.files.scroll = 7;
     app.scm.scroll_scm = 4;
-    app.session.layout.activity = Rect::new(0, 1, 4, 23);
-    app.session.layout.sidebar_divider = Rect::new(34, 1, 1, 23);
-    app.session.layout.window = Rect::new(0, 0, 120, 30);
+    app.layout_state.geometry.activity = Rect::new(0, 1, 4, 23);
+    app.layout_state.geometry.sidebar_divider = Rect::new(34, 1, 1, 23);
+    app.layout_state.geometry.window = Rect::new(0, 0, 120, 30);
     let mouse = |kind, column| MouseEvent {
         kind,
         column,
@@ -1407,21 +1413,21 @@ async fn sidebar_drag_and_toggle_preserve_files_and_git_scroll_state() {
         modifiers: KeyModifiers::NONE,
     };
     app.handle_mouse(mouse(MouseEventKind::Down(MouseButton::Left), 34));
-    assert!(app.session.splitter.dragging(SplitterAxis::Vertical));
+    assert!(app.layout_state.splitter.dragging(SplitterAxis::Vertical));
     app.handle_mouse(mouse(MouseEventKind::Drag(MouseButton::Left), 44));
-    assert_eq!(app.session.sidebar_width, 40);
+    assert_eq!(app.layout_state.sidebar_width(), 40);
     app.handle_mouse(mouse(MouseEventKind::Up(MouseButton::Left), 44));
-    assert!(!app.session.splitter.dragging(SplitterAxis::Vertical));
+    assert!(!app.layout_state.splitter.dragging(SplitterAxis::Vertical));
     app.handle_key(KeyEvent::new(
         KeyCode::Left,
         KeyModifiers::CONTROL | KeyModifiers::ALT,
     ));
-    assert_eq!(app.session.sidebar_width, 38);
+    assert_eq!(app.layout_state.sidebar_width(), 38);
     app.handle_key(KeyEvent::new(
         KeyCode::Right,
         KeyModifiers::CONTROL | KeyModifiers::ALT,
     ));
-    assert_eq!(app.session.sidebar_width, 40);
+    assert_eq!(app.layout_state.sidebar_width(), 40);
     app.set_sidebar_visible(false);
     assert_eq!(app.session.focus, PaneFocus::Preview);
     assert!(footer_shortcuts(&app, 120)
@@ -1430,7 +1436,7 @@ async fn sidebar_drag_and_toggle_preserve_files_and_git_scroll_state() {
     assert_eq!(app.files.scroll, 7);
     assert_eq!(app.scm.scroll_scm, 4);
     app.set_sidebar_visible(true);
-    assert_eq!(app.session.sidebar_width, 40);
+    assert_eq!(app.layout_state.sidebar_width(), 40);
     assert_eq!(app.files.scroll, 7);
     assert_eq!(app.scm.scroll_scm, 4);
     // A collapsed panel must not capture Tab focus or keyboard scrolling.
@@ -1460,7 +1466,7 @@ async fn sidebar_header_collapse_button_uses_the_same_hit_region_as_hover() {
             );
         })
         .unwrap();
-    let collapse = app.session.layout.sidebar_toggle;
+    let collapse = app.layout_state.geometry.sidebar_toggle;
     assert_eq!(
         app.activity_hits.action_at(collapse.x, collapse.y),
         Some(ActivityAction::Collapse)
@@ -1471,14 +1477,17 @@ async fn sidebar_header_collapse_button_uses_the_same_hit_region_as_hover() {
         row: collapse.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(app.session.sidebar_visible, "press alone does not navigate");
+    assert!(
+        app.layout_state.sidebar_visible(),
+        "press alone does not navigate"
+    );
     app.handle_mouse(MouseEvent {
         kind: MouseEventKind::Up(MouseButton::Left),
         column: collapse.x,
         row: collapse.y,
         modifiers: KeyModifiers::NONE,
     });
-    assert!(!app.session.sidebar_visible);
+    assert!(!app.layout_state.sidebar_visible());
     assert_eq!(app.session.focus, PaneFocus::Preview);
 }
 
@@ -1516,10 +1525,10 @@ async fn activity_bar_hover_and_search_settings_are_separate_from_terminal_pty()
         });
     };
     paint(&mut app, &mut terminal);
-    let git = app.session.layout.git_tab;
-    let search = app.session.layout.search_tab;
-    let settings = app.session.layout.settings_tab;
-    let terminal_icon = app.session.layout.terminal_activity;
+    let git = app.layout_state.geometry.git_tab;
+    let search = app.layout_state.geometry.search_tab;
+    let settings = app.layout_state.geometry.settings_tab;
+    let terminal_icon = app.layout_state.geometry.terminal_activity;
     moved(&mut app, git);
     paint(&mut app, &mut terminal);
     assert_eq!(
@@ -1548,12 +1557,12 @@ async fn activity_bar_hover_and_search_settings_are_separate_from_terminal_pty()
         .is_some_and(|p| matches!(p.kind, tools::PanelKind::Settings)));
     app.tools.panel = None;
     click(&mut app, terminal_icon);
-    let session_id = app.terminal.as_ref().expect("terminal opened").id;
-    assert!(app.terminal.as_ref().unwrap().visible);
+    let session_id = app.terminals.active.as_ref().expect("terminal opened").id;
+    assert!(app.terminals.active.as_ref().unwrap().is_visible());
     click(&mut app, terminal_icon);
-    assert!(!app.terminal.as_ref().unwrap().visible);
+    assert!(!app.terminals.active.as_ref().unwrap().is_visible());
     assert_eq!(
-        app.terminal.as_ref().unwrap().id,
+        app.terminals.active.as_ref().unwrap().id,
         session_id,
         "terminal must not restart when hidden"
     );
@@ -1591,35 +1600,35 @@ async fn activity_bar_switches_and_collapses_sidebar_without_losing_shortcuts() 
         });
     };
     draw(&mut app, &mut terminal);
-    let files = app.session.layout.files_tab;
-    let git = app.session.layout.git_tab;
+    let files = app.layout_state.geometry.files_tab;
+    let git = app.layout_state.geometry.git_tab;
     assert_eq!(
         terminal.backend().buffer()[(files.x, files.y)].bg,
         workspace_palette().selection
     );
     click(&mut app, git);
     assert!(app.in_git_sidebar());
-    assert!(app.session.sidebar_visible);
+    assert!(app.layout_state.sidebar_visible());
     draw(&mut app, &mut terminal);
     assert_eq!(
         terminal.backend().buffer()[(git.x, git.y)].bg,
         workspace_palette().selection
     );
     click(&mut app, git); // clicking active entry collapses Sidebar
-    assert!(!app.session.sidebar_visible);
+    assert!(!app.layout_state.sidebar_visible());
     assert_eq!(app.session.focus, PaneFocus::Preview);
     app.handle_key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
-    assert!(app.session.sidebar_visible);
+    assert!(app.layout_state.sidebar_visible());
     assert!(app.in_git_sidebar());
     app.handle_key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
     assert!(!app.in_git_sidebar());
-    assert!(app.session.sidebar_visible);
+    assert!(app.layout_state.sidebar_visible());
     app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
-    assert!(!app.session.sidebar_visible);
+    assert!(!app.layout_state.sidebar_visible());
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(app.session.focus, PaneFocus::Preview);
     app.handle_key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
-    assert!(app.session.sidebar_visible);
+    assert!(app.layout_state.sidebar_visible());
     assert!(app
         .context_shortcuts()
         .iter()
@@ -1705,7 +1714,7 @@ async fn footer_names_file_folder_and_hunk_actions_even_in_narrow_windows() {
                 "中文文件.rs"
             };
             snapshot.push_change(path, forge_model::GitStatus::Modified, side);
-            app.scm.git_status = Some(snapshot);
+            app.scm.set_status(Some(snapshot));
             app.scm.scm_selected = if folder {
                 app.scm_rows()
                     .iter()
@@ -1789,7 +1798,7 @@ async fn git_marks_count_each_side() {
     snapshot.push_change(path, forge_model::GitStatus::Modified, DiffSide::Unstaged);
     snapshot.push_change(path, forge_model::GitStatus::Modified, DiffSide::Staged);
     snapshot.finish();
-    app.scm.git_status = Some(snapshot);
+    app.scm.set_status(Some(snapshot));
     app.session.activity = ActivityTab::Git;
     app.session.focus = PaneFocus::List;
     app.scm.scm_selected = 1;
@@ -1819,7 +1828,7 @@ async fn stale_preview_is_rejected_and_modes_keep_file_selection() {
     let dir = tempfile::tempdir().unwrap();
     let mut app = fixture(dir.path());
     app.apply_preview_result(
-        dir.path().join("old.rs"),
+        dir.path().join("中文文件.rs"),
         Ok(Ok(Preview::error(dir.path().join("old.rs"), "stale"))),
     );
     assert_eq!(

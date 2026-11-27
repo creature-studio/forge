@@ -233,6 +233,10 @@ impl PreviewSelection {
         }
     }
 
+    pub(super) fn end_drag(&mut self) {
+        self.dragging = false;
+    }
+
     pub fn is_dragging(&self) -> bool {
         self.dragging
     }

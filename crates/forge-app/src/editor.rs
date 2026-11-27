@@ -24,7 +24,71 @@ pub(super) struct EditingState {
     system_clipboard: Option<arboard::Clipboard>,
 }
 
+/// A successful save is an editor-owned result. The workbench decides
+/// whether to refresh workspace data or reload the terminal configuration.
+struct EditorSaved {
+    path: PathBuf,
+    terminal_config: bool,
+    close: bool,
+}
+
 impl EditingState {
+    fn poll_load(&mut self) -> Option<Result<(), String>> {
+        if let Some(view) = &mut self.view {
+            view.syntax_cache.poll();
+        }
+        let result = self.pending_load.as_mut()?.try_join()?;
+        self.pending_load = None;
+        Some(match result {
+            Ok(Ok(view)) => {
+                self.view = Some(view);
+                Ok(())
+            }
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(error) => Err(error.to_string()),
+        })
+    }
+
+    fn poll_save(&mut self) -> Option<EditorSaved> {
+        let result = self.pending_save.as_mut()?.try_join()?;
+        self.pending_save = None;
+        self.finish_save(result)
+    }
+
+    fn finish_save(
+        &mut self,
+        result: Result<Result<TextDocument>, JobError>,
+    ) -> Option<EditorSaved> {
+        let close = std::mem::take(&mut self.close_after_save);
+        match result {
+            Ok(Ok(doc)) => {
+                let path = doc.path.clone();
+                if let Some(view) = &mut self.view {
+                    view.document = doc;
+                    view.dirty_cache = OnceLock::from(false);
+                    view.confirm_close = false;
+                    view.message = "Saved".into();
+                }
+                Some(EditorSaved {
+                    path,
+                    terminal_config: self.terminal_config,
+                    close,
+                })
+            }
+            other => {
+                if let Some(view) = &mut self.view {
+                    view.message = match other {
+                        Ok(Err(error)) => error.to_string(),
+                        Err(error) => error.to_string(),
+                        _ => unreachable!(),
+                    };
+                    view.confirm_close = false;
+                }
+                None
+            }
+        }
+    }
+
     pub fn active(&self) -> bool {
         self.view.is_some() || self.pending_load.is_some()
     }
@@ -650,7 +714,7 @@ fn byte_at_cell(s: &str, cell: usize) -> usize {
 
 impl App {
     pub(super) fn open_text_editor(&mut self, path: PathBuf, line: usize) {
-        let conflict = self.scm.git_status.as_ref().is_some_and(|status| {
+        let conflict = self.scm.status().as_ref().is_some_and(|status| {
             status.entries.iter().any(|(relative, kind)| {
                 *kind == forge_git::GitStatus::Conflicted && status.repo_root.join(relative) == path
             })
@@ -674,15 +738,14 @@ impl App {
         // editor modal layered over a Git Diff. Otherwise Esc closes the
         // editor and unexpectedly reveals the Git Activity underneath.
         // Preserve Git selection/history for an explicit F2 return.
-        if (self.in_git_sidebar() || (conflict && !path.starts_with(&self.files.tree_root)))
+        if (self.in_git_sidebar() || (conflict && !path.starts_with(self.files.root())))
             && path.is_file()
         {
             self.leave_git_sidebar();
-            self.tools.return_focus = Some(PaneFocus::List);
-            self.reveal_file(path.clone(), line);
+            self.reveal_file_with_focus(path.clone(), line, PaneFocus::List);
         }
         self.editing.return_focus = Some(self.session.focus);
-        let root = self.files.tree_root.clone();
+        let root = self.files.root().to_path_buf();
         self.editing.terminal_config = false;
         self.load_editor_document(root, path, line, conflict);
     }
@@ -767,84 +830,30 @@ impl App {
         ));
     }
     pub(super) fn poll_editor(&mut self) {
-        if let Some(view) = &mut self.editing.view {
-            view.syntax_cache.poll();
+        if let Some(Err(error)) = self.editing.poll_load() {
+            self.session.status = format!("Text editor error: {error}");
+            self.close_text_editor();
         }
-        if let Some(result) = self
-            .editing
-            .pending_load
-            .as_mut()
-            .and_then(JobHandle::try_join)
-        {
-            self.editing.pending_load = None;
-            match result {
-                Ok(Ok(view)) => self.editing.view = Some(view),
-                other => {
-                    self.session.status = format!(
-                        "Text editor error: {}",
-                        match other {
-                            Ok(Err(e)) => e.to_string(),
-                            Err(e) => e.to_string(),
-                            _ => unreachable!(),
-                        }
-                    );
-                    self.close_text_editor();
+        if let Some(saved) = self.editing.poll_save() {
+            self.session.status = format!("Saved {}", saved.path.display());
+            if saved.terminal_config {
+                match Config::load_checked() {
+                    Ok(config) => {
+                        self.config.terminal = config.terminal;
+                        self.shell_profiles = None;
+                        self.shell_discovery = None;
+                        self.session.status = "Shell profiles reloaded".into();
+                    }
+                    Err(error) => self.session.status = error,
                 }
+            } else {
+                self.on_workspace_change(workspace_changes::WorkspaceChange::FileSaved {
+                    path: saved.path,
+                });
             }
-        }
-        if let Some(result) = self
-            .editing
-            .pending_save
-            .as_mut()
-            .and_then(JobHandle::try_join)
-        {
-            self.editing.pending_save = None;
-            match result {
-                Ok(Ok(doc)) => {
-                    let path = doc.path.clone();
-                    if let Some(view) = &mut self.editing.view {
-                        view.document = doc;
-                        view.dirty_cache = OnceLock::from(false);
-                        view.confirm_close = false;
-                        view.message = "Saved".into();
-                    }
-                    self.session.status = format!("Saved {}", path.display());
-                    if self.editing.terminal_config {
-                        match Config::load_checked() {
-                            Ok(config) => {
-                                self.config.terminal = config.terminal;
-                                self.shell_profiles = None;
-                                self.shell_discovery = None;
-                                self.session.status = "Shell profiles reloaded".into();
-                            }
-                            Err(error) => self.session.status = error,
-                        }
-                    } else {
-                        self.request_status();
-                        if self.in_git_sidebar() {
-                            self.request_diff_for_scm_selection();
-                        } else {
-                            self.tools.reveal = Some((path, self.preview_source_line()));
-                            self.tools.return_focus = Some(self.session.focus);
-                            self.request_preview_for_selection();
-                        }
-                    }
-                    if self.editing.close_after_save {
-                        self.close_text_editor();
-                    }
-                }
-                other => {
-                    if let Some(view) = &mut self.editing.view {
-                        view.message = match other {
-                            Ok(Err(e)) => e.to_string(),
-                            Err(e) => e.to_string(),
-                            _ => unreachable!(),
-                        };
-                        view.confirm_close = false;
-                    }
-                }
+            if saved.close {
+                self.close_text_editor();
             }
-            self.editing.close_after_save = false;
         }
     }
     pub(super) fn handle_editor_paste(&mut self, value: &str) {
@@ -1251,7 +1260,7 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
         " Edit {}{} ",
         view.document
             .path
-            .strip_prefix(&app.files.tree_root)
+            .strip_prefix(app.files.root())
             .unwrap_or(&view.document.path)
             .display(),
         if view.dirty() { " *" } else { "" }
@@ -1528,6 +1537,37 @@ pub(super) fn draw_editor(frame: &mut Frame<'_>, area: Rect, app: &mut App, p: P
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn save_completion_owns_dirty_and_close_state_without_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, "original").unwrap();
+        let doc = super::text::load(dir.path(), &path).unwrap();
+        let mut state = super::EditingState {
+            view: Some(super::TextEditor::new(doc, 1)),
+            close_after_save: true,
+            ..Default::default()
+        };
+        state.view.as_mut().unwrap().insert("new ");
+        assert!(state.view.as_ref().unwrap().dirty());
+        assert!(state
+            .finish_save(Ok(Err(anyhow::anyhow!("save failed"))))
+            .is_none());
+        assert!(state.view.as_ref().unwrap().dirty());
+        assert!(!state.close_after_save);
+        assert_eq!(state.view.as_ref().unwrap().message, "save failed");
+
+        let view = state.view.as_ref().unwrap();
+        let saved_doc = super::text::save(view.document.clone(), view.value()).unwrap();
+        state.close_after_save = true;
+        let event = state.finish_save(Ok(Ok(saved_doc))).unwrap();
+        assert_eq!(event.path, path.canonicalize().unwrap());
+        assert!(event.close);
+        assert!(!event.terminal_config);
+        assert!(!state.view.as_ref().unwrap().dirty());
+        assert!(!state.close_after_save);
+    }
+
     #[tokio::test]
     #[ignore = "manual editor latency measurements; run with --ignored --nocapture"]
     async fn profile_editor_latency() {
@@ -1541,7 +1581,7 @@ mod tests {
         ] {
             let (_dir, mut app, path) = fixture(&content);
             app.editing.view = Some(TextEditor::new(
-                text::load(&app.files.tree_root, &path).unwrap(),
+                text::load(app.files.root(), &path).unwrap(),
                 1,
             ));
             if name == "TypeScript" {

@@ -469,7 +469,7 @@ impl App {
             }
             (PanelKind::Git(GitQuery::Worktrees), KeyCode::Char('X')) => {
                 let path = PathBuf::from(&item.id);
-                if self.files.tree_root.starts_with(&path) {
+                if self.files.root().starts_with(&path) {
                     if let Some(p) = &mut self.tools.panel {
                         p.message = "Switch away before removing the current worktree".into();
                     }

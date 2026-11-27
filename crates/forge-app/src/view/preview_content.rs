@@ -2,90 +2,15 @@
 use super::*;
 
 pub(super) fn preview_content(model: &App) -> (String, PreviewView<'_>) {
-    if model.preview_state.preview_loading {
-        return ("Loading".into(), PreviewView::Loading);
-    }
-    if matches!(model.preview_state.preview_mode, PreviewMode::Diff) {
-        return match &model.preview_state.file_diff {
-            Some(diff) => {
-                let hunks = diff.hunks();
-                let hunk = model.preview_state.hunk_index.and_then(|i| hunks.get(i));
-                (
-                    format!(
-                        "{} · {}{}",
-                        model.preview_state.diff_label,
-                        diff.path,
-                        model
-                            .preview_state
-                            .hunk_index
-                            .map(|i| format!(" · hunk {}/{}", i + 1, hunks.len()))
-                            .unwrap_or_default()
-                    ),
-                    PreviewView::Diff {
-                        path: &diff.path,
-                        side: &model.preview_state.diff_label,
-                        lines: &diff.lines,
-                        hunk_start: hunk.map(|h| h.start),
-                        hunk_end: hunk.map(|h| h.end),
-                        hunk_idx: model.preview_state.hunk_index.map(|i| (i, hunks.len())),
-                    },
-                )
-            }
-            None => (
-                String::new(),
-                PreviewView::Hint {
-                    text: model.empty_diff_hint(),
-                },
-            ),
-        };
-    }
-    let Some(preview) = &model.preview_state.preview else {
-        return (String::new(), PreviewView::Idle);
-    };
-    let title = preview
-        .path
-        .strip_prefix(&model.files.tree_root)
-        .unwrap_or(&preview.path)
-        .display()
-        .to_string();
-    let content = match &preview.content {
-        PreviewContent::Empty => PreviewView::Idle,
-        PreviewContent::Directory {
-            name,
-            children,
-            truncated,
-        } => PreviewView::Directory {
-            name,
-            children,
-            truncated: *truncated,
+    model.preview_state.content(
+        model.files.root(),
+        model.markdown_available(),
+        if model.preview_state.needs_empty_diff_hint() {
+            model.empty_diff_hint()
+        } else {
+            ""
         },
-        PreviewContent::Binary { notice, .. } => PreviewView::Binary { notice },
-        PreviewContent::Error { message } => PreviewView::Error { message },
-        PreviewContent::Text { .. }
-            if model.markdown_available() && !model.preview_state.markdown_code =>
-        {
-            PreviewView::Markdown {
-                preview: &model.preview_state.markdown,
-            }
-        }
-        PreviewContent::Text {
-            lines,
-            truncated,
-            bytes_read,
-        } => PreviewView::Text {
-            lines,
-            truncated: *truncated,
-            bytes_read: *bytes_read,
-            language: TextLang::from_name(
-                preview
-                    .path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(""),
-            ),
-        },
-    };
-    (title, content)
+    )
 }
 
 /// Adapt semantic kit colors for the existing syntax/diff renderers. Reset

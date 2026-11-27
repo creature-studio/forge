@@ -23,8 +23,8 @@ pub(super) fn highlight_file_find_matches(
     {
         return;
     }
-    let cache = &model.preview_state.text_rows;
-    let scroll = model.preview_state.preview_scroll;
+    let cache = &model.preview_state.presentation.text_rows;
+    let scroll = model.preview_state.presentation.preview_scroll;
     let bottom = scroll.saturating_add(area.height as usize);
     let mut index = find.matches.partition_point(|m| {
         cache
@@ -252,13 +252,21 @@ mod tests {
         }];
         app.preview_state.find.active = Some(0);
         let theme = forge_theme::Theme::modern_ide();
-        app.preview_state
-            .text_rows
-            .ensure(&theme, &[source], false, 100, TextLang::Plain, 22);
-        assert!(app.preview_state.text_rows.line_count() > 1);
+        app.preview_state.presentation.text_rows.ensure(
+            &theme,
+            &[source],
+            false,
+            100,
+            TextLang::Plain,
+            22,
+        );
+        assert!(app.preview_state.presentation.text_rows.line_count() > 1);
         assert!(
-            app.preview_state.text_rows.source_byte_to_row(1, start)
-                > app.preview_state.text_rows.source_to_row(1),
+            app.preview_state
+                .presentation
+                .text_rows
+                .source_byte_to_row(1, start)
+                > app.preview_state.presentation.text_rows.source_to_row(1),
             "visual find navigation must land on a continuation row"
         );
         let area = Rect::new(0, 0, 22, 5);
@@ -272,7 +280,7 @@ mod tests {
                     area,
                     &theme,
                     PreviewView::TextRows {
-                        rows: app.preview_state.text_rows.rows(),
+                        rows: app.preview_state.presentation.text_rows.rows(),
                     },
                     &mut scroll,
                     &mut cache,

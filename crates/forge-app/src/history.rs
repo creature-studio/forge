@@ -32,15 +32,16 @@ pub(super) struct PendingCommitFiles {
 type CommitDetail = (String, Vec<forge_git::CommitFileStat>);
 
 pub(super) struct HistoryState {
+    rows_revision: u64,
     /// The HISTORY accordion itself (independent of per-commit expansion).
-    pub expanded: bool,
+    expanded: bool,
     /// Commits in display order (children before parents).
-    pub commits: Vec<GraphCommit>,
+    commits: Vec<GraphCommit>,
     /// Lane glyphs, one row per commit.
     pub layout: GraphLayout,
-    pub expanded_commits: HashSet<String>,
-    pub expanded_dirs: HashSet<String>,
-    pub files: HashMap<String, Vec<CommitChange>>,
+    expanded_commits: HashSet<String>,
+    expanded_dirs: HashSet<String>,
+    files: HashMap<String, Vec<CommitChange>>,
     /// Status relative to the current branch's configured fetch upstream.
     pub upstream: forge_git::UpstreamStatus,
     pub unpushed: HashSet<String>,
@@ -69,6 +70,7 @@ impl Default for HistoryState {
     fn default() -> Self {
         Self {
             // History is the point of the section, so it starts open.
+            rows_revision: 0,
             expanded: true,
             commits: Vec::new(),
             layout: GraphLayout::default(),
@@ -97,34 +99,97 @@ impl Default for HistoryState {
 }
 
 impl HistoryState {
+    pub(super) fn rows_revision(&self) -> u64 {
+        self.rows_revision
+    }
+    fn invalidate_rows(&mut self) {
+        self.rows_revision = self.rows_revision.wrapping_add(1);
+    }
+    pub(super) fn expanded(&self) -> bool {
+        self.expanded
+    }
+    pub(super) fn set_expanded(&mut self, expanded: bool) {
+        if self.expanded != expanded {
+            self.expanded = expanded;
+            self.invalidate_rows();
+        }
+    }
+    pub(super) fn commits(&self) -> &[GraphCommit] {
+        &self.commits
+    }
+    pub(super) fn expanded_commits(&self) -> &HashSet<String> {
+        &self.expanded_commits
+    }
+    pub(super) fn files(&self) -> &HashMap<String, Vec<CommitChange>> {
+        &self.files
+    }
+
+    fn expanded_commits_mut(&mut self) -> &mut HashSet<String> {
+        self.invalidate_rows();
+        &mut self.expanded_commits
+    }
+
+    fn expanded_dirs_mut(&mut self) -> &mut HashSet<String> {
+        self.invalidate_rows();
+        &mut self.expanded_dirs
+    }
+
+    fn files_mut(&mut self) -> &mut HashMap<String, Vec<CommitChange>> {
+        self.invalidate_rows();
+        &mut self.files
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_expanded_dirs_mut(&mut self) -> &mut HashSet<String> {
+        self.expanded_dirs_mut()
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_files_mut(&mut self) -> &mut HashMap<String, Vec<CommitChange>> {
+        self.files_mut()
+    }
+    #[cfg(test)]
+    pub(super) fn test_expanded_commits_mut(&mut self) -> &mut HashSet<String> {
+        self.expanded_commits_mut()
+    }
+}
+
+impl HistoryState {
     /// Install a snapshot without touching git (used by tests).
     #[cfg(test)]
     pub(super) fn seed(&mut self, commits: Vec<GraphCommit>) {
+        self.invalidate_rows();
         self.commits = commits;
         self.layout = layout_graph(&self.commits);
         self.loaded = true;
     }
 }
 
-impl App {
+impl HistoryState {
     /// Borrowed history for the SCM sidebar renderer.
-    pub(super) fn history_view(&self) -> HistoryView<'_> {
+    pub(super) fn view(&self) -> HistoryView<'_> {
         HistoryView {
-            expanded: self.history.expanded,
-            loading: self.history.pending_graph.is_some(),
-            commits: &self.history.commits,
-            layout: &self.history.layout,
-            expanded_commits: &self.history.expanded_commits,
-            expanded_dirs: &self.history.expanded_dirs,
-            files: &self.history.files,
-            upstream: &self.history.upstream,
-            current_branch: &self.history.branch,
-            unpushed: &self.history.unpushed,
-            incoming: &self.history.incoming,
-            ahead: self.history.ahead,
-            behind: self.history.behind,
-            counts_truncated: self.history.counts_truncated,
+            expanded: self.expanded,
+            loading: self.pending_graph.is_some(),
+            commits: &self.commits,
+            layout: &self.layout,
+            expanded_commits: &self.expanded_commits,
+            expanded_dirs: &self.expanded_dirs,
+            files: &self.files,
+            upstream: &self.upstream,
+            current_branch: &self.branch,
+            unpushed: &self.unpushed,
+            incoming: &self.incoming,
+            ahead: self.ahead,
+            behind: self.behind,
+            counts_truncated: self.counts_truncated,
         }
+    }
+}
+
+impl App {
+    pub(super) fn history_view(&self) -> HistoryView<'_> {
+        self.history.view()
     }
 
     /// `G`: show the Git tab with HISTORY open and the newest commit selected.
@@ -135,7 +200,7 @@ impl App {
         self.session.context_menu = None;
         self.session.commit_open = false;
         self.session.commit_cancel_pending = false;
-        self.history.expanded = true;
+        self.history.set_expanded(true);
         self.history.focus_pending = true;
         self.request_history();
         self.select_first_commit();
@@ -144,7 +209,7 @@ impl App {
 
     /// Enter / Space on the HISTORY header.
     pub(super) fn toggle_history(&mut self) {
-        self.history.expanded = !self.history.expanded;
+        self.history.set_expanded(!self.history.expanded());
         if self.history.expanded {
             self.history.focus_pending = true;
             self.request_history();
@@ -169,7 +234,7 @@ impl App {
         }
         let root = self
             .repo_root()
-            .unwrap_or_else(|| self.files.tree_root.clone());
+            .unwrap_or_else(|| self.files.root().to_path_buf());
         let git = self.services.git;
         let limit = self.history.limit;
         let handle =
@@ -222,7 +287,7 @@ impl App {
         }
         let root = self
             .repo_root()
-            .unwrap_or_else(|| self.files.tree_root.clone());
+            .unwrap_or_else(|| self.files.root().to_path_buf());
         let git = self.services.git;
         let key = format!("git:history-files:{oid}");
         let job_oid = oid.clone();
@@ -250,8 +315,8 @@ impl App {
         };
         self.preview_state.commit_link_focus = None;
         self.history.pending_link = Some((oid.clone(), path));
-        self.history.expanded = true;
-        self.history.expanded_commits.insert(oid.clone());
+        self.history.set_expanded(true);
+        self.history.expanded_commits_mut().insert(oid.clone());
         self.session.focus = PaneFocus::Preview;
         if self.history.files.contains_key(&oid) {
             self.reveal_pending_commit_link();
@@ -282,7 +347,7 @@ impl App {
             self.session.status = format!("Historical file not found: {path}");
             return;
         };
-        self.history.expanded_commits.insert(oid.clone());
+        self.history.expanded_commits_mut().insert(oid.clone());
         // Expand all ancestors so compact folders and ordinary trees both
         // reveal the target. No file is created or read from the worktree.
         let mut directory = String::new();
@@ -294,7 +359,9 @@ impl App {
                 directory.push('/');
             }
             directory.push_str(part);
-            self.history.expanded_dirs.insert(dir_key(&oid, &directory));
+            self.history
+                .expanded_dirs_mut()
+                .insert(dir_key(&oid, &directory));
         }
         let target = self.scm_rows().iter().position(|row| {
             matches!(row, ScmRow::CommitFile { commit, index, .. }
@@ -307,7 +374,7 @@ impl App {
         self.scm.scm_selected = target;
         self.scm.follow_selection = true;
         self.session.focus = PaneFocus::Preview;
-        self.preview_state.preview_scroll = 0;
+        self.preview_state.presentation.preview_scroll = 0;
         self.request_diff_for_scm_selection();
     }
 
@@ -330,7 +397,7 @@ impl App {
         self.preview_state.preview = None;
         self.history.detail_files = None;
         self.preview_state.preview_mode = PreviewMode::File;
-        self.preview_state.preview_scroll = 0;
+        self.preview_state.presentation.preview_scroll = 0;
         self.preview_state.preview_loading = true;
         let Some(root) = self.repo_root() else {
             self.preview_state.preview_loading = false;
@@ -401,7 +468,7 @@ impl App {
             let oid = pending.oid;
             match result {
                 Ok(Ok(changes)) => {
-                    self.history.files.insert(oid, changes);
+                    self.history.files_mut().insert(oid, changes);
                     if self
                         .history
                         .pending_link
@@ -445,6 +512,7 @@ impl App {
                 self.history.ahead = snapshot.ahead;
                 self.history.behind = snapshot.behind;
                 self.history.counts_truncated = snapshot.counts_truncated;
+                self.history.invalidate_rows();
                 self.history.commits = snapshot.commits;
                 self.history.layout = layout_graph(&self.history.commits);
                 self.history.exhausted = self.history.commits.len() < self.history.limit;
@@ -501,12 +569,12 @@ impl App {
                 let Some(oid) = self.history.commits.get(commit).map(|c| c.id.clone()) else {
                     return;
                 };
-                if self.history.expanded_commits.remove(&oid) {
+                if self.history.expanded_commits_mut().remove(&oid) {
                     self.clamp_scm_selection();
                     self.session.status = self.hint_bar();
                     return;
                 }
-                self.history.expanded_commits.insert(oid.clone());
+                self.history.expanded_commits_mut().insert(oid.clone());
                 self.request_commit_files(oid);
             }
             ScmRow::CommitFolder {
@@ -520,10 +588,10 @@ impl App {
                 };
                 let key = dir_key(&oid, &path);
                 if expanded {
-                    self.history.expanded_dirs.remove(&key);
+                    self.history.expanded_dirs_mut().remove(&key);
                     let prefix = dir_key(&oid, &format!("{path}/"));
                     self.history
-                        .expanded_dirs
+                        .expanded_dirs_mut()
                         .retain(|item| !item.starts_with(&prefix));
                 } else {
                     let mut prefix = String::new();
@@ -532,7 +600,9 @@ impl App {
                             prefix.push('/');
                         }
                         prefix.push_str(part);
-                        self.history.expanded_dirs.insert(dir_key(&oid, &prefix));
+                        self.history
+                            .expanded_dirs_mut()
+                            .insert(dir_key(&oid, &prefix));
                     }
                     let target = &path;
                     if let Some(i) = self.scm_rows().iter().position(|row| {
@@ -577,7 +647,7 @@ impl App {
         match row {
             ScmRow::Commit { index: commit } => {
                 if let Some(oid) = self.history.commits.get(commit).map(|c| c.id.clone()) {
-                    self.history.expanded_commits.remove(&oid);
+                    self.history.expanded_commits_mut().remove(&oid);
                     self.clamp_scm_selection();
                 }
             }
@@ -589,7 +659,9 @@ impl App {
             } => {
                 if expanded {
                     if let Some(oid) = self.history.commits.get(commit).map(|c| c.id.clone()) {
-                        self.history.expanded_dirs.remove(&dir_key(&oid, &path));
+                        self.history
+                            .expanded_dirs_mut()
+                            .remove(&dir_key(&oid, &path));
                     }
                 } else if let Some(parent) = find_scm_parent_row(&rows, index) {
                     self.scm.scm_selected = parent;
@@ -642,8 +714,8 @@ mod tests {
         app.files.pending_lists.clear();
         app.scm.pending_status = None;
         app.session.activity = ActivityTab::Git;
-        app.history.expanded = true;
-        app.scm.git_status = app.services.git.status(root).ok();
+        app.history.set_expanded(true);
+        app.scm.set_status(app.services.git.status(root).ok());
         app
     }
 
@@ -773,7 +845,7 @@ mod tests {
             commit("b", "feat: second"),
         ]);
         app.history
-            .files
+            .files_mut()
             .insert(oid.clone(), vec![change("src/a.rs"), change("README.md")]);
 
         let commit_index = commit_row(&app).unwrap();
@@ -825,14 +897,14 @@ mod tests {
         let mut app = app(dir.path());
         let oid = "a".repeat(40);
         app.history.seed(vec![commit(&oid, "one")]);
-        app.history.files.insert(
+        app.history.files_mut().insert(
             oid.clone(),
             vec![
                 change("crates/forge-config/src/lib.rs"),
                 change("crates/forge-config/src/mod.rs"),
             ],
         );
-        app.history.expanded_commits.insert(oid.clone());
+        app.history.expanded_commits_mut().insert(oid.clone());
         let folder = row(&app, |row| {
             matches!(row,
             ScmRow::CommitFolder { path, expanded: false, .. }
@@ -1105,7 +1177,7 @@ mod tests {
                 ));
             })
             .unwrap();
-        assert!(app.preview_state.preview_scroll > 0);
+        assert!(app.preview_state.presentation.preview_scroll > 0);
         assert!(
             app.commit_file_links
                 .iter()
@@ -1159,8 +1231,8 @@ mod tests {
             app.show_history();
             settle(&mut app).await;
             let area = Rect::new(2, 1, 50, 24);
-            app.session.layout.preview = area;
-            app.session.layout.preview_inner = area;
+            app.layout_state.geometry.preview = area;
+            app.layout_state.geometry.preview_inner = area;
             let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
             term.draw(|frame| {
                 app.commit_file_links.clear();
@@ -1225,10 +1297,10 @@ mod tests {
         let mut app = app(dir.path());
         app.show_history();
         settle(&mut app).await;
-        app.preview_state.preview_scroll = 25;
+        app.preview_state.presentation.preview_scroll = 25;
         let area = Rect::new(4, 1, 76, 9);
-        app.session.layout.preview = area;
-        app.session.layout.preview_inner = area;
+        app.layout_state.geometry.preview = area;
+        app.layout_state.geometry.preview_inner = area;
         let mut term = Terminal::new(TestBackend::new(90, 18)).unwrap();
         term.draw(|frame| {
             app.commit_file_links.clear();
@@ -1298,7 +1370,7 @@ mod tests {
             assert!(region.x >= area.x && region.right() <= area.right());
             assert!(region.y >= area.y && region.bottom() <= area.bottom());
         }
-        app.preview_state.preview_scroll = 100;
+        app.preview_state.presentation.preview_scroll = 100;
         term.draw(|frame| {
             app.commit_file_links.clear();
             assert!(crate::view::commit_detail::draw(

@@ -601,9 +601,9 @@ impl App {
             Ok(Ok(read)) => {
                 if preview_hash(&read.fresh) != Some(expected) {
                     self.preview_state.preview = Some(read.fresh.clone());
-                    self.preview_state.text_rows.clear();
-                    self.preview_state.markdown = MarkdownPreview::default();
-                    self.preview_state.selection.clear();
+                    self.preview_state.presentation.text_rows.clear();
+                    self.preview_state.presentation.markdown = MarkdownPreview::default();
+                    self.preview_state.presentation.selection.clear();
                     self.reset_blame();
                 }
                 if self.inline_diff.active.as_ref().map(|r| &r.key) != Some(&read.key) {
@@ -693,13 +693,13 @@ impl App {
         let Some(path) = self.inline_path() else {
             return;
         };
-        let top = self.preview_state.preview_scroll;
+        let top = self.preview_state.presentation.preview_scroll;
         // Render tests and first-frame input may run before the viewport gets
         // measured. In that case use the remainder of the file as a fallback.
-        let bottom = if self.session.layout.preview_inner.height == 0 {
+        let bottom = if self.layout_state.geometry.preview_inner.height == 0 {
             usize::MAX
         } else {
-            top.saturating_add(self.session.layout.preview_inner.height as usize)
+            top.saturating_add(self.layout_state.geometry.preview_inner.height as usize)
         };
         // The same source row that owns inline blame must own the F7 Peek.
         // Falling back to the viewport top is appropriate only when the user
@@ -709,9 +709,19 @@ impl App {
             .cursor
             .as_ref()
             .filter(|(p, row, scroll)| p == &path && *scroll == top && *row >= top && *row < bottom)
-            .and_then(|(_, row, _)| self.preview_state.text_rows.source_line_at(*row));
+            .and_then(|(_, row, _)| {
+                self.preview_state
+                    .presentation
+                    .text_rows
+                    .source_line_at(*row)
+            });
         let target_row = cursor
-            .map(|line| self.preview_state.text_rows.source_to_row(line))
+            .map(|line| {
+                self.preview_state
+                    .presentation
+                    .text_rows
+                    .source_to_row(line)
+            })
             .unwrap_or(top);
         let index_and_line = self.inline_active().and_then(|read| {
             let visible_marks = (0..Self::visible_hunk_count(read))
@@ -721,11 +731,19 @@ impl App {
                 })
                 .flat_map(|(index, hunk)| hunk.marks.iter().map(move |(line, _)| (index, *line)))
                 .filter(|(_, line)| {
-                    let row = self.preview_state.text_rows.source_to_row(*line);
+                    let row = self
+                        .preview_state
+                        .presentation
+                        .text_rows
+                        .source_to_row(*line);
                     row >= top && row < bottom
                 });
             visible_marks.min_by_key(|(index, line)| {
-                let row = self.preview_state.text_rows.source_to_row(*line);
+                let row = self
+                    .preview_state
+                    .presentation
+                    .text_rows
+                    .source_to_row(*line);
                 let distance = row.abs_diff(target_row);
                 let side = usize::from(*index >= read.hunks.len());
                 // F7 without a selected source line keeps WORKTREE priority.
@@ -785,18 +803,19 @@ impl App {
             }
             return true;
         }
-        let region = self.session.layout.preview_inner;
+        let region = self.layout_state.geometry.preview_inner;
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && region.contains(point)
             && mouse.column < region.x.saturating_add(5).min(region.right())
         {
-            let row = self.preview_state.preview_scroll + (mouse.row - region.y) as usize;
+            let row =
+                self.preview_state.presentation.preview_scroll + (mouse.row - region.y) as usize;
             let staged_column = mouse.column == region.x;
             let index = self.inline_active().and_then(|r| {
                 let matches = |h: &Hunk| {
-                    h.marks
-                        .iter()
-                        .any(|(n, _)| self.preview_state.text_rows.source_to_row(*n) == row)
+                    h.marks.iter().any(|(n, _)| {
+                        self.preview_state.presentation.text_rows.source_to_row(*n) == row
+                    })
                 };
                 let staged = || {
                     self.layer_enabled(DiffSide::Staged)
@@ -820,7 +839,11 @@ impl App {
                 }
             });
             if let Some(index) = index {
-                let source = self.preview_state.text_rows.source_line_at(row);
+                let source = self
+                    .preview_state
+                    .presentation
+                    .text_rows
+                    .source_line_at(row);
                 self.toggle_inline_hunk(index, source);
                 return true;
             }
@@ -847,7 +870,7 @@ impl App {
         let Some(active) = self.inline_active() else {
             return;
         };
-        let scroll = self.preview_state.preview_scroll;
+        let scroll = self.preview_state.presentation.preview_scroll;
         let show_unstaged = self.config.git.show_unstaged_gutter;
         let show_staged = self.config.git.show_staged_gutter;
         // Unstaged keeps the existing vivid line-number decoration. Staged
@@ -855,7 +878,7 @@ impl App {
         if show_unstaged {
             for hunk in &active.hunks {
                 for (n, change) in &hunk.marks {
-                    let row = self.preview_state.text_rows.source_to_row(*n);
+                    let row = self.preview_state.presentation.text_rows.source_to_row(*n);
                     if row < scroll || row >= scroll + area.height as usize {
                         continue;
                     }
@@ -881,7 +904,7 @@ impl App {
         if show_staged {
             for hunk in &active.staged_hunks {
                 for (n, _) in &hunk.marks {
-                    let row = self.preview_state.text_rows.source_to_row(*n);
+                    let row = self.preview_state.presentation.text_rows.source_to_row(*n);
                     if row < scroll || row >= scroll + area.height as usize {
                         continue;
                     }
@@ -919,7 +942,7 @@ impl App {
             return;
         }
         let visible = |n: usize| {
-            let row = self.preview_state.text_rows.source_to_row(n);
+            let row = self.preview_state.presentation.text_rows.source_to_row(n);
             (row >= scroll && row < scroll + area.height as usize).then_some(row)
         };
         // Clicking a gutter mark must anchor the peek to that mark. The old

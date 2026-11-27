@@ -1,6 +1,8 @@
 //! Searchable workspace commands and focused dialogs. All I/O runs in jobs.
+use super::navigation::DiffResume;
+use super::workspace_filter::FileFilter;
 use super::*;
-use forge_fs::workspace::{FileIndex, FileOperation, SearchOptions};
+use forge_fs::workspace::{ConflictPolicy, FileIndex, FileOperation, SearchOptions};
 use forge_git::{GitAction, GitItem, GitQuery};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -115,54 +117,64 @@ pub(super) struct ToolsState {
     streamed: bool,
     after: Option<PanelKind>,
     pub marks: Marks,
-    pub filter: FileFilter,
+    pub file_clipboard: Option<FileClipboard>,
+    paste_in_progress: bool,
+    pub file_selection_anchor: Option<PathBuf>,
     pub editor: Option<EditorRequest>,
-    pub reveal: Option<(PathBuf, usize)>,
-    pub return_focus: Option<PaneFocus>,
-    pub resume_diff: Option<DiffResume>,
     pub sync: String,
     pub last_fetch: String,
     pub remote_result: String,
     pub pinned: Option<GitItem>,
-    worktree_navigation: HashMap<PathBuf, WorkspaceNavigation>,
 }
 
-/// Navigation state is local to a worktree. Never reuse a directory's
-/// expansion/selection in another worktree with similar filenames.
+impl ToolsState {
+    fn cancel_tool_read(&mut self, jobs: &JobScheduler) {
+        self.search_generation = self.search_generation.wrapping_add(1);
+        self.search_hits = None;
+        if let Some(flag) = self.cancel.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        jobs.cancel_key("tools:read");
+        self.pending_read = None;
+    }
+
+    fn cancel_file_index(&mut self, jobs: &JobScheduler) {
+        if let Some(flag) = self.index_cancel.take() {
+            flag.store(true, Ordering::Relaxed);
+        }
+        jobs.cancel_key("tools:index");
+        self.pending_index = None;
+        self.index_key = None;
+    }
+
+    fn clear_search_context(&mut self, jobs: &JobScheduler) {
+        if let Some(cancel) = self.context_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        jobs.cancel_key("tools:context");
+        self.pending_context = None;
+        self.context_path = None;
+        self.content_context = None;
+    }
+
+    fn invalidate_index(&mut self, jobs: &JobScheduler) {
+        self.clear_search_context(jobs);
+        self.cancel_file_index(jobs);
+        self.file_index = None;
+    }
+}
+
 #[derive(Clone)]
-struct WorkspaceNavigation {
-    selected_path: Option<PathBuf>,
-    selected_scroll: usize,
-    expanded: HashSet<PathBuf>,
-    filter: FileFilter,
-    staged_folders: HashSet<String>,
-    unstaged_folders: HashSet<String>,
-    scm_selected: usize,
-    scm_scroll: usize,
-    activity: ActivityTab,
-    focus: PaneFocus,
-}
-
-#[derive(Default, Clone)]
-pub(super) struct FileFilter {
-    pub status: u8, // 0 all, 1 modified, 2 untracked
-    pub extension: String,
-    pub show_hidden: bool,
-    pub excluded: String,
+pub(super) struct FileClipboard {
+    root: PathBuf,
+    paths: Vec<PathBuf>,
+    copy: bool,
 }
 
 #[derive(Clone)]
 pub(super) struct EditorRequest {
     pub path: PathBuf,
     pub line: usize,
-}
-
-pub(super) struct DiffResume {
-    pub path: String,
-    pub side: DiffSide,
-    pub scroll: usize,
-    pub focus: PaneFocus,
-    pub hunk: Option<usize>,
 }
 
 pub(super) struct EditorResume {
@@ -190,16 +202,16 @@ impl EditorResume {
         let opened_path = request.path.clone();
         Some(Self {
             request,
-            root: app.files.tree_root.clone(),
+            root: app.files.root().to_path_buf(),
             path: Some(opened_path),
             expanded: app.files.expanded.clone(),
-            unstaged: app.scm.scm_expanded_unstaged.clone(),
-            staged: app.scm.scm_expanded_staged.clone(),
+            unstaged: app.scm.expanded(StagingColumn::Unstaged).clone(),
+            staged: app.scm.expanded(StagingColumn::Staged).clone(),
             scm_selected: app.scm.scm_selected,
             activity: app.session.activity,
             focus: app.session.focus,
             scroll: app.preview_source_line().saturating_sub(1),
-            filter: app.tools.filter.clone(),
+            filter: app.workspace_filter.clone(),
             marks: app.tools.marks.clone(),
             list_scroll: app.files.scroll,
             scm_scroll: app.scm.scroll_scm,
@@ -214,18 +226,18 @@ impl EditorResume {
     fn restore(self, mode: ColorMode, result: Result<()>) -> App {
         let mut app = create_workspace_at(mode, self.root);
         app.files.expanded = self.expanded;
-        app.scm.scm_expanded_unstaged = self.unstaged;
-        app.scm.scm_expanded_staged = self.staged;
+        *app.scm.expanded_mut(StagingColumn::Unstaged) = self.unstaged;
+        *app.scm.expanded_mut(StagingColumn::Staged) = self.staged;
         app.scm.scm_selected = self.scm_selected;
         app.session.activity = self.activity;
         app.session.focus = self.focus;
-        app.tools.filter = self.filter;
+        app.workspace_filter = self.filter;
         app.tools.marks = self.marks;
         app.files.scroll = self.list_scroll;
         app.scm.scroll_scm = self.scm_scroll;
         if self.activity == ActivityTab::Git {
             if let Some((path, side)) = self.git_selection {
-                app.tools.resume_diff = Some(DiffResume {
+                app.navigation.request_diff_resume(DiffResume {
                     path,
                     side,
                     scroll: self.scroll,
@@ -234,9 +246,8 @@ impl EditorResume {
                 });
             }
         } else if let Some(path) = self.path {
-            app.tools.reveal = Some((path, self.scroll + 1));
+            app.navigation.request(path, self.scroll + 1, self.focus);
         }
-        app.tools.return_focus = Some(self.focus);
         app.request_missing_expanded();
         if let Err(e) = result {
             app.session.write_status = Some(format!("Editor failed: {e}"));
@@ -294,6 +305,11 @@ pub(super) enum PromptAction {
     Rename(PathBuf),
     Copy(Vec<PathBuf>),
     Move(Vec<PathBuf>),
+    PasteConflict {
+        paths: Vec<PathBuf>,
+        destination: PathBuf,
+        copy: bool,
+    },
     Extension,
     Exclusions,
     Branch,
@@ -461,7 +477,7 @@ const COMMANDS: &[(Command, &str)] = &[
     (Command::Rename, "Rename selected file or directory…"),
     (Command::Copy, "Copy selected items to directory…"),
     (Command::Move, "Move selected items to directory…"),
-    (Command::Delete, "Delete selected items…"),
+    (Command::Delete, "Permanently delete selected items…"),
     (Command::Mark, "Toggle selection                         v"),
     (
         Command::MarkAll,
@@ -629,7 +645,7 @@ impl Panel {
 
 impl App {
     pub(super) fn new_item_in(&mut self, parent: &Path, directory: bool) {
-        let prefix = parent.strip_prefix(&self.files.tree_root).unwrap_or(parent);
+        let prefix = parent.strip_prefix(self.files.root()).unwrap_or(parent);
         let prefix = if prefix.as_os_str().is_empty() {
             String::new()
         } else {
@@ -671,11 +687,15 @@ impl App {
                     action: ContextAction::NewDirectory,
                     enabled: true,
                 },
+                forge_ui::ContextMenuItem {
+                    action: ContextAction::PasteFiles,
+                    enabled: self.file_paste_available(),
+                },
             ],
             col,
             row,
             ContextTarget::FileRoot {
-                path: self.files.tree_root.clone(),
+                path: self.files.root().to_path_buf(),
             },
         );
     }
@@ -688,8 +708,8 @@ impl App {
                     Some(self.repo_root()?.join(&self.selected_scm_entry()?.path))
                 }
                 ScmRow::CommitFile { commit, index, .. } => {
-                    let oid = self.history.commits.get(commit)?.id.clone();
-                    let path = self.history.files.get(&oid)?.get(index)?.path.clone();
+                    let oid = self.history.commits().get(commit)?.id.clone();
+                    let path = self.history.files().get(&oid)?.get(index)?.path.clone();
                     Some(self.repo_root()?.join(path))
                 }
                 _ => None,
@@ -720,6 +740,169 @@ impl App {
         } else {
             let files: Vec<_> = self.tools.marks.files.iter().cloned().collect();
             forge_fs::workspace::unique_roots(&files)
+        }
+    }
+
+    pub(super) fn capture_file_clipboard(&mut self, copy: bool) {
+        if self.write_busy() {
+            return;
+        }
+        let paths = self.operation_paths();
+        if paths.is_empty() {
+            return;
+        }
+        self.session.status = format!(
+            "{} items {} · choose destination and Ctrl+V",
+            paths.len(),
+            if copy { "copied" } else { "cut" }
+        );
+        self.tools.file_clipboard = Some(FileClipboard {
+            root: self.files.root().to_path_buf(),
+            paths,
+            copy,
+        });
+    }
+
+    pub(super) fn file_paste_available(&self) -> bool {
+        self.tools
+            .file_clipboard
+            .as_ref()
+            .is_some_and(|c| c.root == self.files.root() && !c.paths.is_empty())
+    }
+
+    pub(super) fn file_clipboard_hint(&self) -> Option<String> {
+        self.tools
+            .file_clipboard
+            .as_ref()
+            .filter(|c| c.root == self.files.root())
+            .map(|c| {
+                format!(
+                    "{} {} · Ctrl+V Paste",
+                    c.paths.len(),
+                    if c.copy { "copied" } else { "cut" }
+                )
+            })
+    }
+
+    pub(super) fn paste_files(&mut self, destination: Option<PathBuf>) {
+        let Some(clipboard) = self.tools.file_clipboard.clone() else {
+            self.session.status = "File clipboard is empty".into();
+            return;
+        };
+        if self.write_busy() {
+            return;
+        }
+        if clipboard.root != self.files.root() {
+            self.session.status = "File clipboard belongs to another workspace".into();
+            return;
+        }
+        let destination = destination.unwrap_or_else(|| {
+            self.current_path()
+                .map(|p| {
+                    if p.is_dir() {
+                        p.clone()
+                    } else {
+                        p.parent().unwrap_or(self.files.root()).to_owned()
+                    }
+                })
+                .unwrap_or_else(|| self.files.root().to_path_buf())
+        });
+        let conflicts = clipboard
+            .paths
+            .iter()
+            .filter_map(|path| {
+                let target = destination.join(path.file_name()?);
+                (std::fs::symlink_metadata(&target).is_ok() && (clipboard.copy || *path != target))
+                    .then_some(target.display().to_string())
+            })
+            .collect::<Vec<_>>();
+        let mut names = HashSet::new();
+        let duplicates = clipboard.paths.iter().any(|p| !names.insert(p.file_name()));
+        if !conflicts.is_empty() || duplicates {
+            self.prompt(
+                PromptAction::PasteConflict {
+                    paths: clipboard.paths,
+                    destination,
+                    copy: clipboard.copy,
+                },
+                "Paste conflicts",
+                "skip".into(),
+                "Type skip / keep / replace (regular files only), Enter apply, Esc cancel",
+            );
+            if let Some(panel) = &mut self.tools.panel {
+                panel.detail = format!("Conflicting targets:\n{}\nPolicy applies to all conflicts. Replace asks for confirmation.",
+                    conflicts.join("\n"));
+            }
+        } else {
+            self.start_tool_operation(
+                Operation::Files(FileOperation::Paste {
+                    paths: clipboard.paths,
+                    destination,
+                    copy: clipboard.copy,
+                    conflict: ConflictPolicy::Reject,
+                }),
+                None,
+            );
+        }
+    }
+
+    pub(super) fn mark_file_range(&mut self, from: usize, to: usize, extend: bool) {
+        let Some(previous) = self.files.visible.get(from) else {
+            return;
+        };
+        let anchor = self
+            .tools
+            .file_selection_anchor
+            .get_or_insert_with(|| previous.entry.path.clone());
+        let start = self
+            .files
+            .visible
+            .iter()
+            .position(|r| r.entry.path == *anchor)
+            .unwrap_or(from);
+        if !extend {
+            self.tools.marks.files.clear();
+        }
+        let paths = self
+            .files
+            .visible
+            .iter()
+            .skip(start.min(to))
+            .take(start.abs_diff(to) + 1)
+            .map(|r| r.entry.path.clone())
+            .collect::<Vec<_>>();
+        self.tools.marks.extend_files(paths);
+        self.session.status = format!("{} selected", self.tools.marks.files.len());
+    }
+
+    pub(super) fn trash_selected_files(&mut self) {
+        let paths = self.operation_paths();
+        if paths.is_empty() {
+            return;
+        }
+        self.confirm_trash_paths(paths);
+    }
+
+    pub(super) fn confirm_trash_paths(&mut self, paths: Vec<PathBuf>) {
+        self.confirm(
+            Operation::Files(FileOperation::Trash(paths.clone())),
+            format!(
+                "Move {} items to the system trash?\n{}",
+                paths.len(),
+                paths
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            None,
+        );
+    }
+
+    pub(super) fn permanently_delete_selected_files(&mut self) {
+        let paths = self.operation_paths();
+        if !paths.is_empty() {
+            self.confirm_delete_paths(paths);
         }
     }
 
@@ -811,111 +994,16 @@ impl App {
         );
     }
 
-    pub(super) fn filter_entry(&self, entry: &Entry) -> bool {
-        // An explicit Open file / Reveal request must be visible even if a
-        // previous extension, status or excluded-folder filter hides its path.
-        // Never bypass the special .git directory exclusion.
-        if entry.name != ".git"
-            && self.files.revealed_path.as_ref().is_some_and(|target| {
-                entry.path == *target
-                    || (entry.kind == EntryKind::Directory && target.starts_with(&entry.path))
-            })
-        {
-            return true;
-        }
-        let options = self.search_options(false, false);
-        if entry.name == ".git"
-            || (entry.kind == EntryKind::Directory && options.excluded.contains(&entry.name))
-            || (!options.show_hidden && entry.name.starts_with('.'))
-        {
-            return false;
-        }
-        if let Some(allowed) = &options.allowed {
-            if !allowed.iter().any(|p| {
-                p == &entry.path
-                    || (entry.kind == EntryKind::Directory && p.starts_with(&entry.path))
-            }) {
-                return false;
-            }
-        }
-        entry.kind == EntryKind::Directory
-            || options.extension.is_empty()
-            || entry.path.extension().and_then(|e| e.to_str())
-                == Some(options.extension.trim_start_matches('.'))
-    }
-
-    fn search_options(&self, content: bool, regex: bool) -> SearchOptions {
-        let mut options = SearchOptions {
-            content,
-            regex,
-            show_hidden: self.tools.filter.show_hidden,
-            extension: self.tools.filter.extension.clone(),
-            ..Default::default()
-        };
-        if !self.tools.filter.excluded.is_empty() {
-            options.excluded.extend(
-                self.tools
-                    .filter
-                    .excluded
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|p| !p.is_empty())
-                    .map(str::to_owned),
-            );
-        }
-        if self.tools.filter.status != 0 {
-            let wanted = self.tools.filter.status;
-            options.allowed = Some(
-                self.scm
-                    .git_status
-                    .as_ref()
-                    .map(|s| {
-                        s.entries
-                            .iter()
-                            .filter(|(_, v)| {
-                                if wanted == 2 {
-                                    **v == forge_git::GitStatus::Untracked
-                                } else {
-                                    !matches!(
-                                        v,
-                                        forge_git::GitStatus::Clean
-                                            | forge_git::GitStatus::Untracked
-                                            | forge_git::GitStatus::Ignored
-                                    )
-                                }
-                            })
-                            .map(|(p, _)| s.repo_root.join(p))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            );
-        }
-        options
-    }
-
     fn cancel_tool_read(&mut self) {
-        self.tools.search_generation = self.tools.search_generation.wrapping_add(1);
-        self.tools.search_hits = None;
-        if let Some(flag) = self.tools.cancel.take() {
-            flag.store(true, Ordering::Relaxed);
-        }
-        self.services.jobs.cancel_key("tools:read");
-        self.tools.pending_read = None;
+        self.tools.cancel_tool_read(&self.services.jobs);
     }
 
     fn cancel_file_index(&mut self) {
-        if let Some(flag) = self.tools.index_cancel.take() {
-            flag.store(true, Ordering::Relaxed);
-        }
-        self.services.jobs.cancel_key("tools:index");
-        self.tools.pending_index = None;
-        self.tools.index_key = None;
+        self.tools.cancel_file_index(&self.services.jobs);
     }
 
     pub(super) fn invalidate_search_cache(&mut self) {
-        self.clear_search_context();
-        self.cancel_file_index();
-        self.tools.file_index = None;
+        self.tools.invalidate_index(&self.services.jobs);
         if self
             .tools
             .panel
@@ -936,7 +1024,7 @@ impl App {
         let session = self
             .tools
             .search_sessions
-            .entry(self.files.tree_root.clone())
+            .entry(self.files.root().to_path_buf())
             .or_default();
         if matches!(panel.kind, PanelKind::Content) {
             session.content = panel.input.value().to_owned();
@@ -1028,7 +1116,7 @@ impl App {
             PanelKind::Text => "Details",
         };
         let mut panel = Panel::new(kind, title);
-        if let Some(previous) = self.tools.search_sessions.get(&self.files.tree_root) {
+        if let Some(previous) = self.tools.search_sessions.get(self.files.root()) {
             if matches!(panel.kind, PanelKind::Content) {
                 panel.input = tui_input::Input::new(previous.content.clone());
                 panel.regex = previous.regex;
@@ -1074,7 +1162,7 @@ impl App {
         let query = panel.input.value().to_owned();
         let regex = panel.regex;
         if matches!(kind, PanelKind::Workspaces) {
-            let mut recent = vec![self.files.tree_root.clone()];
+            let mut recent = vec![self.files.root().to_path_buf()];
             recent.extend(self.config.recent_workspaces.iter().cloned());
             let query = query.to_ascii_lowercase();
             let mut seen = HashSet::new();
@@ -1085,7 +1173,7 @@ impl App {
                 .map(|path| ToolRow {
                     label: format!(
                         "{}  {}",
-                        if path == self.files.tree_root {
+                        if path == self.files.root() {
                             "●"
                         } else {
                             " "
@@ -1279,9 +1367,9 @@ Git Worktrees are managed separately with W."
             panel.detail = format!(
                 "{} selected · filters: status={} extension={} hidden={} · Enter run",
                 self.tools.marks.len(),
-                self.tools.filter.status,
-                self.tools.filter.extension,
-                self.tools.filter.show_hidden
+                self.workspace_filter.status,
+                self.workspace_filter.extension,
+                self.workspace_filter.show_hidden
             );
             return;
         }
@@ -1310,10 +1398,10 @@ Git Worktrees are managed separately with W."
         }
         let is_search = matches!(kind, PanelKind::Files | PanelKind::Content);
         let root = if is_search {
-            self.files.tree_root.clone()
+            self.files.root().to_path_buf()
         } else {
             self.repo_root()
-                .unwrap_or_else(|| self.files.tree_root.clone())
+                .unwrap_or_else(|| self.files.root().to_path_buf())
         };
         let git = self.services.git;
         let options = self.search_options(matches!(kind, PanelKind::Content), regex);
@@ -1453,7 +1541,9 @@ Git Worktrees are managed separately with W."
     fn confirm(&mut self, operation: Operation, detail: String, after: Option<PanelKind>) {
         // Confirmation is always a child of the page (or prompt) that
         // requested it. On Esc, restore that exact page and its draft.
-        let title = if matches!(&operation, Operation::Files(FileOperation::Delete(_))) {
+        let title = if matches!(&operation, Operation::Files(FileOperation::Trash(_))) {
+            "Move to trash"
+        } else if matches!(&operation, Operation::Files(FileOperation::Delete(_))) {
             "Delete items"
         } else {
             "Confirm"
@@ -1509,7 +1599,7 @@ Git Worktrees are managed separately with W."
                 .unwrap()
                 .try_iter()
                 .filter(|(generation, _)| *generation == self.tools.search_generation)
-                .map(|(_, hit)| search_row(&self.files.tree_root, hit))
+                .map(|(_, hit)| search_row(self.files.root(), hit))
                 .collect();
             if !rows.is_empty() {
                 if let Some(panel) = &mut self.tools.panel {
@@ -1609,6 +1699,17 @@ Git Worktrees are managed separately with W."
         if let Some((_, result)) =
             pending_request::take_ready(&mut self.tools.pending_task, JobHandle::try_join)
         {
+            let was_cut = std::mem::take(&mut self.tools.paste_in_progress);
+            if was_cut {
+                if let Some(clipboard) = &mut self.tools.file_clipboard {
+                    clipboard
+                        .paths
+                        .retain(|p| std::fs::symlink_metadata(p).is_ok());
+                    if clipboard.paths.is_empty() {
+                        self.tools.file_clipboard = None;
+                    }
+                }
+            }
             let show_completion = self
                 .tools
                 .panel
@@ -1624,8 +1725,7 @@ Git Worktrees are managed separately with W."
                         self.request_sync_status();
                     }
                     self.tools.marks.clear();
-                    self.request_list();
-                    self.request_status();
+                    self.on_workspace_change(workspace_changes::WorkspaceChange::ToolWrite);
                     let after = self.tools.after.take();
                     if show_completion {
                         if let Some(kind) = after {
@@ -1660,7 +1760,6 @@ Git Worktrees are managed separately with W."
         {
             self.tools.sync = summary;
         }
-        self.try_reveal();
     }
 
     pub(super) fn request_sync_status(&mut self) {
@@ -1691,83 +1790,6 @@ Git Worktrees are managed separately with W."
             self.tools.editor = Some(EditorRequest { path, line });
         } else {
             self.session.status = "Select a file to edit".into();
-        }
-    }
-
-    pub(super) fn reveal_file(&mut self, path: PathBuf, line: usize) {
-        // Git may discover a repository above the current Files root. The
-        // target cannot appear in that narrower tree until it is rooted at
-        // the repository, so switch only when the target is actually outside.
-        if !path.starts_with(&self.files.tree_root) {
-            let repo = self.repo_root();
-            if let Some(repo) = repo.filter(|repo| path.starts_with(repo)) {
-                if self.write_busy() {
-                    self.session.status = "Cannot navigate while a write is in progress".into();
-                    return;
-                }
-                self.switch_workspace(repo);
-            } else {
-                self.session.status = "File is outside the current workspace".into();
-                return;
-            }
-        }
-        self.session.activity = ActivityTab::Files;
-        self.session.focus = PaneFocus::List;
-        self.files.external_anchor = None; // old refresh anchor must not steal selection
-        self.files.last_list_click = None;
-        self.files.revealed_path = Some(path.clone());
-        self.tools.reveal = Some((path.clone(), line));
-        let mut parent = path.parent();
-        while let Some(p) = parent {
-            if !p.starts_with(&self.files.tree_root) {
-                break;
-            }
-            self.files.expanded.insert(p.to_owned());
-            parent = p.parent();
-        }
-        self.request_missing_expanded();
-        self.rebuild_visible();
-        self.try_reveal();
-    }
-
-    pub(super) fn try_reveal(&mut self) {
-        let Some((path, line)) = self.tools.reveal.clone() else {
-            return;
-        };
-        let Some(index) = self.files.visible.iter().position(|r| r.entry.path == path) else {
-            return; // Ancestor listings have not arrived yet.
-        };
-        let pending_target = self
-            .preview_state
-            .pending_preview
-            .as_ref()
-            .is_some_and(|pending| pending.path == path);
-        let already_displayed = matches!(self.preview_state.preview_mode, PreviewMode::File)
-            && self
-                .preview_state
-                .preview
-                .as_ref()
-                .is_some_and(|preview| preview.path == path)
-            && self.preview_state.pending_preview.is_none();
-        self.files.selected = index;
-        self.files.follow_selection = true;
-        let viewport = self.session.layout.list_inner.height as usize;
-        self.files.scroll = index.saturating_sub(viewport.saturating_sub(1) / 2);
-        self.files.external_anchor = None;
-
-        if already_displayed {
-            // No asynchronous preview completion will follow. Complete the
-            // explicit reveal now, including its focus/scroll handoff, or a
-            // later reveal could accidentally inherit this operation's focus.
-            self.tools.reveal = None;
-            if self.markdown_available() {
-                self.preview_state.markdown_code = true;
-            }
-            self.preview_state.preview_scroll = line.saturating_sub(1);
-            self.preview_state.pending_source_line = Some(line);
-            self.session.focus = self.tools.return_focus.take().unwrap_or(PaneFocus::Preview);
-        } else if !pending_target {
-            self.request_preview_for_selection();
         }
     }
 
@@ -1852,13 +1874,7 @@ Git Worktrees are managed separately with W."
     }
 
     fn clear_search_context(&mut self) {
-        if let Some(cancel) = self.tools.context_cancel.take() {
-            cancel.store(true, Ordering::Relaxed);
-        }
-        self.services.jobs.cancel_key("tools:context");
-        self.tools.pending_context = None;
-        self.tools.context_path = None;
-        self.tools.content_context = None;
+        self.tools.clear_search_context(&self.services.jobs);
     }
 
     fn request_search_context(&mut self) {
@@ -1891,106 +1907,5 @@ Git Worktrees are managed separately with W."
                 .await?
             },
         ));
-    }
-
-    pub(super) fn switch_workspace(&mut self, path: PathBuf) {
-        if self.write_busy() || path == self.files.tree_root {
-            return;
-        }
-        // Capture identity (absolute path) rather than a fragile row index.
-        let current_root = self.files.tree_root.clone();
-        self.config
-            .recent_workspaces
-            .retain(|p| p != &path && p != &current_root);
-        self.config
-            .recent_workspaces
-            .insert(0, current_root.clone());
-        self.config.recent_workspaces.insert(0, path.clone());
-        self.config.recent_workspaces.truncate(12);
-        // Test fixtures switch workspaces often; never rewrite the developer's
-        // real ~/.config/forge/config.toml from a unit test.
-        if !cfg!(test) {
-            if let Err(error) = self.config.save() {
-                self.session.status = format!("Workspace history not saved: {error}");
-            }
-        }
-        let navigation = WorkspaceNavigation {
-            selected_path: self.selected_entry().map(|entry| entry.path.clone()),
-            selected_scroll: self.files.scroll,
-            expanded: self.files.expanded.clone(),
-            filter: self.tools.filter.clone(),
-            staged_folders: self.scm.scm_expanded_staged.clone(),
-            unstaged_folders: self.scm.scm_expanded_unstaged.clone(),
-            scm_selected: self.scm.scm_selected,
-            scm_scroll: self.scm.scroll_scm,
-            activity: self.session.activity,
-            focus: self.session.focus,
-        };
-        self.tools
-            .worktree_navigation
-            .insert(current_root, navigation);
-        let restore = self.tools.worktree_navigation.get(&path).cloned();
-        if self
-            .tools
-            .panel
-            .as_ref()
-            .is_some_and(|p| matches!(p.kind, PanelKind::Files | PanelKind::Content))
-        {
-            self.close_tools();
-        }
-        self.tools.marks.clear();
-        self.tools.filter = restore
-            .as_ref()
-            .map(|n| n.filter.clone())
-            .unwrap_or_default();
-        if restore.is_none() {
-            self.tools.filter.show_hidden = self.config.show_hidden_files;
-        }
-        self.tools.sync.clear();
-        self.tools.remote_result.clear();
-        self.tools.last_fetch.clear();
-        self.files.expanded = restore
-            .as_ref()
-            .map(|n| n.expanded.clone())
-            .unwrap_or_default();
-        self.files.compact_expand_pending = None;
-        self.files.tree_root = path;
-        self.files_preview = None;
-        self.files.external_anchor = restore.as_ref().and_then(|n| {
-            n.selected_path
-                .as_ref()
-                .map(|path| (path.clone(), n.selected_scroll))
-        });
-        self.files.revealed_path = None;
-        self.files.visible.clear();
-        self.files.selected = 0;
-        self.files.scroll = restore.as_ref().map(|n| n.selected_scroll).unwrap_or(0);
-        self.files.follow_selection = true;
-        self.scm.follow_selection = true;
-        self.scm.pending_transfer = None;
-        self.files.sticky_headers.clear();
-        self.scm.sticky_headers.clear();
-        self.scm.git_status = None;
-        self.scm.branch.clear();
-        // Graph/commit details from the previous Git repository are never
-        // valid in a different worktree. Load history lazily again on demand.
-        self.history = history::HistoryState::default();
-        self.scm.scm_expanded_staged = restore
-            .as_ref()
-            .map(|n| n.staged_folders.clone())
-            .unwrap_or_default();
-        self.scm.scm_expanded_unstaged = restore
-            .as_ref()
-            .map(|n| n.unstaged_folders.clone())
-            .unwrap_or_default();
-        self.scm.scm_selected = restore.as_ref().map(|n| n.scm_selected).unwrap_or(0);
-        self.scm.scroll_scm = restore.as_ref().map(|n| n.scm_scroll).unwrap_or(0);
-        self.session.activity = restore
-            .as_ref()
-            .map(|n| n.activity)
-            .unwrap_or(ActivityTab::Files);
-        self.session.focus = restore.as_ref().map(|n| n.focus).unwrap_or(PaneFocus::List);
-        self.request_list();
-        self.request_status();
     }
 }

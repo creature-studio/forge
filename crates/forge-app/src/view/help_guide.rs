@@ -391,7 +391,11 @@ pub(super) fn draw_help_guide(frame: &mut Frame<'_>, area: Rect, model: &mut App
     } else {
         "   1 Overview  [2 Reference]"
     };
-    let terminal_help = model.terminal.as_ref().is_some_and(|term| term.visible);
+    let terminal_help = model
+        .terminals
+        .active
+        .as_ref()
+        .is_some_and(|term| term.is_visible());
     // The close hit target is independent of terminal text and remains
     // accessible even when the help modal owns pointer input.
     let close_text = " × Close ";

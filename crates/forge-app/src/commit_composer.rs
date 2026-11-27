@@ -175,7 +175,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                                 let mut model = app.write();
                                 if model
                                     .scm
-                                    .git_status
+                                    .status()
                                     .as_ref()
                                     .is_some_and(|s| s.staged.is_empty())
                                 {
@@ -218,7 +218,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                             } else if app
                                 .read()
                                 .scm
-                                .git_status
+                                .status()
                                 .as_ref()
                                 .is_some_and(|s| s.staged.is_empty())
                             {
@@ -235,7 +235,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
                             } else if app
                                 .read()
                                 .scm
-                                .git_status
+                                .status()
                                 .as_ref()
                                 .is_some_and(|s| s.staged.is_empty())
                             {
@@ -284,7 +284,7 @@ pub(super) fn CommitEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         }
         EventResult::Consumed
     });
-    let staged = app.read().scm.git_status.as_ref().map(|s| s.staged.clone());
+    let staged = app.read().scm.status().as_ref().map(|s| s.staged.clone());
     let count = staged.as_ref().map_or(0, Vec::len);
     let filenames = staged
         .as_ref()

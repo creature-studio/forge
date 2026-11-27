@@ -130,13 +130,17 @@ Saving preserves line endings and permissions; external changes retain your draf
 E: open the selected file using $EDITOR (fallback $VISUAL, then vi).
 The TUI releases the terminal and restores selection/scroll after editing.
 \nSelection and file operations
-v: toggle selected file/folder. V: select all visible items.
+v: toggle selected file/folder. Ctrl+A: select all visible items.
+Ctrl-click toggles a row; Shift-click or Shift+Up/Down selects a visible range.
 Esc: clear selection. Marked paths stay selected across directory expansion.
 Files marks are path-only. Switching Files <-> Git clears multi-selection.
 Alt+A / Alt+U in the Git list: Stage/Unstage marked items on the matching side only.
 Ctrl+K Commands includes New file/directory, Rename, Copy, Move and Delete.
 Paths are relative to the workspace. Copy/Move needs an existing directory.
-No operation overwrites an existing destination. Delete requires confirmation.
+Ctrl+C / Ctrl+X capture selected files; Ctrl+V pastes into the selected directory or file parent.
+Paste conflicts: skip, keep both (auto-numbered), or replace distinct regular files with confirmation.
+Delete moves to system trash; Shift+Delete permanently deletes. Both require confirmation.
+File clipboard is workspace-local. Trash failures never fall back to permanent deletion.
 \nIndividual diff lines and discard
 I: open changed lines from the current diff. Up/Down selects a line.
 s stages that line in an unstaged diff; u unstages it in a staged diff.
@@ -173,13 +177,13 @@ impl App {
                 let Some(ScmRow::CommitFile { commit, index, .. }) = self.selected_scm_row() else {
                     return false;
                 };
-                let Some(commit) = self.history.commits.get(commit) else {
+                let Some(commit) = self.history.commits().get(commit) else {
                     return false;
                 };
                 commit.id == *oid
                     && self
                         .history
-                        .files
+                        .files()
                         .get(&commit.id)
                         .and_then(|changes| changes.get(index))
                         .is_some_and(|change| change.path == diff.path)
@@ -230,10 +234,7 @@ impl App {
             _ => {}
         }
         if !self.session.help_open && self.terminal_help_return {
-            if let Some(term) = &mut self.terminal {
-                term.focused =
-                    term.visible && !term.ended.load(std::sync::atomic::Ordering::Acquire);
-            }
+            self.focus_terminal_input();
             self.terminal_help_return = false;
         }
     }
@@ -378,7 +379,7 @@ impl App {
     }
 
     fn folder_change_paths(&self, abs: &Path, stage: bool) -> Vec<PathBuf> {
-        let Some(snap) = &self.scm.git_status else {
+        let Some(snap) = self.scm.status() else {
             return Vec::new();
         };
         let Ok(rel) = abs.strip_prefix(&snap.repo_root) else {
@@ -586,8 +587,8 @@ impl App {
                 Some(ScmRow::Commit { index }) => {
                     Shortcut {
                         key: "Enter",
-                        label: if self.history.commits.get(index).is_some_and(|commit| {
-                            self.history.expanded_commits.contains(&commit.id)
+                        label: if self.history.commits().get(index).is_some_and(|commit| {
+                            self.history.expanded_commits().contains(&commit.id)
                         }) {
                             "Collapse commit"
                         } else {
@@ -648,7 +649,7 @@ impl App {
                 });
             }
         }
-        if self.scm.git_status.is_some() && self.scm.pending_write.is_none() {
+        if self.scm.status().is_some() && self.scm.pending_write.is_none() {
             keys.push(Shortcut {
                 key: "c",
                 label: "Commit staged",
@@ -686,6 +687,11 @@ impl App {
 
     pub(super) fn context_description(&self) -> String {
         if !self.in_git_sidebar() {
+            if self.sidebar_focused() {
+                if let Some(hint) = self.file_clipboard_hint() {
+                    return hint;
+                }
+            }
             if !self.tools.marks.files.is_empty() {
                 return if self.session.focus != PaneFocus::Preview {
                     format!(
@@ -775,10 +781,10 @@ impl App {
                 ),
                 Some(ScmRow::Commit { index }) => self
                     .history
-                    .commits
+                    .commits()
                     .get(index)
                     .map(|commit| {
-                        let expanded = self.history.expanded_commits.contains(&commit.id);
+                        let expanded = self.history.expanded_commits().contains(&commit.id);
                         format!(
                             "{} · {} · {} · {}",
                             commit.short,
@@ -843,7 +849,7 @@ impl App {
         }
         if self
             .scm
-            .git_status
+            .status()
             .as_ref()
             .is_some_and(|s| s.unstaged.is_empty() && s.staged.is_empty())
         {

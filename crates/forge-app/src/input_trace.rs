@@ -18,7 +18,7 @@ pub(super) fn nav_state(app: &App) -> NavState {
     NavState {
         activity: app.session.activity,
         focus: app.session.focus,
-        sidebar: app.session.sidebar_visible,
+        sidebar: app.layout_state.sidebar_visible(),
         pressed: app.session.activity_pressed,
     }
 }

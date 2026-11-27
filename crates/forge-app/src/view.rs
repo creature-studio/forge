@@ -4,8 +4,8 @@ use super::*;
 use crate::splitter::{Axis as SplitterAxis, Splitter};
 use crossterm::event::{Event, KeyEventKind};
 use forge_ui::{
-    draw_file_list, draw_preview, draw_scm_sidebar, FileListState, HorizontalScrollbar,
-    PreviewView, StagingState,
+    draw_file_list, draw_scm_sidebar_rows, FileListState, HorizontalScrollbar, PreviewView,
+    StagingState,
 };
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -106,6 +106,8 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             model.poll_pending_write();
             model.poll_tools();
             model.poll_editor();
+            model.flush_workspace_changes();
+            model.try_reveal();
             model.poll_history();
             model.poll_blame();
             model.tick_blame();
@@ -120,7 +122,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     hooks.use_future(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if notice_app.read().session.write_status.is_some() {
+            if notice_app.read().write_notice_needs_tick() {
                 notice_app.write().expire_write_notice();
             }
             if notice_app.read().terminal_copy_notice_expired() {
@@ -136,18 +138,20 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             selection_notify.notified().await;
             while selection_app
                 .read()
-                .terminal
+                .terminals
+                .active
                 .as_ref()
                 .is_some_and(|t| t.selection_autoscroll_active())
             {
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 if selection_app
                     .read()
-                    .terminal
+                    .terminals
+                    .active
                     .as_ref()
                     .is_some_and(|t| t.selection_autoscroll_active())
                 {
-                    if let Some(term) = &mut selection_app.write().terminal {
+                    if let Some(term) = &mut selection_app.write().terminals.active {
                         term.tick_selection_autoscroll();
                     }
                 }
@@ -178,12 +182,14 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             let clipboard = {
                 let model = terminal_app.read();
                 model
-                    .terminal
+                    .terminals
+                    .active
                     .as_ref()
                     .and_then(|t| t.take_clipboard_request())
                     .or_else(|| {
                         model
-                            .terminal_tabs
+                            .terminals
+                            .inactive()
                             .iter()
                             .find_map(|t| t.take_clipboard_request())
                     })
@@ -209,14 +215,16 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
             }
             let changed = {
                 let model = terminal_app.read();
-                model.terminal.as_ref().is_some_and(|t| {
-                    t.visible
+                model.terminals.active.as_ref().is_some_and(|t| {
+                    t.is_visible()
                         && (t.revision.load(std::sync::atomic::Ordering::Acquire)
                             != t.drawn_revision
-                            || (t.ended.load(std::sync::atomic::Ordering::Acquire) && t.focused)
+                            || (t.ended.load(std::sync::atomic::Ordering::Acquire)
+                                && t.is_focused())
                             || t.tab_title_changed()
                             || model
-                                .terminal_tabs
+                                .terminals
+                                .inactive()
                                 .iter()
                                 .any(|tab| tab.tab_title_changed()))
                 })
@@ -225,9 +233,9 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                 // A mutable state access is required to wake ratatui-kit;
                 // merely acquiring a write guard does not trigger a frame.
                 let mut model = terminal_app.write();
-                if let Some(term) = &mut model.terminal {
-                    if term.ended.load(std::sync::atomic::Ordering::Acquire) && term.focused {
-                        term.focused = false;
+                if let Some(term) = &mut model.terminals.active {
+                    if term.ended.load(std::sync::atomic::Ordering::Acquire) && term.is_focused() {
+                        term.set_focused(false);
                         model.session.status = "Terminal session exited; press F8 to hide".into();
                     }
                 }
@@ -235,6 +243,18 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                 drop(model);
                 // Output floods must not starve input, Git, or the file browser.
                 tokio::time::sleep(Duration::from_millis(33)).await;
+            }
+        }
+    });
+    // The shallow watcher cannot see every collapsed directory. A bounded,
+    // low-frequency repository reconciliation runs independently of visibility
+    // and even if watcher initialization fails.
+    let freshness_app = app;
+    hooks.use_future(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            if freshness_app.read().periodic_git_status_due(Instant::now()) {
+                freshness_app.write().tick_git_status_at(Instant::now());
             }
         }
     });
@@ -266,21 +286,20 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
         let mut root = PathBuf::new();
         let mut watched = HashSet::<PathBuf>::new();
         loop {
-            let (next_root, desired, git_watch) = {
+            let (next_root, desired, git_watch, document_watch) = {
                 let model = observed_app.read();
-                let next_root = model.files.tree_root.clone();
+                let next_root = model.files.root().to_path_buf();
                 let mut desired = HashSet::from([next_root.clone()]);
                 // Listings exist only for expanded directories. No recursive
                 // project walk is needed, even when node_modules contains
                 // hundreds of thousands of nested subdirectories.
                 for folder in &model.files.expanded {
-                    if folder.starts_with(&next_root) && model.files.children.contains_key(folder) {
+                    if folder.starts_with(&next_root) && model.files.has_listing(folder) {
                         desired.insert(folder.clone());
                     }
                 }
                 let git_root = model
-                    .scm
-                    .git_status
+                    .scm.status()
                     .as_ref()
                     .map(|s| s.repo_root.clone())
                     .filter(|p| next_root.starts_with(p))
@@ -289,7 +308,13 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                 if let Some(paths) = &git_watch {
                     desired.extend(paths.watch_directories());
                 }
-                (next_root, desired, git_watch)
+                let document_watch = model.watched_document(&git_root);
+                if let Some(parent) = document_watch.as_deref().and_then(Path::parent) {
+                    if parent.starts_with(&git_root) {
+                        desired.insert(parent.to_path_buf());
+                    }
+                }
+                (next_root, desired, git_watch, document_watch)
             };
             if root != next_root {
                 for old in watched.drain() {
@@ -342,28 +367,28 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
                     let git_metadata_changed = overflowed || git_watch.as_ref().is_some_and(|paths|
                         changes.iter().any(|event| paths.matches_event(event))
                     );
-                    if !git_metadata_changed
+                    let document_changed = document_watch.as_ref().is_some_and(|path|
+                        changes.iter().any(|event| super::auto_refresh::touches_document(event, path)));
+                    if !git_metadata_changed && !document_changed
                         && !changes.iter().any(|event| super::auto_refresh::relevant(event, &root))
                     {
                         continue;
                     }
-                    let changed_paths: Vec<PathBuf> = changes
+                    let mut changed_paths: Vec<PathBuf> = changes
                         .iter()
                         .filter(|event| super::auto_refresh::relevant(event, &root))
                         .flat_map(|event| event.paths.iter().cloned())
                         .collect();
+                    if document_changed {
+                        changed_paths.extend(document_watch);
+                    }
                     let mut model = observed_app.write();
-                    if model.files.tree_root == root {
-                        let selected = if overflowed {
-                            model.selected_entry().map(|entry| entry.path.clone())
-                        } else {
-                            None
-                        };
-                        model.refresh_external_changes(git_metadata_changed);
-                        model.refresh_preview_if_affected(&changed_paths);
-                        if let Some(path) = selected {
-                            model.refresh_preview_if_affected(&[path]);
-                        }
+                    if model.files.root() == root {
+                        model.on_workspace_change(workspace_changes::WorkspaceChange::External {
+                            git_metadata_changed,
+                            changed_paths,
+                            overflowed,
+                        });
                     }
                 }
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
@@ -414,36 +439,15 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     let mut exit = hooks.use_exit();
     let editor_handoff = props.editor_handoff.clone();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        let mut model = app.write();
+        let mut model = app.write_no_update();
         let nav_before = input_trace::nav_state(&model);
         let input_event = event.clone();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
             Event::Paste(text) => {
-                match model.key_owner(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE)) {
-                    input_router::KeyOwner::Shortcuts => model.keys.paste(&text),
-                    input_router::KeyOwner::Editor => model.handle_editor_paste(&text),
-                    input_router::KeyOwner::Tools => {
-                        if model.tools.panel.as_ref().is_some_and(|p| p.is_input()) {
-                            for ch in text.chars().filter(|c| !c.is_control()) {
-                                model.handle_tools_key(KeyEvent::new(
-                                    KeyCode::Char(ch),
-                                    KeyModifiers::NONE,
-                                ));
-                            }
-                        }
-                    }
-                    input_router::KeyOwner::Find => model.handle_file_find_paste(&text),
-                    input_router::KeyOwner::Terminal => {
-                        if let Some(term) = &mut model.terminal {
-                            if let Err(error) = term.paste(&text) {
-                                term.focused = false;
-                                model.session.status = format!("Terminal paste failed: {error}");
-                            }
-                        }
-                    }
-                    _ => return EventResult::Ignored,
+                if !model.handle_paste(&text) {
+                    return EventResult::Ignored;
                 }
             }
             _ => return EventResult::Ignored,
@@ -504,28 +508,30 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     } else {
         terminal_size.1
     };
-    let terminal_open = model.terminal.as_ref().is_some_and(|t| t.visible);
-    let terminal_maximized = model
-        .terminal
+    let terminal_open = model
+        .terminals
+        .active
         .as_ref()
-        .is_some_and(|t| t.visible && t.maximized);
-    let terminal_height = if terminal_open && !terminal_maximized {
-        terminal_panel_height(height, model.session.terminal_height)
-    } else {
-        0
-    };
-    let dual = width >= 80;
-    let sidebar_visible = model.session.sidebar_visible;
-    let sidebar_width = if dual {
-        model
-            .session
-            .sidebar_width
-            .clamp(20, width.saturating_sub(29).max(20))
-    } else {
-        width.saturating_sub(activity_bar::activity_bar_width())
-    };
-    let show_list = sidebar_visible && (dual || focus != PaneFocus::Preview);
-    let show_preview = !sidebar_visible || dual || focus == PaneFocus::Preview;
+        .is_some_and(|t| t.is_visible());
+    let terminal_maximized = model
+        .terminals
+        .active
+        .as_ref()
+        .is_some_and(|t| t.is_visible() && t.maximized);
+    let layout_state::PanePlan {
+        dual,
+        sidebar_width,
+        terminal_height,
+        show_list,
+        show_preview,
+    } = model.layout_state.plan(
+        width,
+        height,
+        focus,
+        terminal_open,
+        terminal_maximized,
+        activity_bar::activity_bar_width(),
+    );
     let screen = (width, height);
     let tools_size = model
         .tools
@@ -536,7 +542,7 @@ pub fn Workspace(props: &mut WorkspaceProps, mut hooks: Hooks) -> impl Into<AnyE
     drop(model);
     {
         let mut model = app.write_no_update();
-        model.session.layout = PaneLayout::default();
+        model.layout_state.geometry = PaneLayout::default();
         // Maximized Terminal and hidden panes must not retain hit regions from
         // a previously painted Activity Bar or Sidebar collapse button.
         model.activity_hits.clear();
@@ -635,8 +641,10 @@ fn TextEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         let mut model = app.write_no_update();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
-            Event::Mouse(mouse) => model.handle_editor_mouse(mouse),
-            Event::Paste(text) => model.handle_editor_paste(&text),
+            Event::Mouse(mouse) => model.handle_mouse(mouse),
+            Event::Paste(text) => {
+                model.handle_paste(&text);
+            }
             _ => {}
         }
         EventResult::Consumed
@@ -648,14 +656,12 @@ fn TextEditor(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 fn Tools(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let app = *hooks.use_context::<State<App>>();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        let mut model = app.write();
+        let mut model = app.write_no_update();
         match event {
-            Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_tools_key(key),
-            Event::Mouse(mouse) => model.handle_tools_mouse(mouse),
-            Event::Paste(text) if model.tools.panel.as_ref().is_some_and(|p| p.is_input()) => {
-                for ch in text.chars().filter(|c| !c.is_control()) {
-                    model.handle_tools_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-                }
+            Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
+            Event::Mouse(mouse) => model.handle_mouse(mouse),
+            Event::Paste(text) => {
+                model.handle_paste(&text);
             }
             _ => {}
         }
@@ -672,7 +678,7 @@ use commit_composer::CommitEditor;
 fn BlamePopup(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let app = *hooks.use_context::<State<App>>();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        let mut model = app.write();
+        let mut model = app.write_no_update();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
@@ -687,7 +693,7 @@ fn BlamePopup(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
 fn Menu(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let app = *hooks.use_context::<State<App>>();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        let mut model = app.write();
+        let mut model = app.write_no_update();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
@@ -703,11 +709,13 @@ fn Help(mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let app = *hooks.use_context::<State<App>>();
     let mut exit = hooks.use_exit();
     hooks.use_event_handler(EventScope::Current, EventPriority::Normal, move |event| {
-        let mut model = app.write();
+        let mut model = app.write_no_update();
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => model.handle_key(key),
             Event::Mouse(mouse) => model.handle_mouse(mouse),
-            Event::Paste(text) => model.keys.paste(&text),
+            Event::Paste(text) => {
+                model.handle_paste(&text);
+            }
             _ => {}
         }
         if model.session.should_quit {
@@ -798,6 +806,7 @@ fn draw_file_overview(frame: &mut Frame<'_>, area: Rect, model: &App, p: Palette
             } else {
                 model
                     .preview_state
+                    .presentation
                     .text_rows
                     .source_row_range(hit.line)
                     .map(|range| overview_marker_y(range.start, total, height))
@@ -886,7 +895,7 @@ impl Component for NativePane {
         match self.kind {
             PaneKind::Header => {
                 draw_workspace_header(drawer.frame, area, &mut model, self.palette);
-                model.session.layout.header = area;
+                model.layout_state.geometry.header = area;
             }
             PaneKind::ActivityBar => {
                 activity_bar::draw_activity_bar(drawer.frame, area, &mut model, self.palette);
@@ -898,7 +907,7 @@ impl Component for NativePane {
                     &mut model,
                     self.palette,
                 );
-                model.session.layout.list = area;
+                model.layout_state.geometry.list = area;
                 if model.in_git_sidebar() {
                     let mut scroll = model.scm.scroll_scm;
                     let mut sticky_headers = std::mem::take(&mut model.scm.sticky_headers);
@@ -906,15 +915,16 @@ impl Component for NativePane {
                     let (unstaged, staged) = model.scm_slices();
                     let focused = model.sidebar_focused();
                     let history = model.history_view();
-                    let layout = draw_scm_sidebar(
+                    let rows = model.scm_rows();
+                    let layout = draw_scm_sidebar_rows(
                         drawer.frame,
                         area,
                         &theme,
                         &mut StagingState {
                             unstaged,
                             staged,
-                            expanded_unstaged: &model.scm.scm_expanded_unstaged,
-                            expanded_staged: &model.scm.scm_expanded_staged,
+                            expanded_unstaged: model.scm.expanded(StagingColumn::Unstaged),
+                            expanded_staged: model.scm.expanded(StagingColumn::Staged),
                             history: &history,
                             selected: model.scm.scm_selected,
                             scroll: &mut scroll,
@@ -924,10 +934,11 @@ impl Component for NativePane {
                             follow_selection: model.scm.follow_selection,
                             sticky_headers: &mut sticky_headers,
                         },
+                        &rows,
                     );
                     model.scm.sticky_headers = sticky_headers;
-                    model.session.layout.staging = layout;
-                    model.session.layout.list_inner = layout.inner;
+                    model.layout_state.geometry.staging = layout;
+                    model.layout_state.geometry.list_inner = layout.inner;
                     model.scm.scroll_scm = scroll;
                 } else {
                     let mut scroll = model.files.scroll;
@@ -941,7 +952,7 @@ impl Component for NativePane {
                             rows: &model.files.visible,
                             selected: model.files.selected,
                             scroll: &mut scroll,
-                            git: model.scm.git_status.as_ref(),
+                            git: model.scm.status().as_ref(),
                             focused: model.sidebar_focused(),
                             sticky_scroll,
                             follow_selection: model.files.follow_selection,
@@ -949,7 +960,7 @@ impl Component for NativePane {
                         },
                     );
                     model.files.sticky_headers = sticky_headers;
-                    model.session.layout.list_inner = inner;
+                    model.layout_state.geometry.list_inner = inner;
                     model.files.scroll = scroll;
                 }
                 draw_marks(drawer.frame, &model, self.palette);
@@ -960,7 +971,7 @@ impl Component for NativePane {
                 };
                 let lane = Rect::new(area.right().saturating_sub(1), area.y, 1, area.height);
                 let bar = VerticalScrollbar::new(lane, first, total);
-                model.session.layout.sidebar_scrollbar = if bar.geometry().is_some() {
+                model.layout_state.geometry.sidebar_scrollbar = if bar.geometry().is_some() {
                     lane
                 } else {
                     Rect::default()
@@ -974,16 +985,16 @@ impl Component for NativePane {
             }
             PaneKind::Preview => {
                 model.commit_file_links.clear();
-                model.session.layout.preview = area;
+                model.layout_state.geometry.preview = area;
                 // This region belongs to the last painted preview, not to the
                 // previous file, diff, or wrap setting.
-                model.session.layout.preview_horizontal_scrollbar = Rect::default();
-                model.session.layout.preview_horizontal_max = 0;
+                model.layout_state.geometry.preview_horizontal_scrollbar = Rect::default();
+                model.layout_state.geometry.preview_horizontal_max = 0;
                 area = draw_preview_heading(drawer.frame, area, &mut model, self.palette);
                 if commit_detail::draw(drawer.frame, area, &mut model, self.palette) {
-                    model.session.layout.overview_ruler = Rect::default();
-                    model.session.layout.preview_scrollbar = Rect::default();
-                    model.session.layout.file_find_rect = Rect::default();
+                    model.layout_state.geometry.overview_ruler = Rect::default();
+                    model.layout_state.geometry.preview_scrollbar = Rect::default();
+                    model.layout_state.geometry.file_find_rect = Rect::default();
                 } else {
                     // A 3-column focus ruler, not a code minimap: preserve source width.
                     let ruler_area = if model.config.show_overview_ruler
@@ -1015,12 +1026,21 @@ impl Component for NativePane {
                     // wrapping, Blame cursor validation and code rendering MUST
                     // all use the same effective width. Comparing against the
                     // original full pane erased clicked Blame on every redraw.
-                    let previous_width = model.preview_state.text_rows.width();
-                    let clicked_source = if previous_width != area.width {
+                    let previous_width = model.preview_state.presentation.text_rows.width();
+                    let clicked_source = if previous_width != area.width
+                        || model.preview_state.presentation.text_rows.wrap_enabled()
+                            != model.config.wrap_code
+                    {
                         model.blame.cursor.as_ref().and_then(|(path, row, scroll)| {
                             (Some(path) == model.preview_state.preview.as_ref().map(|p| &p.path)
-                                && *scroll == model.preview_state.preview_scroll)
-                                .then(|| model.preview_state.text_rows.source_line_at(*row))
+                                && *scroll == model.preview_state.presentation.preview_scroll)
+                                .then(|| {
+                                    model
+                                        .preview_state
+                                        .presentation
+                                        .text_rows
+                                        .source_line_at(*row)
+                                })
                                 .flatten()
                                 .map(|line| (path.clone(), line, *scroll))
                         })
@@ -1036,33 +1056,21 @@ impl Component for NativePane {
                         && !model.preview_state.preview_loading
                         && matches!(model.preview_state.preview_mode, PreviewMode::File)
                     {
-                        let mut rows = std::mem::take(&mut model.preview_state.text_rows);
-                        if let Some(Preview {
-                            path,
-                            content:
-                                PreviewContent::Text {
-                                    lines,
-                                    truncated,
-                                    bytes_read,
-                                },
-                        }) = &model.preview_state.preview
-                        {
-                            rows.ensure_wrapping(
-                                &theme,
-                                lines,
-                                *truncated,
-                                *bytes_read,
-                                TextLang::from_name(&path.to_string_lossy()),
-                                area.width,
-                                model.config.wrap_code,
-                            );
+                        let wrap = model.config.wrap_code;
+                        model
+                            .preview_state
+                            .prepare_source_rows(&theme, area.width, wrap);
+                        if let Some((path, source, _)) = clicked_source {
+                            model.blame.cursor = Some((
+                                path,
+                                model
+                                    .preview_state
+                                    .presentation
+                                    .text_rows
+                                    .source_to_row(source),
+                                model.preview_state.presentation.preview_scroll,
+                            ));
                         }
-                        if let Some((path, source, scroll)) = clicked_source {
-                            // Preserve attribution to the SOURCE line when wrapping
-                            // changes (resize / toggling Focus Overview).
-                            model.blame.cursor = Some((path, rows.source_to_row(source), scroll));
-                        }
-                        model.preview_state.text_rows = rows;
                     }
                     let blame_bar = if model.config.git.blame.show_inline
                         && model.current_blame().is_some()
@@ -1074,161 +1082,33 @@ impl Component for NativePane {
                     } else {
                         None
                     };
-                    if model.markdown_available() {
-                        let mut markdown = std::mem::take(&mut model.preview_state.markdown);
-                        if let Some(Preview {
-                            content:
-                                PreviewContent::Text {
-                                    lines,
-                                    truncated,
-                                    bytes_read,
-                                },
-                            ..
-                        }) = &model.preview_state.preview
-                        {
-                            markdown.ensure(lines, *truncated, *bytes_read, area.width, &theme);
-                        }
-                        model.preview_state.markdown = markdown;
-                    }
-                    let mut scroll = model.preview_state.preview_scroll;
-                    // Detach caches before borrowing the preview. Code view uses
-                    // the same safe, pre-wrapped row boundaries as Markdown, so
-                    // a two-cell CJK glyph can never spill into the Files pane.
-                    let mut cache = std::mem::take(&mut model.preview_state.split_cache);
-                    let mut text_cache = std::mem::take(&mut model.preview_state.text_rows);
-                    let pending_line = model.preview_state.pending_source_line.take();
-                    let pending_find_byte = model.preview_state.pending_find_byte.take();
-                    let (_, content) = preview_content(&model);
-                    let numbered = matches!(content, PreviewView::Text { .. });
-                    let mut horizontal_x = model.preview_state.preview_scroll_x;
-                    let mut horizontal_bar = None;
-                    let inner = match content {
-                        PreviewView::Text {
-                            lines,
-                            truncated,
-                            bytes_read,
-                            language,
-                        } => {
-                            let wrap = model.config.wrap_code;
-                            text_cache.ensure_wrapping(
-                                &theme, lines, truncated, bytes_read, language, area.width, wrap,
-                            );
-                            if !wrap && area.height > 2 && area.width > 7 {
-                                let visible_cols = area.width.saturating_sub(5) as usize;
-                                let max_x =
-                                    text_cache.max_code_columns().saturating_sub(visible_cols);
-                                horizontal_x = horizontal_x.min(max_x);
-                                if max_x > 0 {
-                                    horizontal_bar = Some((
-                                        Rect::new(
-                                            area.x + 5,
-                                            area.bottom() - 1,
-                                            area.width.saturating_sub(6),
-                                            1,
-                                        ),
-                                        max_x,
-                                    ));
-                                    area.height -= 1;
-                                }
-                            } else {
-                                horizontal_x = 0;
-                            }
-                            if let Some(line) = pending_line {
-                                scroll = pending_find_byte.map_or_else(
-                                    || text_cache.source_to_row(line),
-                                    |byte| text_cache.source_byte_to_row(line, byte),
-                                );
-                            }
-                            draw_preview(
-                                drawer.frame,
-                                area,
-                                &theme,
-                                if wrap {
-                                    PreviewView::TextRows {
-                                        rows: text_cache.rows(),
-                                    }
-                                } else {
-                                    PreviewView::TextRowsScrolled {
-                                        rows: text_cache.rows(),
-                                        horizontal_offset: horizontal_x,
-                                    }
-                                },
-                                &mut scroll,
-                                &mut cache,
-                            )
-                        }
-                        PreviewView::Diff {
-                            path,
-                            lines,
-                            hunk_start,
-                            hunk_end,
-                            ..
-                        } if !model.config.wrap_code => {
-                            let half_content = (area.width as usize / 2).saturating_sub(7);
-                            let max_x = cache.max_code_columns(lines).saturating_sub(half_content);
-                            horizontal_x = horizontal_x.min(max_x);
-                            if max_x > 0 && area.height > 2 {
-                                horizontal_bar = Some((
-                                    Rect::new(
-                                        area.x,
-                                        area.bottom() - 1,
-                                        area.width.saturating_sub(1),
-                                        1,
-                                    ),
-                                    max_x,
-                                ));
-                                area.height -= 1;
-                            }
-                            draw_preview(
-                                drawer.frame,
-                                area,
-                                &theme,
-                                PreviewView::DiffScrolled {
-                                    path,
-                                    lines,
-                                    hunk_start,
-                                    hunk_end,
-                                    horizontal_offset: horizontal_x,
-                                },
-                                &mut scroll,
-                                &mut cache,
-                            )
-                        }
-                        other => {
-                            draw_preview(drawer.frame, area, &theme, other, &mut scroll, &mut cache)
-                        }
-                    };
-                    model.preview_state.preview_scroll_x = horizontal_x;
-                    model.preview_state.split_cache = cache;
-                    model.preview_state.text_rows = text_cache;
-                    model.preview_state.preview_scroll = scroll;
-                    model.session.layout.preview_inner = inner;
-                    // Snapshot rendered cells before overlaying the selection.
-                    // This preserves Markdown table borders and wrapped CJK.
-                    let identity = if let Some(diff) = &model.preview_state.file_diff {
-                        format!("diff:{}:{:?}", diff.path, model.preview_state.diff_source)
-                    } else if let Some(preview) = &model.preview_state.preview {
-                        format!(
-                            "file:{}:{}",
-                            preview.path.display(),
-                            model.preview_state.markdown_code
-                        )
+                    let markdown_available = model.markdown_available();
+                    let hint = if model.preview_state.needs_empty_diff_hint() {
+                        model.empty_diff_hint()
                     } else {
-                        "empty".to_owned()
+                        ""
                     };
-                    model.preview_state.selection.observe(
-                        drawer.frame,
+                    let wrap = model.config.wrap_code;
+                    let root = model.files.root().to_path_buf();
+                    let preview_state::PreviewFrame {
                         inner,
                         scroll,
+                        horizontal_bar,
+                    } = model.preview_state.render_frame(
+                        drawer.frame,
+                        area,
                         &theme,
-                        &identity,
-                        numbered,
+                        &root,
+                        markdown_available,
+                        hint,
+                        wrap,
                     );
+                    model.layout_state.geometry.preview_inner = inner;
                     if let Some(bar) = blame_bar {
                         draw_inline_blame(drawer.frame, inner, bar, &model, self.palette);
                     }
                     model.draw_inline_diff(drawer.frame, inner);
-                    model.session.layout.file_find_rect = Rect::default();
+                    model.layout_state.geometry.file_find_rect = Rect::default();
                     if model.preview_state.find.open {
                         super::file_find_ui::highlight_file_find_matches(
                             drawer.frame,
@@ -1236,7 +1116,7 @@ impl Component for NativePane {
                             &model,
                             &theme,
                         );
-                        model.session.layout.file_find_rect =
+                        model.layout_state.geometry.file_find_rect =
                             super::file_find_ui::draw_file_find_bar(
                                 drawer.frame,
                                 inner,
@@ -1257,6 +1137,7 @@ impl Component for NativePane {
                         if let Some((source_total, _)) = model.overview_git_data() {
                             let first_line = model
                                 .preview_state
+                                .presentation
                                 .text_rows
                                 .source_line_at(scroll)
                                 .unwrap_or(1)
@@ -1276,10 +1157,10 @@ impl Component for NativePane {
                                     self.palette.accent,
                                 );
                         }
-                        model.session.layout.overview_ruler = ruler;
-                        model.session.layout.preview_scrollbar = Rect::default();
+                        model.layout_state.geometry.overview_ruler = ruler;
+                        model.layout_state.geometry.preview_scrollbar = Rect::default();
                     } else {
-                        model.session.layout.overview_ruler = Rect::default();
+                        model.layout_state.geometry.overview_ruler = Rect::default();
                         if let Some(lane) = scrollbar_lane {
                             // Match the actual viewport after optional bottom bars.
                             let lane = Rect::new(lane.x, inner.y, lane.width, inner.height);
@@ -1288,7 +1169,7 @@ impl Component for NativePane {
                                 .geometry()
                                 .is_some()
                             {
-                                model.session.layout.preview_scrollbar = lane;
+                                model.layout_state.geometry.preview_scrollbar = lane;
                                 VerticalScrollbar::new(lane, scroll, total).draw(
                                     drawer.frame,
                                     self.palette.bg,
@@ -1296,21 +1177,21 @@ impl Component for NativePane {
                                     self.palette.accent,
                                 );
                             } else {
-                                model.session.layout.preview_scrollbar = Rect::default();
+                                model.layout_state.geometry.preview_scrollbar = Rect::default();
                             }
                         } else {
-                            model.session.layout.preview_scrollbar = Rect::default();
+                            model.layout_state.geometry.preview_scrollbar = Rect::default();
                         }
                     }
                     if let Some((bar, max_x)) = horizontal_bar {
                         let scrollbar = HorizontalScrollbar::new(
                             bar,
-                            model.preview_state.preview_scroll_x,
+                            model.preview_state.presentation.preview_scroll_x,
                             (bar.width as usize).saturating_add(max_x),
                         );
                         if scrollbar.geometry().is_some() {
-                            model.session.layout.preview_horizontal_scrollbar = bar;
-                            model.session.layout.preview_horizontal_max = max_x;
+                            model.layout_state.geometry.preview_horizontal_scrollbar = bar;
+                            model.layout_state.geometry.preview_horizontal_max = max_x;
                             scrollbar.draw(
                                 drawer.frame,
                                 self.palette.bg,
@@ -1322,23 +1203,29 @@ impl Component for NativePane {
                 }
             }
             PaneKind::Divider => {
-                model.session.layout.sidebar_divider = area;
+                model.layout_state.geometry.sidebar_divider = area;
                 Splitter::draw(
                     drawer.frame,
                     area,
                     SplitterAxis::Vertical,
-                    model.session.splitter.highlighted(SplitterAxis::Vertical),
+                    model
+                        .layout_state
+                        .splitter
+                        .highlighted(SplitterAxis::Vertical),
                     self.palette.border,
                     self.palette.accent,
                 );
             }
             PaneKind::TerminalDivider => {
-                model.session.layout.terminal_divider = area;
+                model.layout_state.geometry.terminal_divider = area;
                 Splitter::draw(
                     drawer.frame,
                     area,
                     SplitterAxis::Horizontal,
-                    model.session.splitter.highlighted(SplitterAxis::Horizontal),
+                    model
+                        .layout_state
+                        .splitter
+                        .highlighted(SplitterAxis::Horizontal),
                     self.palette.border,
                     self.palette.accent,
                 );
@@ -1348,10 +1235,8 @@ impl Component for NativePane {
                     terminal_tabs::draw_tab_strip(drawer.frame, area, &mut model, self.palette);
                 // Cursor ownership follows exactly the normal text-input route;
                 // dialogs, editors and active find inputs must never inherit it.
-                let owns_keyboard = model
-                    .key_owner(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE))
-                    == input_router::KeyOwner::Terminal;
-                if let Some(term) = &mut model.terminal {
+                let owns_keyboard = model.typing_owner() == input_router::KeyOwner::Terminal;
+                if let Some(term) = &mut model.terminals.active {
                     // The child PTY's default colors belong to the outer terminal, not
                     // Forge's theme. Explicit ANSI/RGB colors still come from vt100.
                     term.render(
@@ -1366,10 +1251,10 @@ impl Component for NativePane {
                 terminal_tabs::draw_tab_tooltip(drawer.frame, area, &model, self.palette);
             }
             PaneKind::Footer => {
-                model.session.layout.git_sync_status =
+                model.layout_state.geometry.git_sync_status =
                     draw_workspace_footer(drawer.frame, area, &model, self.palette);
-                model.session.layout.footer = area;
-                model.session.layout.hotkeys = Rect::new(
+                model.layout_state.geometry.footer = area;
+                model.layout_state.geometry.hotkeys = Rect::new(
                     area.x,
                     area.bottom().saturating_sub(1),
                     area.width,
@@ -1394,8 +1279,8 @@ impl Component for NativePane {
             PaneKind::Editor => editor::draw_editor(drawer.frame, area, &mut model, self.palette),
             PaneKind::Blame => draw_blame_popup(drawer.frame, area, &mut model, self.palette),
         }
-        model.session.layout.window = drawer.frame.area();
-        model.session.layout.dual_pane = drawer.frame.area().width >= 80;
+        model.layout_state.geometry.window = drawer.frame.area();
+        model.layout_state.geometry.dual_pane = drawer.frame.area().width >= 80;
         // Return terminal-default surfaces to Reset after the RGB-only bridge.
         let base_bg = forge_ui::to_color(theme.panel_bg);
         let base_fg = forge_ui::to_color(theme.fg);

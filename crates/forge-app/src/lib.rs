@@ -21,12 +21,24 @@ use forge_ui::{
     build_scm_rows_with_compact, compact_tree_rows, diff_items, diff_render_hunk_start,
     expand_ancestors_for_path, file_list_items, find_parent_row, find_scm_parent_row, flatten_tree,
     init_icons_from_env, scm_entry, scm_jump_to_column, scroll_to_hunk, set_color_mode,
-    staging_items, sticky_index_at, ActivityTab, ContextAction, ContextMenu, ContextTarget,
-    HorizontalScrollbar, HoverTargets, MarkdownPreview, PaneFocus, PaneLayout, ScmRow,
-    ScrollbarDrag, SplitRowsCache, StagingColumn, TextLang, TextRowsCache, TreeRow,
-    VerticalScrollbar,
+    staging_items, ActivityTab, ContextAction, ContextMenu, ContextTarget, HorizontalScrollbar,
+    HoverTargets, MarkdownPreview, PaneFocus, PaneLayout, ScmRow, ScrollbarDrag, SplitRowsCache,
+    StagingColumn, TextLang, TextRowsCache, TreeRow, VerticalScrollbar,
 };
 mod auto_refresh;
+mod files_state;
+use files_state::FilesState;
+mod layout_state;
+mod navigation;
+mod preview_state;
+use preview_state::PreviewState;
+mod scm_state;
+use scm_state::ScmState;
+mod terminal_sessions;
+mod workspace_changes;
+mod workspace_filter;
+#[cfg(test)]
+use layout_state::terminal_panel_height;
 mod blame;
 mod file_find;
 mod file_find_ui;
@@ -34,6 +46,7 @@ mod inline_diff;
 mod input;
 mod input_router;
 mod input_trace;
+mod mouse_hit;
 mod pending_request;
 mod preview_selection;
 mod splitter;
@@ -65,6 +78,7 @@ struct PendingPreviewPage {
 }
 
 struct PendingStatus {
+    periodic: bool,
     #[allow(dead_code)]
     id: JobId,
     key: PathBuf,
@@ -72,6 +86,7 @@ struct PendingStatus {
 }
 
 struct PendingPreview {
+    kind: EntryKind,
     #[allow(dead_code)]
     id: JobId,
     path: PathBuf,
@@ -127,91 +142,6 @@ struct Services {
     git: GitService,
 }
 
-struct FilesState {
-    tree_root: PathBuf,
-    expanded: HashSet<PathBuf>,
-    /// Directory whose unloaded descendants should be expanded automatically
-    /// as one compact folder click. None when a branch or file is encountered.
-    compact_expand_pending: Option<PathBuf>,
-    children: HashMap<PathBuf, Vec<Entry>>,
-    visible: Vec<TreeRow>,
-    selected: usize,
-    scroll: usize,
-    follow_selection: bool,
-    external_anchor: Option<(PathBuf, usize)>,
-    /// Keep a deliberately revealed path and its ancestors visible even
-    /// through extension/status/exclusion filters.
-    revealed_path: Option<PathBuf>,
-    pending_lists: Vec<PendingList>,
-    last_list_click: Option<(Instant, usize)>,
-    sticky_headers: Vec<usize>,
-}
-
-struct ScmState {
-    pending_status: Option<PendingStatus>,
-    /// A refresh arrived while a status job was already running. Blocking
-    /// workers cannot be aborted, so re-run only after the current one ends.
-    status_rerun: bool,
-    pending_write: Option<PendingWrite>,
-    git_status: Option<StatusSnapshot>,
-    branch: String,
-    scm_selected: usize,
-    scroll_scm: usize,
-    follow_selection: bool,
-    /// When a whole file moves between Changes and Staged, follow its path
-    /// after the asynchronous Git snapshot, not the old numeric row index.
-    pending_transfer: Option<(String, StagingColumn)>,
-    last_scm_click: Option<(Instant, usize)>,
-    scm_expanded_unstaged: HashSet<String>,
-    scm_expanded_staged: HashSet<String>,
-    sticky_headers: Vec<usize>,
-}
-
-struct PreviewState {
-    preview_scroll: usize,
-    /// Horizontal displacement of source code columns (gutter stays fixed).
-    preview_scroll_x: usize,
-    find: file_find::FileFindState,
-    markdown_code: bool,
-    markdown: MarkdownPreview,
-    selection: PreviewSelection,
-    /// Keyboard-focused commit-detail link (not a mouse hover target).
-    commit_link_focus: Option<usize>,
-    text_rows: TextRowsCache,
-    /// Source file line to seek once Code rows have been measured for width.
-    pending_source_line: Option<usize>,
-    /// Source-line jump requested from the overview ruler; survives preview paging.
-    pending_overview_line: Option<usize>,
-    /// UTF-8 byte column of a pending in-file Find result.
-    pending_find_byte: Option<usize>,
-    split_cache: SplitRowsCache,
-    diff_row_count: usize,
-    pending_preview: Option<PendingPreview>,
-    pending_page: Option<PendingPreviewPage>,
-    pending_diff: Option<PendingDiff>,
-    preview: Option<Preview>,
-    preview_loading: bool,
-    preview_mode: PreviewMode,
-    /// Which kind of diff `file_diff` holds.
-    diff_source: DiffSource,
-    /// Header chip for the loaded diff (`unstaged`, `staged`, or a short oid).
-    diff_label: String,
-    file_diff: Option<FileDiff>,
-    hunk_index: Option<usize>,
-}
-
-/// Terminal body height in rows; reserve Header, Footer and a dedicated
-/// splitter row, plus at least four rows of workspace above the splitter.
-fn terminal_panel_height(window_height: u16, requested: Option<u16>) -> u16 {
-    if window_height < 14 {
-        return 0;
-    }
-    let max = window_height.saturating_sub(1 + 3 + 1 + 4);
-    requested
-        .unwrap_or((window_height / 3).clamp(5, 16))
-        .clamp(5, max)
-}
-
 const TERMINAL_COPY_NOTICE_DURATION: Duration = Duration::from_secs(2);
 
 struct TerminalCopyNotice {
@@ -236,11 +166,6 @@ struct SessionState {
     help_overview_rect: ratatui::layout::Rect,
     help_reference_rect: ratatui::layout::Rect,
     activity: ActivityTab,
-    /// Activity Bar remains visible even when this panel is collapsed.
-    sidebar_visible: bool,
-    sidebar_width: u16,
-    terminal_height: Option<u16>,
-    splitter: splitter::SplitterState,
     /// Activity Bar click capture: activation requires matching press and release.
     activity_pressed: Option<ActivityAction>,
     commit_open: bool,
@@ -248,7 +173,6 @@ struct SessionState {
     commit_cancel_pending: bool,
     context_menu: Option<ContextMenu>,
     should_quit: bool,
-    layout: PaneLayout,
     focus: PaneFocus,
 }
 
@@ -291,17 +215,19 @@ struct App {
     preview_state: PreviewState,
     // Preserve the previous Files preview while the Git tab owns the viewer.
     // A directory selection must not initiate a new preview.
-    files_preview: Option<(Option<Preview>, usize, bool)>,
+    files_preview: Option<(Option<Preview>, usize, bool, EntryKind)>,
     session: SessionState,
+    layout_state: layout_state::LayoutState,
+    navigation: navigation::NavigationState,
+    workspace_changes: workspace_changes::WorkspaceChanges,
+    workspace_filter: workspace_filter::FileFilter,
     tools: tools::ToolsState,
     editing: editor::EditingState,
     keys: keybindings::Keybindings,
     history: history::HistoryState,
     blame: blame::BlameState,
     inline_diff: inline_diff::InlineDiff,
-    terminal: Option<embedded_terminal::EmbeddedTerminal>,
-    /// Inactive PTY sessions remain alive; only the active terminal is drawn.
-    terminal_tabs: Vec<embedded_terminal::EmbeddedTerminal>,
+    terminals: terminal_sessions::TerminalSessions,
     /// Exact hit targets for controls painted in the Terminal header.
     terminal_tab_hits: HoverTargets<TerminalTabAction>,
     terminal_tab_bar: ratatui::layout::Rect,
@@ -550,61 +476,9 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             git,
         },
         config,
-        files: FilesState {
-            tree_root,
-            expanded: HashSet::new(),
-            compact_expand_pending: None,
-            children: HashMap::new(),
-            visible: Vec::new(),
-            selected: 0,
-            scroll: 0,
-            follow_selection: true,
-            external_anchor: None,
-            revealed_path: None,
-            pending_lists: Vec::new(),
-            last_list_click: None,
-            sticky_headers: Vec::new(),
-        },
-        scm: ScmState {
-            git_status: None,
-            branch: String::new(),
-            scm_selected: 0,
-            scroll_scm: 0,
-            follow_selection: true,
-            pending_transfer: None,
-            last_scm_click: None,
-            scm_expanded_unstaged: HashSet::new(),
-            scm_expanded_staged: HashSet::new(),
-            sticky_headers: Vec::new(),
-            pending_status: None,
-            status_rerun: false,
-            pending_write: None,
-        },
-        preview_state: PreviewState {
-            preview_scroll: 0,
-            preview_scroll_x: 0,
-            find: file_find::FileFindState::default(),
-            markdown_code: false,
-            markdown: MarkdownPreview::default(),
-            selection: PreviewSelection::default(),
-            commit_link_focus: None,
-            text_rows: TextRowsCache::default(),
-            pending_source_line: None,
-            pending_overview_line: None,
-            pending_find_byte: None,
-            split_cache: SplitRowsCache::default(),
-            diff_row_count: 0,
-            pending_preview: None,
-            pending_page: None,
-            pending_diff: None,
-            preview: None,
-            preview_loading: false,
-            preview_mode: PreviewMode::File,
-            diff_source: DiffSource::Working(DiffSide::Unstaged),
-            diff_label: String::new(),
-            file_diff: None,
-            hunk_index: None,
-        },
+        files: FilesState::new(tree_root),
+        scm: ScmState::new(),
+        preview_state: PreviewState::new(),
         files_preview: None,
         session: SessionState {
             status: config_warning.unwrap_or_else(|| format!("palette:{}", color_mode.as_str())),
@@ -620,27 +494,25 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
             help_overview_rect: ratatui::layout::Rect::default(),
             help_reference_rect: ratatui::layout::Rect::default(),
             activity: ActivityTab::Files,
-            sidebar_visible: true,
-            sidebar_width: 30,
-            terminal_height: None,
-            splitter: splitter::SplitterState::default(),
             activity_pressed: None,
             commit_open: false,
             commit_confirming: false,
             commit_cancel_pending: false,
             context_menu: None,
             should_quit: false,
-            layout: PaneLayout::default(),
             focus: PaneFocus::List,
         },
+        layout_state: layout_state::LayoutState::default(),
+        navigation: navigation::NavigationState::default(),
+        workspace_changes: workspace_changes::WorkspaceChanges::default(),
+        workspace_filter: workspace_filter::FileFilter::default(),
         tools: tools::ToolsState::default(),
         editing: editor::EditingState::default(),
         keys: keybindings::Keybindings::default(),
         history: history::HistoryState::default(),
         blame: blame::BlameState::default(),
         inline_diff: inline_diff::InlineDiff::default(),
-        terminal: None,
-        terminal_tabs: Vec::new(),
+        terminals: terminal_sessions::TerminalSessions::default(),
         terminal_tab_hits: HoverTargets::default(),
         terminal_tab_bar: ratatui::layout::Rect::default(),
         shell_profiles: None,
@@ -653,8 +525,8 @@ fn create_workspace_at(color_mode: ColorMode, cwd: PathBuf) -> App {
         terminal_frame_epoch: 0,
         scrollbar_drag: None,
     };
-    app.tools.filter.show_hidden = app.config.show_hidden_files;
-    app.request_list();
+    app.workspace_filter.show_hidden = app.config.show_hidden_files;
+    app.initialize_workspace_listing();
     app.request_status();
 
     app
@@ -783,6 +655,18 @@ impl App {
     /// An operation notification is not permanent state. Give it time to be
     /// read, then return the footer to contextual information. An in-flight
     /// Git write must never have its "working" notice prematurely cleared.
+    fn write_notice_needs_tick(&self) -> bool {
+        match (&self.session.write_status, &self.session.notice_lease) {
+            (None, None) => false,
+            (Some(message), Some((previous, _, since))) if message == previous => {
+                since.elapsed() >= Duration::from_secs(8)
+                    && self.scm.pending_write.is_none()
+                    && self.tools.pending_task.is_none()
+            }
+            _ => true,
+        }
+    }
+
     fn expire_write_notice(&mut self) {
         let Some(message) = self.session.write_status.clone() else {
             self.session.notice_lease = None;
@@ -811,36 +695,28 @@ impl App {
 
     fn repo_root(&self) -> Option<PathBuf> {
         self.scm
-            .git_status
+            .status()
             .as_ref()
             .map(|s| s.repo_root.clone())
-            .or_else(|| self.services.git.find_repo_root(&self.files.tree_root))
+            .or_else(|| self.services.git.find_repo_root(self.files.root()))
     }
 
     fn scm_slices(&self) -> (&[forge_git::ChangeEntry], &[forge_git::ChangeEntry]) {
-        match &self.scm.git_status {
-            Some(snap) => (snap.unstaged.as_slice(), snap.staged.as_slice()),
-            None => (&[], &[]),
-        }
+        self.scm.slices()
     }
 
-    fn scm_rows(&self) -> Vec<ScmRow> {
-        let (u, s) = self.scm_slices();
-        build_scm_rows_with_compact(
-            u,
-            s,
-            &self.scm.scm_expanded_unstaged,
-            &self.scm.scm_expanded_staged,
-            &self.history_view(),
+    fn scm_rows(&self) -> std::sync::Arc<[ScmRow]> {
+        self.scm.cached_rows(
+            &self.history.view(),
+            self.history.rows_revision(),
             self.config.compact_folders,
         )
     }
 
     fn selected_scm_entry(&self) -> Option<&forge_git::ChangeEntry> {
         let rows = self.scm_rows();
-        let row = rows.get(self.scm.scm_selected)?;
-        let (u, s) = self.scm_slices();
-        scm_entry(row, u, s)
+        let (u, s) = self.scm.slices();
+        scm_entry(rows.get(self.scm.scm_selected)?, u, s)
     }
 
     fn selected_scm_row(&self) -> Option<ScmRow> {
@@ -848,19 +724,12 @@ impl App {
     }
 
     fn clamp_scm_selection(&mut self) {
-        let len = self.scm_rows().len();
-        if len == 0 {
-            self.scm.scm_selected = 0;
-        } else if self.scm.scm_selected >= len {
-            self.scm.scm_selected = len - 1;
-        }
+        self.scm
+            .clamp_selection(&self.history.view(), self.config.compact_folders);
     }
 
     fn scm_expanded_mut(&mut self, column: StagingColumn) -> &mut HashSet<String> {
-        match column {
-            StagingColumn::Unstaged => &mut self.scm.scm_expanded_unstaged,
-            StagingColumn::Staged => &mut self.scm.scm_expanded_staged,
-        }
+        self.scm.expanded_mut(column)
     }
 
     /// Toggle expand/collapse for the folder at `index` (no-op for other rows).
@@ -1021,7 +890,7 @@ impl App {
                 }
             }
             ScmRow::Section { .. } => {}
-            ScmRow::HistorySection { .. } => self.history.expanded = false,
+            ScmRow::HistorySection { .. } => self.history.set_expanded(false),
             ScmRow::Commit { .. } | ScmRow::CommitFolder { .. } | ScmRow::CommitFile { .. } => {
                 self.collapse_history_row(self.scm.scm_selected)
             }
@@ -1042,41 +911,35 @@ impl App {
 
     fn request_list(&mut self) {
         self.invalidate_search_cache();
-        // Manual refresh (r), Git writes, and settings changes must not
-        // destroy the current file reader or its list viewport. A genuinely
-        // new workspace starts with an empty visible list and still resets.
-        if !self.files.visible.is_empty() {
-            self.record_refresh_anchor();
-            let shown_file = self.preview_state.preview.as_ref().map(|p| p.path.clone());
-            self.refresh_tree_in_place();
-            if let Some(path) = shown_file {
-                self.refresh_preview_if_affected(&[path]);
-            }
-            return;
-        }
-        // Cold start / explicit workspace change.
         self.record_refresh_anchor();
-        self.files.children.clear();
+        let shown_file = self.preview_state.preview.as_ref().map(|p| p.path.clone());
+        self.refresh_tree_in_place();
+        if let Some(path) = shown_file {
+            self.refresh_preview_if_affected(&[path]);
+        }
+    }
+
+    /// Only workspace initialization/change may reset document identity.
+    /// An empty filtered tree is not a workspace change.
+    fn initialize_workspace_listing(&mut self) {
+        self.invalidate_search_cache();
+        // Cold start / explicit workspace change.
+        self.reset_file_find();
+        self.files_preview = None;
+        self.record_refresh_anchor();
+        self.files.clear_listings();
         self.cancel_pending_lists();
-        self.preview_state.preview = None;
-        self.preview_state.preview_loading = false;
-        self.preview_state.preview_scroll = 0;
-        self.preview_state.preview_mode = PreviewMode::File;
-        self.clear_diff_view();
-        self.preview_state.pending_preview = None;
-        self.cancel_preview_page();
-        self.preview_state.pending_diff = None;
         self.services.jobs.cancel_key("fs:preview");
+        self.services.jobs.cancel_key("fs:preview:page");
         self.services.jobs.cancel_key("git:diff");
-        self.request_dir(self.files.tree_root.clone());
+        self.reset_blame();
+        self.reset_inline_diff();
+        self.preview_state = PreviewState::new();
+        self.request_dir(self.files.root().to_path_buf());
     }
 
     fn record_refresh_anchor(&mut self) {
-        if self.files.external_anchor.is_none() {
-            self.files.external_anchor = self
-                .selected_entry()
-                .map(|entry| (entry.path.clone(), self.files.scroll));
-        }
+        self.files.record_refresh_anchor();
     }
 
     /// Refresh directory contents without replacing the currently displayed
@@ -1086,7 +949,7 @@ impl App {
         // Do not abandon handles without cancelling their scheduled work.
         // A new refresh must start one coherent generation of listings.
         self.cancel_pending_lists();
-        let root = self.files.tree_root.clone();
+        let root = self.files.root().to_path_buf();
         self.request_dir(root.clone());
         let mut expanded: Vec<_> = self
             .files
@@ -1099,27 +962,6 @@ impl App {
         expanded.dedup();
         for path in expanded {
             self.request_dir(path);
-        }
-    }
-
-    /// Refresh the directory cache and Git snapshot without dropping focus,
-    /// expansion, or a loaded diff/preview. Editing drafts are never touched.
-    ///
-    /// `git_metadata_changed` is true when the watcher saw HEAD, packed-refs
-    /// or `refs/` move; only then can the commit graph differ from what the
-    /// sidebar already holds. Worktree writes (saves, builds, external edits)
-    /// refresh status and the listing but leave history alone.
-    fn refresh_external_changes(&mut self, git_metadata_changed: bool) {
-        if self.editing.saving() || self.scm.pending_write.is_some() {
-            return; // Own writes refresh on completion.
-        }
-        self.invalidate_search_cache();
-        self.reset_inline_diff();
-        self.record_refresh_anchor();
-        self.refresh_tree_in_place();
-        self.request_status();
-        if git_metadata_changed && self.history.expanded {
-            self.request_history();
         }
     }
 
@@ -1154,7 +996,7 @@ impl App {
             .files
             .expanded
             .iter()
-            .filter(|p| !self.files.children.contains_key(p.as_path()))
+            .filter(|p| !self.files.has_listing(p.as_path()))
             .cloned()
             .collect();
         for path in missing {
@@ -1163,121 +1005,40 @@ impl App {
     }
 
     fn rebuild_visible(&mut self) {
-        self.files.visible = flatten_tree(
-            &self.files.tree_root,
-            &self.files.children,
-            &self.files.expanded,
-        );
-        let visible = std::mem::take(&mut self.files.visible);
-        let filtered: Vec<_> = visible
-            .into_iter()
-            .filter(|r| self.filter_entry(&r.entry))
-            .collect();
-        self.files.visible = if self.config.compact_folders {
-            compact_tree_rows(&filtered, &self.files.children)
-        } else {
-            filtered
-        };
-        if self.files.visible.is_empty() {
-            self.files.selected = 0;
-            self.files.scroll = 0;
-        } else if self.files.selected >= self.files.visible.len() {
-            self.files.selected = self.files.visible.len() - 1;
-        }
+        let options = self.search_options(false, false);
+        self.files.rebuild(&options, self.config.compact_folders);
     }
 
-    /// Rebuild after a filter change while keeping selection identity stable.
-    ///
-    /// The selected path wins even when its row index moved. If the path is
-    /// filtered out, the nearest visible ancestor directory is selected;
-    /// otherwise the previous index is clamped as a last resort. Expansion and
-    /// focus are untouched so closing a filter restores the same tree shape.
     fn rebuild_visible_preserving_selection(&mut self) {
-        let anchor = self.selected_entry().map(|entry| entry.path.clone());
-        let old_selected = self.files.selected;
-        let old_scroll = self.files.scroll;
-        let viewport = self.session.layout.list_inner.height as usize;
-        self.rebuild_visible();
-        let len = self.files.visible.len();
-        if len == 0 {
-            return;
-        }
-        let found = anchor.and_then(|path| {
-            if let Some(index) = self
-                .files
-                .visible
-                .iter()
-                .position(|row| row.entry.path == path)
-            {
-                return Some(index);
-            }
-            // When an expanded chain becomes compact, its original folder
-            // is represented by the deepest directory in that same chain.
-            // Keep the selected folder instead of jumping up to a sibling.
-            if let Some(index) = self.files.visible.iter().position(|row| {
-                matches!(row.entry.kind, EntryKind::Directory)
-                    && row.entry.name.contains(" / ")
-                    && row.entry.path.starts_with(&path)
-            }) {
-                return Some(index);
-            }
-            let mut parent = path.parent();
-            while let Some(candidate) = parent {
-                if let Some(index) = self
-                    .files
-                    .visible
-                    .iter()
-                    .position(|row| row.entry.path == candidate)
-                {
-                    return Some(index);
-                }
-                if candidate == self.files.tree_root {
-                    break;
-                }
-                parent = candidate.parent();
-            }
-            None
-        });
-        self.files.selected = found.unwrap_or_else(|| old_selected.min(len - 1));
-        if !self.files.follow_selection {
-            self.files.scroll = old_scroll.min(len - 1);
-            return;
-        }
-        let max_scroll = len.saturating_sub(viewport.max(1));
-        if viewport == 0 {
-            self.files.scroll = old_scroll.min(self.files.selected);
-        } else if self.files.selected >= old_scroll
-            && self.files.selected < old_scroll.saturating_add(viewport)
-        {
-            self.files.scroll = old_scroll.min(max_scroll);
-        } else if self.files.selected < old_scroll {
-            self.files.scroll = self.files.selected;
-        } else {
-            self.files.scroll = self
-                .files
-                .selected
-                .saturating_sub(viewport.saturating_sub(1))
-                .min(max_scroll);
-        }
+        let options = self.search_options(false, false);
+        self.files.rebuild_preserving_selection(
+            &options,
+            self.config.compact_folders,
+            self.layout_state.geometry.list_inner.height as usize,
+        );
     }
 
     fn selected_entry(&self) -> Option<&Entry> {
-        self.files
-            .visible
-            .get(self.files.selected)
-            .map(|r| &r.entry)
+        self.files.selected_entry()
     }
 
     fn request_status(&mut self) {
+        self.request_status_with_reason(false);
+    }
+
+    fn request_status_with_reason(&mut self, periodic: bool) {
         // The gix status call runs on a blocking worker that cannot be
         // aborted, so a second request while one is in flight would only add
         // another full fan-out of short-lived threads. Remember it and run
         // once more when the current job finishes.
         if self.scm.pending_status.is_some() {
-            self.scm.status_rerun = true;
+            if !periodic {
+                self.scm.defer_status_refresh();
+            }
             return;
         }
-        let start = self.files.tree_root.clone();
+        self.scm.note_status_request(Instant::now());
+        let start = self.files.root().to_path_buf();
         let job_key = format!("git:status:{}", start.display());
         let git = self.services.git;
         let start_for_job = start.clone();
@@ -1294,6 +1055,7 @@ impl App {
                 }
             });
         self.scm.pending_status = Some(PendingStatus {
+            periodic,
             id: handle.id,
             key: start,
             handle,
@@ -1301,110 +1063,123 @@ impl App {
     }
 
     fn request_preview_for_selection(&mut self) {
-        // Folders navigate the tree without replacing the viewer or its scroll.
-        if self
+        let entry = self
             .selected_entry()
-            .is_some_and(|entry| matches!(entry.kind, EntryKind::Directory))
+            .map(|entry| (entry.path.clone(), entry.kind));
+        self.request_file_preview(entry);
+    }
+
+    /// Open a document by explicit identity. The caller may be the file
+    /// tree, a navigation command, or another user-facing entry point.
+    fn request_file_preview(&mut self, target: Option<(PathBuf, EntryKind)>) {
+        if target
+            .as_ref()
+            .is_some_and(|(_, kind)| *kind == EntryKind::Directory)
         {
             return;
         }
-        if self
-            .selected_entry()
-            .is_some_and(|entry| self.preview_state.find.path != entry.path)
+        if target
+            .as_ref()
+            .is_some_and(|(path, _)| self.preview_state.find.path != *path)
         {
             self.reset_file_find();
         }
         self.cancel_preview_page();
-        self.preview_state.preview_scroll_x = 0;
+        self.preview_state.presentation.preview_scroll_x = 0;
         self.reset_blame();
         self.reset_inline_diff();
         self.preview_state.preview_mode = PreviewMode::File;
-        self.preview_state.selection.clear();
-        self.preview_state.markdown = MarkdownPreview::default();
-        self.preview_state.text_rows.clear();
-        self.preview_state.pending_source_line = None;
-        self.preview_state.pending_overview_line = None;
-        self.preview_state.pending_find_byte = None;
+        self.preview_state.presentation.selection.clear();
+        self.preview_state.presentation.markdown = MarkdownPreview::default();
+        self.preview_state.presentation.text_rows.clear();
+        self.preview_state.navigation.pending_source_line = None;
+        self.preview_state.navigation.pending_overview_line = None;
+        self.preview_state.navigation.pending_find_byte = None;
         self.clear_diff_view();
         self.services.jobs.cancel_key("git:diff");
         self.preview_state.pending_diff = None;
 
-        let Some(entry) = self.selected_entry().cloned() else {
+        let Some((path, kind)) = target else {
             self.preview_state.preview = None;
             self.preview_state.preview_loading = false;
-            self.preview_state.preview_scroll = 0;
+            self.preview_state.presentation.preview_scroll = 0;
             self.preview_state.pending_preview = None;
             self.services.jobs.cancel_key("fs:preview");
             return;
         };
 
         self.preview_state.preview_loading = true;
-        self.preview_state.preview_scroll = 0;
-        let path = entry.path.clone();
+        self.preview_state.presentation.preview_scroll = 0;
         let handle = self
             .services
             .fs
-            .preview(&self.services.jobs, entry.path, entry.kind);
+            .preview(&self.services.jobs, path.clone(), kind);
         self.preview_state.pending_preview = Some(PendingPreview {
+            kind,
             id: handle.id,
             path,
             handle,
         });
     }
 
-    /// Reload the selected file only when the watcher actually reports a
+    /// Reload the displayed/requested file only when the watcher reports a
     /// change to that file. Keep the old preview visible and preserve scroll
     /// while its replacement is read asynchronously.
     fn refresh_preview_if_affected(&mut self, changed_paths: &[PathBuf]) {
         if !matches!(self.preview_state.preview_mode, PreviewMode::File) {
             return;
         }
-        let Some(entry) = self.selected_entry().cloned() else {
+        let target = self
+            .preview_state
+            .pending_preview
+            .as_ref()
+            .map(|p| (p.path.clone(), p.kind))
+            .or_else(|| {
+                self.preview_state
+                    .preview
+                    .as_ref()
+                    .map(|p| (p.path.clone(), self.preview_state.document_kind()))
+            });
+        let Some((path, kind)) = target.filter(|(p, _)| changed_paths.contains(p)) else {
             return;
         };
-        if matches!(entry.kind, EntryKind::Directory)
-            || !changed_paths.iter().any(|path| path == &entry.path)
-        {
-            return;
-        }
         let same_preview = self
             .preview_state
             .preview
             .as_ref()
-            .is_some_and(|preview| preview.path == entry.path);
-        let same_pending = self
-            .preview_state
-            .pending_preview
-            .as_ref()
-            .is_some_and(|pending| pending.path == entry.path);
-        if !same_preview && !same_pending {
-            return; // The next directory load will request the new selection.
-        }
+            .is_some_and(|preview| preview.path == path);
         self.cancel_preview_page();
         self.refresh_blame_in_place();
         // Read through the visible source line before swapping the new
         // snapshot in. Replacing a 2,000-line preview with the first 400
         // lines would otherwise make the renderer clamp scroll to 0.
-        let viewport = self.session.layout.preview_inner.height as usize;
-        let through_line = if self.preview_state.text_rows.line_count() > 0 {
+        let viewport = self.layout_state.geometry.preview_inner.height as usize;
+        let through_line = if self.preview_state.presentation.text_rows.line_count() > 0 {
             self.preview_state
+                .presentation
                 .text_rows
-                .row_to_source(self.preview_state.preview_scroll.saturating_add(viewport))
+                .row_to_source(
+                    self.preview_state
+                        .presentation
+                        .preview_scroll
+                        .saturating_add(viewport),
+                )
                 .saturating_add(16)
         } else {
             self.preview_state
+                .presentation
                 .preview_scroll
                 .saturating_add(viewport)
                 .saturating_add(32)
         };
-        let path = entry.path.clone();
         let handle = self.services.fs.preview_through_line(
             &self.services.jobs,
             path.clone(),
-            entry.kind,
+            kind,
             through_line,
         );
         self.preview_state.pending_preview = Some(PendingPreview {
+            kind,
             id: handle.id,
             path,
             handle,
@@ -1422,9 +1197,9 @@ impl App {
         };
         self.cancel_preview_page();
         self.preview_state.preview_mode = PreviewMode::Diff;
-        self.preview_state.preview_scroll_x = 0;
+        self.preview_state.presentation.preview_scroll_x = 0;
         self.preview_state.preview_loading = true;
-        self.preview_state.preview_scroll = 0;
+        self.preview_state.presentation.preview_scroll = 0;
         self.preview_state.diff_label = match &source {
             DiffSource::Working(side) => side.label().to_string(),
             DiffSource::Commit { short, .. } => short.clone(),
@@ -1496,16 +1271,16 @@ impl App {
             return;
         }
         if let Some(ScmRow::Commit { index }) = self.selected_scm_row() {
-            if let Some(commit) = self.history.commits.get(index) {
+            if let Some(commit) = self.history.commits().get(index) {
                 self.request_commit_details(commit.id.clone());
                 return;
             }
         }
         if let Some(ScmRow::CommitFile { commit, index, .. }) = self.selected_scm_row() {
-            let commit = self.history.commits.get(commit).cloned();
+            let commit = self.history.commits().get(commit).cloned();
             let path = commit
                 .as_ref()
-                .and_then(|c| self.history.files.get(&c.id))
+                .and_then(|c| self.history.files().get(&c.id))
                 .and_then(|changes| changes.get(index))
                 .map(|change| change.path.clone());
             if let (Some(commit), Some(path)) = (commit, path) {
@@ -1584,7 +1359,7 @@ impl App {
                 });
         self.session.status = format!("{op_label} {scope}...");
         self.session.write_status = Some(self.session.status.clone());
-        self.scm.pending_transfer = transfer;
+        self.scm.follow_transfer(transfer);
         self.scm.pending_write = Some(PendingWrite {
             id: handle.id,
             op: if stage {
@@ -1624,42 +1399,22 @@ impl App {
     }
 
     fn clear_diff_view(&mut self) {
-        self.preview_state.selection.clear();
-        self.preview_state.file_diff = None;
-        self.preview_state.hunk_index = None;
-        self.preview_state.split_cache.clear();
-        self.preview_state.diff_row_count = 0;
+        self.preview_state.clear_diff_view();
     }
 
     fn set_file_diff(&mut self, diff: FileDiff) {
-        self.preview_state.selection.clear();
-        self.preview_state
-            .split_cache
-            .set_full_new_lines(diff.full_new_lines.as_deref());
-        let count = if diff.lines.is_empty() && diff.full_new_lines.is_none() {
-            1
-        } else {
-            self.preview_state.split_cache.ensure(&diff.lines).max(1)
-        };
-        self.preview_state.diff_row_count = count;
-        self.preview_state.file_diff = Some(diff);
+        self.preview_state.set_file_diff(diff);
     }
 
     fn markdown_available(&self) -> bool {
-        !self.in_git_sidebar()
-            && !self.preview_state.preview_loading
-            && matches!(self.preview_state.preview_mode, PreviewMode::File)
-            && self.preview_state.preview.as_ref().is_some_and(|preview| {
-                matches!(preview.content, PreviewContent::Text { .. })
-                    && TextLang::from_name(&preview.path.to_string_lossy()) == TextLang::Markdown
-            })
+        self.preview_state.markdown_available(self.in_git_sidebar())
     }
 
     fn set_markdown_code(&mut self, code: bool) {
         if self.markdown_available() && self.preview_state.markdown_code != code {
             self.preview_state.markdown_code = code;
-            self.preview_state.selection.clear();
-            self.preview_state.preview_scroll = 0;
+            self.preview_state.presentation.selection.clear();
+            self.preview_state.presentation.preview_scroll = 0;
         }
     }
 
@@ -1670,25 +1425,26 @@ impl App {
         } else if matches!(
             self.preview_state.preview.as_ref().map(|p| &p.content),
             Some(PreviewContent::Text { .. })
-        ) && self.preview_state.text_rows.line_count() > 0
+        ) && self.preview_state.presentation.text_rows.line_count() > 0
         {
             self.preview_state
+                .presentation
                 .text_rows
-                .row_to_source(self.preview_state.preview_scroll)
+                .row_to_source(self.preview_state.presentation.preview_scroll)
         } else {
-            self.preview_state.preview_scroll + 1
+            self.preview_state.presentation.preview_scroll + 1
         }
     }
 
     /// Line count for preview scrolling, including cached Markdown wrapping.
     fn preview_total_lines(&self) -> usize {
         if self.markdown_available() && !self.preview_state.markdown_code {
-            return self.preview_state.markdown.line_count().max(1);
+            return self.preview_state.presentation.markdown.line_count().max(1);
         }
         match self.preview_state.preview_mode {
             PreviewMode::Diff => {
                 if self.preview_state.file_diff.is_some() {
-                    self.preview_state.diff_row_count.max(1)
+                    self.preview_state.diff_row_count().max(1)
                 } else {
                     1
                 }
@@ -1701,8 +1457,8 @@ impl App {
                 Some(PreviewContent::Text {
                     lines, truncated, ..
                 }) => {
-                    if self.preview_state.text_rows.line_count() > 0 {
-                        self.preview_state.text_rows.line_count()
+                    if self.preview_state.presentation.text_rows.line_count() > 0 {
+                        self.preview_state.presentation.text_rows.line_count()
                     } else {
                         let base = if lines.is_empty() { 1 } else { lines.len() };
                         if *truncated {
@@ -1734,12 +1490,11 @@ impl App {
             })
         {
             let key = pending.key;
-            self.apply_status_result(key, result);
-            // A status-filtered search may have started before this snapshot arrived.
-            if self.tools.filter.status != 0 {
-                self.invalidate_search_cache();
+            if key == self.files.root() {
+                self.scm.note_status_request(Instant::now());
             }
-            if std::mem::take(&mut self.scm.status_rerun) {
+            self.apply_status_result_with_reason(key, result, pending.periodic);
+            if self.scm.take_deferred_status_refresh() {
                 self.request_status();
             }
             true
@@ -1754,6 +1509,7 @@ impl App {
                 pending.handle.try_join()
             })
         {
+            self.preview_state.set_document_kind(pending.kind);
             self.apply_preview_result(pending.path, result);
             true
         } else {
@@ -1773,9 +1529,6 @@ impl App {
         let from_offset = pending.from_offset;
         if !matches!(self.preview_state.preview_mode, PreviewMode::File)
             || self.preview_state.pending_preview.is_some()
-            || !self.selected_entry().is_some_and(|entry| {
-                entry.path == path || matches!(entry.kind, EntryKind::Directory)
-            })
         {
             return true;
         }
@@ -1861,7 +1614,7 @@ impl App {
             positions.into_iter().rev().find(|&line| line < current)
         };
         if let Some(target) = target {
-            self.preview_state.pending_overview_line = Some(target);
+            self.preview_state.navigation.pending_overview_line = Some(target);
             self.advance_overview_jump();
         } else {
             self.session.status = "No further overview markers".into();
@@ -1869,7 +1622,7 @@ impl App {
     }
 
     fn advance_overview_jump(&mut self) {
-        let Some(target) = self.preview_state.pending_overview_line else {
+        let Some(target) = self.preview_state.navigation.pending_overview_line else {
             return;
         };
         let Some(preview) = self.preview_state.preview.as_ref() else {
@@ -1879,15 +1632,19 @@ impl App {
             lines, truncated, ..
         } = &preview.content
         else {
-            self.preview_state.pending_overview_line = None;
+            self.preview_state.navigation.pending_overview_line = None;
             return;
         };
         if target <= lines.len() || !*truncated {
             let target = target.min(lines.len().max(1));
-            self.preview_state.pending_overview_line = None;
-            self.preview_state.pending_source_line = Some(target);
-            self.preview_state.pending_find_byte = None;
-            self.preview_state.preview_scroll = self.preview_state.text_rows.source_to_row(target);
+            self.preview_state.navigation.pending_overview_line = None;
+            self.preview_state.navigation.pending_source_line = Some(target);
+            self.preview_state.navigation.pending_find_byte = None;
+            self.preview_state.presentation.preview_scroll = self
+                .preview_state
+                .presentation
+                .text_rows
+                .source_to_row(target);
         } else {
             self.maybe_request_preview_page();
         }
@@ -1970,21 +1727,20 @@ impl App {
         else {
             return;
         };
-        let Some(entry) = self.selected_entry() else {
-            return;
-        };
-        // Selecting a folder deliberately leaves the previous file visible.
-        // It must remain scrollable and pageable in that situation too.
-        if entry.path != preview.path && !matches!(entry.kind, EntryKind::Directory) {
-            return;
-        }
-        let viewport = self.session.layout.preview_inner.height as usize;
-        let remaining = self
-            .preview_total_lines()
-            .saturating_sub(self.preview_state.preview_scroll.saturating_add(viewport));
+        let viewport = self.layout_state.geometry.preview_inner.height as usize;
+        let remaining = self.preview_total_lines().saturating_sub(
+            self.preview_state
+                .presentation
+                .preview_scroll
+                .saturating_add(viewport),
+        );
         if remaining > viewport.max(32)
             && self.preview_state.find.jump_target.is_none()
-            && self.preview_state.pending_overview_line.is_none()
+            && self
+                .preview_state
+                .navigation
+                .pending_overview_line
+                .is_none()
         {
             return;
         }
@@ -2024,15 +1780,12 @@ impl App {
                     self.set_file_diff(diff);
                     self.preview_state.preview_loading = false;
                     self.preview_state.preview_mode = PreviewMode::Diff;
-                    self.preview_state.preview_scroll = 0;
+                    self.preview_state.presentation.preview_scroll = 0;
                     self.ensure_hunk_visible();
-                    if let Some(resume) = self.tools.resume_diff.take().filter(|r| {
-                        r.path == path
-                            && matches!(&source, DiffSource::Working(side) if *side == r.side)
-                    }) {
-                        self.preview_state.preview_scroll = resume
+                    if let Some(resume) = self.navigation.take_diff_resume(&path, &source) {
+                        self.preview_state.presentation.preview_scroll = resume
                             .scroll
-                            .min(self.preview_state.diff_row_count.saturating_sub(1));
+                            .min(self.preview_state.diff_row_count().saturating_sub(1));
                         self.preview_state.hunk_index = resume
                             .hunk
                             .map(|i| i.min(hunk_count.saturating_sub(1)))
@@ -2060,6 +1813,16 @@ impl App {
                 pending.handle.try_join()
             })
         {
+            let refresh = !matches!(&pending.op, WriteOp::Push);
+            let preserve_diff = matches!(
+                &pending.op,
+                WriteOp::Stage
+                    | WriteOp::Unstage
+                    | WriteOp::StageHunk
+                    | WriteOp::UnstageHunk
+                    | WriteOp::Commit(_)
+            );
+            let remote = matches!(&pending.op, WriteOp::Pull | WriteOp::Push);
             let op = match pending.op {
                 WriteOp::Stage => "staged",
                 WriteOp::Unstage => "unstaged",
@@ -2070,9 +1833,7 @@ impl App {
                 WriteOp::Pull => "pulled",
             }
             .to_string();
-            let refresh = op != "pushed";
             let target = pending.target;
-            let remote = matches!(op.as_str(), "pulled" | "pushed");
             match result {
                 Ok(Ok(msg)) => {
                     self.session.write_status = Some(format!("{op}: {target}"));
@@ -2087,26 +1848,9 @@ impl App {
                         } else {
                             format!("{op} - {detail}")
                         };
-                        self.request_status();
-                        if self.in_git_sidebar() && self.history.expanded {
-                            // A commit rewrote the graph; reload it (cheap, cached jobs).
-                            self.request_history();
-                        }
-                        // Keep diff open after hunk ops — reload it.
-                        if matches!(
-                            op.as_str(),
-                            "hunk staged" | "hunk unstaged" | "staged" | "unstaged" | "committed"
-                        ) {
-                            if let Some(diff) = self.preview_state.file_diff.clone() {
-                                let path = diff.path.clone();
-                                let side = diff.side;
-                                self.request_diff(path, side);
-                            } else {
-                                self.request_list();
-                            }
-                        } else {
-                            self.request_list();
-                        }
+                        self.on_workspace_change(workspace_changes::WorkspaceChange::GitWrite {
+                            preserve_diff,
+                        });
                     } else {
                         self.session.status = if detail.is_empty() {
                             op
@@ -2116,7 +1860,7 @@ impl App {
                     }
                 }
                 Ok(Err(err)) => {
-                    self.scm.pending_transfer = None;
+                    self.scm.cancel_transfer();
                     self.session.status = format!("{op} failed: {err}");
                     self.session.write_status = Some(self.session.status.clone());
                     if remote {
@@ -2133,7 +1877,7 @@ impl App {
                     }
                 }
                 Err(JobError::Cancelled) | Err(JobError::Shutdown) => {
-                    self.scm.pending_transfer = None;
+                    self.scm.cancel_transfer();
                     self.session.write_status = Some(format!("{op} interrupted: {target}"));
                 }
             }
@@ -2150,7 +1894,9 @@ impl App {
     ) {
         match result {
             Ok(Ok(entries)) => {
-                self.files.children.insert(path.clone(), entries);
+                if !self.files.install_listing(path.clone(), entries) {
+                    return;
+                }
                 let compact_selected = self.advance_compact_folder_expansion();
                 self.rebuild_visible();
                 if let Some(target) = compact_selected {
@@ -2172,78 +1918,22 @@ impl App {
                 }
 
                 self.request_missing_expanded();
-                if let Some((path, old_scroll)) = self.files.external_anchor.clone() {
-                    if let Some(index) = self
-                        .files
-                        .visible
-                        .iter()
-                        .position(|row| row.entry.path == path)
-                    {
-                        self.files.selected = index;
-                        self.files.scroll = if self.files.follow_selection {
-                            old_scroll.min(index)
-                        } else {
-                            old_scroll
-                        };
-                        // Subsequent expanded-directory results can still shift
-                        // row indices. Retain the original anchor until the
-                        // entire refresh is complete, not just the root load.
-                        if self.files.pending_lists.is_empty() {
-                            self.files.external_anchor = None;
-                        }
-                    } else if self.files.pending_lists.is_empty() {
-                        // Removed paths fall back to their closest visible ancestor.
-                        let mut parent = path.parent();
-                        while let Some(folder) = parent {
-                            if let Some(index) = self
-                                .files
-                                .visible
-                                .iter()
-                                .position(|row| row.entry.path == folder)
-                            {
-                                self.files.selected = index;
-                                break;
-                            }
-                            parent = folder.parent();
-                        }
-                        self.files.external_anchor = None;
-                    }
-                }
+                self.files.restore_refresh_anchor();
                 self.session.status = self.hint_bar();
                 // A reveal can depend on several asynchronously loaded parent
                 // directories. Resolve it immediately when any listing arrives,
                 // even if this was the last pending job. Do not preview the
                 // previous selection while the requested target is loading.
-                if self.tools.reveal.is_some() {
+                if self.navigation.has_pending() {
                     self.try_reveal();
                 } else if matches!(self.preview_state.preview_mode, PreviewMode::File)
-                    && self.files.external_anchor.is_none()
+                    && self.files.refresh_anchor_path().is_none()
+                    && self.preview_state.preview.is_none()
+                    && self.preview_state.pending_preview.is_none()
                 {
-                    // Rebuilding a directory is not a file selection change.
-                    // In particular, other files and Git metadata can refresh
-                    // the tree while the user is reading far down a preview.
-                    // Only request a preview if its selected path truly changed
-                    // (or no preview has been loaded/requested yet).
-                    if let Some(entry) = self.selected_entry() {
-                        let path = &entry.path;
-                        let same_preview = self
-                            .preview_state
-                            .preview
-                            .as_ref()
-                            .is_some_and(|preview| &preview.path == path);
-                        let same_pending = self
-                            .preview_state
-                            .pending_preview
-                            .as_ref()
-                            .is_some_and(|pending| &pending.path == path);
-                        if !same_preview && !same_pending {
-                            self.request_preview_for_selection();
-                        }
-                    } else if self.preview_state.preview.is_none()
-                        && self.preview_state.pending_preview.is_none()
-                    {
-                        self.request_preview_for_selection();
-                    }
+                    // Bootstrap the reader once. A passive listing or filter
+                    // rebuild cannot choose a different document for the user.
+                    self.request_preview_for_selection();
                 }
             }
             Ok(Err(err)) => {
@@ -2253,71 +1943,63 @@ impl App {
         }
     }
 
+    #[cfg(test)]
     fn apply_status_result(
         &mut self,
         key: PathBuf,
         result: Result<Result<Option<StatusSnapshot>, GitReadError>, JobError>,
     ) {
+        self.apply_status_result_with_reason(key, result, false);
+    }
+
+    fn apply_status_result_with_reason(
+        &mut self,
+        key: PathBuf,
+        result: Result<Result<Option<StatusSnapshot>, GitReadError>, JobError>,
+        periodic: bool,
+    ) {
         // A directory can change while its blocking status worker is still
         // running. A shared Git repository is NOT enough to make a snapshot
         // from the old Files root valid for the current workspace.
-        if key != self.files.tree_root {
+        if key != self.files.root() {
             return;
         }
+        let previous_scope = self.workspace_filter.git_scope(self.scm.status().as_ref());
         match result {
             Ok(Ok(Some(snap))) => {
-                self.scm.branch =
-                    read_branch_name(&snap.repo_root).unwrap_or_else(|| "HEAD".into());
-                self.scm.git_status = Some(snap);
-                self.rebuild_visible_preserving_selection();
-                self.request_sync_status();
-                // Do not jump on an out-of-order snapshot from before the
-                // write completed. The rerun will contain the new side.
-                if self.scm.pending_write.is_none() {
-                    if let Some((path, side)) = self.scm.pending_transfer.as_ref().cloned() {
-                        let has_target = self
-                            .scm_slices()
-                            .0
-                            .iter()
-                            .chain(self.scm_slices().1.iter())
-                            .any(|entry| entry.path == path && entry.side == side.side());
-                        if has_target {
-                            expand_ancestors_for_path(self.scm_expanded_mut(side), &path);
-                            let rows = self.scm_rows();
-                            let (unstaged, staged) = self.scm_slices();
-                            if let Some(index) = rows.iter().position(|row| {
-                                scm_entry(row, unstaged, staged).is_some_and(|entry| {
-                                    entry.path == path && entry.side == side.side()
-                                })
-                            }) {
-                                self.scm.scm_selected = index;
-                                self.scm.follow_selection = true;
-                                self.scm.pending_transfer = None;
-                            }
-                        } else if !self.scm.status_rerun {
-                            // The file may have vanished or another refresh
-                            // superseded the write. Never retain a stale jump.
-                            self.scm.pending_transfer = None;
-                        }
-                    }
+                let branch = read_branch_name(&snap.repo_root).unwrap_or_else(|| "HEAD".into());
+                if periodic && self.scm.matches_snapshot(&snap, &branch) {
+                    // An unchanged background status scan must not restart
+                    // the Diff reader, its focus, or its selection.
+                    return;
                 }
-                if let Some(resume) = &self.tools.resume_diff {
+                let prior_row = periodic.then(|| self.selected_scm_row()).flatten();
+                let prior_selection = self.selected_scm_entry().cloned();
+                self.scm.branch = branch;
+                self.scm.set_status(Some(snap));
+                self.reconcile_git_scope(previous_scope);
+                self.request_sync_status();
+                let history = self.history.view();
+                let compact = self.config.compact_folders;
+                let retained = periodic
+                    && self.scm.retain_selected_row(
+                        prior_row.as_ref(),
+                        prior_selection.as_ref(),
+                        &history,
+                        compact,
+                    );
+                self.scm.reconcile_transfer(&history, compact);
+                if let Some(resume) = self.navigation.diff_resume() {
                     let column = if resume.side == DiffSide::Unstaged {
                         StagingColumn::Unstaged
                     } else {
                         StagingColumn::Staged
                     };
-                    let path = resume.path.clone();
-                    expand_ancestors_for_path(self.scm_expanded_mut(column), &path);
-                    let rows = self.scm_rows();
-                    let (u, s) = self.scm_slices();
-                    if let Some(i) = rows.iter().position(|r| {
-                        scm_entry(r, u, s)
-                            .is_some_and(|e| e.path == path && e.side == column.side())
-                    }) {
-                        self.scm.scm_selected = i;
-                    } else {
-                        self.tools.resume_diff = None;
+                    if !self
+                        .scm
+                        .reveal_change(&resume.path, column, &history, compact)
+                    {
+                        self.navigation.cancel_diff_resume();
                     }
                 }
                 self.clamp_scm_selection();
@@ -2325,6 +2007,7 @@ impl App {
                 // leave keyboard focus in an empty preview whose selected
                 // row is now a group heading with no actionable file.
                 if self.in_git_sidebar()
+                    && !retained
                     && self.session.focus == PaneFocus::Preview
                     && matches!(self.preview_state.preview_mode, PreviewMode::Diff)
                     && self.selected_scm_entry().is_none()
@@ -2336,8 +2019,16 @@ impl App {
                     self.session.focus = PaneFocus::List;
                 }
                 if self.in_git_sidebar() && self.selected_scm_entry().is_some() {
-                    self.request_diff_for_scm_selection();
-                } else if self.in_git_sidebar() {
+                    let same_selected = prior_selection.as_ref() == self.selected_scm_entry();
+                    let current_diff = self
+                        .preview_state
+                        .file_diff
+                        .as_ref()
+                        .is_some_and(|d| self.diff_matches_selection(d));
+                    if !periodic || !same_selected || !current_diff {
+                        self.request_diff_for_scm_selection();
+                    }
+                } else if self.in_git_sidebar() && !retained {
                     self.preview_state.preview_mode = PreviewMode::Diff;
                     self.clear_diff_view();
                     self.preview_state.preview_loading = false;
@@ -2347,17 +2038,10 @@ impl App {
                 }
             }
             Ok(Ok(None)) => {
-                self.scm.pending_transfer = None;
-                if key == self.files.tree_root
-                    || self
-                        .scm
-                        .git_status
-                        .as_ref()
-                        .is_some_and(|s| !self.files.tree_root.starts_with(&s.repo_root))
-                {
-                    self.scm.git_status = None;
-                    self.scm.branch.clear();
-                }
+                self.scm.cancel_transfer();
+                self.scm.set_status(None);
+                self.scm.branch.clear();
+                self.reconcile_git_scope(previous_scope);
                 self.clamp_scm_selection();
                 if self.files.pending_lists.is_empty() {
                     self.session.status = self.hint_bar();
@@ -2375,64 +2059,31 @@ impl App {
         path: PathBuf,
         result: Result<Result<Preview, FsError>, JobError>,
     ) {
-        let current = self.selected_entry();
-        let refresh_anchor_matches = self
-            .files
-            .external_anchor
-            .as_ref()
-            .is_some_and(|(selected, _)| selected == &path);
-        if !refresh_anchor_matches
-            && !current.is_some_and(|entry| {
-                entry.path == path || matches!(entry.kind, EntryKind::Directory)
-            })
-        {
+        if !self.preview_state.accepts_requested_file_result(
+            &path,
+            result
+                .as_ref()
+                .ok()
+                .and_then(|r| r.as_ref().ok())
+                .map(|preview| preview.path.as_path()),
+        ) {
             return;
         }
-        if !matches!(self.preview_state.preview_mode, PreviewMode::File) {
-            return;
-        }
-
         match result {
             Ok(Ok(preview)) => {
-                let same_file = self
-                    .preview_state
-                    .preview
-                    .as_ref()
-                    .is_some_and(|old| old.path == path);
-                self.preview_state.selection.clear();
-                self.preview_state.markdown = MarkdownPreview::default();
-                self.preview_state.text_rows.clear();
-                self.preview_state.pending_source_line = None;
-                self.preview_state.preview = Some(preview);
-                self.preview_state.preview_loading = false;
-                if same_file
-                    && self.preview_state.find.open
-                    && !self.preview_state.find.query.is_empty()
-                {
+                if self.preview_state.install_file_preview(&path, preview) {
                     self.start_file_find();
                 }
-                if !same_file {
-                    self.preview_state.preview_scroll = 0;
-                }
-                if self.tools.reveal.as_ref().is_some_and(|(p, _)| p == &path) {
-                    if let Some((_, line)) = self.tools.reveal.take() {
-                        if self.markdown_available() {
-                            self.preview_state.markdown_code = true;
-                        }
-                        self.preview_state.preview_scroll = line.saturating_sub(1);
-                        self.preview_state.pending_source_line = Some(line);
-                        self.session.focus =
-                            self.tools.return_focus.take().unwrap_or(PaneFocus::Preview);
-                    }
+                if let Some((line, focus)) = self.navigation.take_for(&path) {
+                    let markdown_available = self.markdown_available();
+                    self.preview_state
+                        .reveal_source_line(line, markdown_available);
+                    self.session.focus = focus;
                 }
             }
             Ok(Err(err)) => {
-                self.preview_state.selection.clear();
-                self.preview_state.text_rows.clear();
-                self.preview_state.pending_source_line = None;
-                self.preview_state.preview = Some(Preview::error(path, err.to_string()));
-                self.preview_state.preview_loading = false;
-                self.preview_state.preview_scroll = 0;
+                self.navigation.take_for(&path);
+                self.preview_state.install_file_error(path, err.to_string());
             }
             Err(JobError::Cancelled) | Err(JobError::Shutdown) => {}
         }
@@ -2446,38 +2097,41 @@ impl App {
     fn enter_git_sidebar(&mut self) {
         // Entering Source Control must reconcile changes missed by the shallow
         // file watcher, including edits in collapsed directories.
-        // A hidden sidebar is refreshed when it becomes visible instead.
-        let refresh_on_entry = !self.in_git_sidebar() && self.session.sidebar_visible;
+        let refresh_on_entry = !self.in_git_sidebar();
         if !self.in_git_sidebar() {
             let caller = std::panic::Location::caller();
             input_trace::log(&format!("ENTER_GIT {}:{}", caller.file(), caller.line()));
         }
+        self.navigation.cancel_reveal();
         self.close_file_find();
         self.tools.marks.clear();
         if !self.in_git_sidebar() {
             self.files_preview = Some((
                 self.preview_state.preview.clone(),
-                self.preview_state.preview_scroll,
+                self.preview_state.presentation.preview_scroll,
                 self.preview_state.markdown_code,
+                self.preview_state.document_kind(),
             ));
             self.services.jobs.cancel_key("fs:preview");
             self.preview_state.pending_preview = None;
             self.preview_state.preview_loading = false;
         }
         self.session.activity = ActivityTab::Git;
-        self.preview_state.selection.clear();
+        self.preview_state.presentation.selection.clear();
         self.preview_state.preview_mode = PreviewMode::Diff;
         self.session.focus = PaneFocus::List;
         self.clamp_scm_selection();
         // Prefer first file: expand its ancestors so the change row is visible.
-        if self.scm.scm_expanded_unstaged.is_empty() && self.scm.scm_expanded_staged.is_empty() {
+        if self.scm.expanded(StagingColumn::Unstaged).is_empty()
+            && self.scm.expanded(StagingColumn::Staged).is_empty()
+        {
             let (u, s) = self.scm_slices();
             let first_u = u.first().map(|e| e.path.clone());
             let first_s = s.first().map(|e| e.path.clone());
             if let Some(path) = first_u {
-                expand_ancestors_for_path(&mut self.scm.scm_expanded_unstaged, &path);
+                expand_ancestors_for_path(self.scm.expanded_mut(StagingColumn::Unstaged), &path);
             } else if let Some(path) = first_s {
-                expand_ancestors_for_path(&mut self.scm.scm_expanded_staged, &path);
+                expand_ancestors_for_path(self.scm.expanded_mut(StagingColumn::Staged), &path);
             }
         }
         let rows = self.scm_rows();
@@ -2489,7 +2143,7 @@ impl App {
             self.scm.scm_selected = i;
         }
         self.request_diff_for_scm_selection();
-        if self.history.expanded {
+        if self.history.expanded() {
             self.request_history();
         }
         self.session.status = "source control".into();
@@ -2507,11 +2161,12 @@ impl App {
         self.preview_state.preview_mode = PreviewMode::File;
         self.preview_state.preview_loading = false;
         self.clear_diff_view();
-        self.preview_state.markdown = MarkdownPreview::default();
-        if let Some((preview, scroll, markdown_code)) = self.files_preview.take() {
+        self.preview_state.presentation.markdown = MarkdownPreview::default();
+        if let Some((preview, scroll, markdown_code, kind)) = self.files_preview.take() {
             self.preview_state.preview = preview;
-            self.preview_state.preview_scroll = scroll;
+            self.preview_state.presentation.preview_scroll = scroll;
             self.preview_state.markdown_code = markdown_code;
+            self.preview_state.set_document_kind(kind);
         }
         // A directory does not trigger a preview. For a selected file, a
         // cancelled or missing preview may be requested again as needed.
@@ -2541,9 +2196,16 @@ impl App {
         };
         let entry = &row_ref.entry;
         let path = entry.path.clone();
+        self.navigation.cancel_reveal();
         self.files.selected = index;
         let is_dir = entry.kind == EntryKind::Directory;
         let mut items = file_list_items(is_dir);
+        if let Some(item) = items
+            .iter_mut()
+            .find(|i| i.action == ContextAction::PasteFiles)
+        {
+            item.enabled = self.file_paste_available();
+        }
         if self.has_discardable_changes_under(&path) {
             items.insert(
                 0,
@@ -2576,11 +2238,11 @@ impl App {
         self.session.focus = PaneFocus::List;
         let has_staged = self
             .scm
-            .git_status
+            .status()
             .as_ref()
             .map(|s| !s.staged.is_empty())
             .unwrap_or(false);
-        let in_repo = self.scm.git_status.is_some();
+        let in_repo = self.scm.status().is_some();
         let mut items = staging_items(column, has_staged, in_repo);
         let can_open = self
             .selected_scm_entry()
@@ -2605,10 +2267,10 @@ impl App {
         self.request_diff_for_scm_selection();
         let has_staged = self
             .scm
-            .git_status
+            .status()
             .as_ref()
             .is_some_and(|s| !s.staged.is_empty());
-        let mut items = staging_items(column, has_staged, self.scm.git_status.is_some());
+        let mut items = staging_items(column, has_staged, self.scm.status().is_some());
         for item in &mut items {
             item.action = match item.action {
                 ContextAction::Stage => ContextAction::StageFolder,
@@ -2637,7 +2299,7 @@ impl App {
         let Some(ScmRow::Section { column, .. }) = self.scm_rows().get(flat).cloned() else {
             return;
         };
-        let Some(status) = self.scm.git_status.as_ref() else {
+        let Some(status) = self.scm.status().as_ref() else {
             return;
         };
         let has_unstaged = !status.unstaged.is_empty();
@@ -2687,7 +2349,7 @@ impl App {
         if self.write_busy() {
             return;
         }
-        let Some(status) = self.scm.git_status.as_ref() else {
+        let Some(status) = self.scm.status().as_ref() else {
             self.session.status = "Refresh Git status first".into();
             return;
         };
@@ -2717,7 +2379,7 @@ impl App {
                     };
                     result.map(|_| None)
                 });
-        self.scm.pending_transfer = None;
+        self.scm.cancel_transfer();
         self.session.status = if stage {
             "staging all changes..."
         } else {
@@ -2738,7 +2400,7 @@ impl App {
     }
 
     fn file_stage_flags(&self, abs: &Path) -> (bool, bool) {
-        let Some(snap) = &self.scm.git_status else {
+        let Some(snap) = self.scm.status() else {
             return (false, false);
         };
         let Ok(rel) = abs.strip_prefix(&snap.repo_root) else {
@@ -2782,6 +2444,27 @@ impl App {
                     return;
                 };
                 self.files.selected = index;
+                if matches!(
+                    action,
+                    ContextAction::CopyFiles | ContextAction::CutFiles | ContextAction::TrashFiles
+                ) {
+                    let marked = self.tools.marks.contains_file(&path);
+                    let marks = (!marked).then(|| std::mem::take(&mut self.tools.marks));
+                    match action {
+                        ContextAction::CopyFiles => self.capture_file_clipboard(true),
+                        ContextAction::CutFiles => self.capture_file_clipboard(false),
+                        ContextAction::TrashFiles => self.trash_selected_files(),
+                        _ => unreachable!(),
+                    }
+                    if let Some(marks) = marks {
+                        self.tools.marks = marks;
+                    }
+                    return;
+                }
+                if action == ContextAction::PasteFiles {
+                    self.paste_files(None);
+                    return;
+                }
                 let marks = std::mem::take(&mut self.tools.marks);
                 match action {
                     ContextAction::NewFile => self.run_command(tools::Command::NewFile),
@@ -2806,7 +2489,7 @@ impl App {
                 self.tools.marks = marks;
             }
             ContextTarget::FileRoot { path } => {
-                if path != self.files.tree_root {
+                if path != self.files.root() {
                     self.session.status = "Workspace changed; open the menu again".into();
                     return;
                 }
@@ -2814,6 +2497,7 @@ impl App {
                     ContextAction::NewFile | ContextAction::NewDirectory => {
                         self.new_item_in(&path, action == ContextAction::NewDirectory)
                     }
+                    ContextAction::PasteFiles => self.paste_files(Some(path)),
                     _ => {}
                 }
             }
@@ -2874,7 +2558,7 @@ impl App {
                 }
             }
             ContextTarget::StagingSection { column } => {
-                if self.scm.git_status.is_none() {
+                if self.scm.status().is_none() {
                     self.session.status = "Refresh Git status first".into();
                     return;
                 }
@@ -2961,35 +2645,8 @@ impl App {
     }
 
     fn ensure_hunk_visible(&mut self) {
-        let Some(idx) = self.preview_state.hunk_index else {
-            return;
-        };
-        let Some(diff) = self.preview_state.file_diff.take() else {
-            return;
-        };
-        let hunks = diff.hunks();
-        let Some(hunk) = hunks.get(idx).cloned() else {
-            self.preview_state.file_diff = Some(diff);
-            return;
-        };
-        // Diff body starts at line 0 (title chip is outside the scroll area).
-        // Map unified hunk index → split-row index (meta lines collapsed).
-        let rendered_start =
-            diff_render_hunk_start(&diff.lines, hunk.start, &mut self.preview_state.split_cache);
-        let total = if diff.lines.is_empty() {
-            1
-        } else {
-            self.preview_state.split_cache.ensure(&diff.lines).max(1)
-        };
-        self.preview_state.diff_row_count = total;
-        let viewport = self.session.layout.preview_inner.height as usize;
-        scroll_to_hunk(
-            &mut self.preview_state.preview_scroll,
-            viewport,
-            total,
-            rendered_start,
-        );
-        self.preview_state.file_diff = Some(diff);
+        self.preview_state
+            .ensure_hunk_visible(self.layout_state.geometry.preview_inner.height as usize);
     }
 
     fn move_hunk(&mut self, delta: isize) {

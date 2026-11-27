@@ -7,7 +7,7 @@ const BAR_WIDTH: u16 = 5;
 
 pub(super) fn draw_activity_bar(frame: &mut Frame<'_>, area: Rect, model: &mut App, p: Palette) {
     model.activity_hits.clear();
-    model.session.layout.activity = area;
+    model.layout_state.geometry.activity = area;
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -23,20 +23,24 @@ pub(super) fn draw_activity_bar(frame: &mut Frame<'_>, area: Rect, model: &mut A
             ActivityAction::Files,
             ActivityIcon::Files,
             1,
-            model.session.activity == ActivityTab::Files && model.session.sidebar_visible,
+            model.session.activity == ActivityTab::Files && model.layout_state.sidebar_visible(),
         ),
         (
             ActivityAction::Git,
             ActivityIcon::Git,
             3,
-            model.session.activity == ActivityTab::Git && model.session.sidebar_visible,
+            model.session.activity == ActivityTab::Git && model.layout_state.sidebar_visible(),
         ),
         (ActivityAction::Search, ActivityIcon::Search, 5, false),
         (
             ActivityAction::Terminal,
             ActivityIcon::Terminal,
             7,
-            model.terminal.as_ref().is_some_and(|t| t.visible),
+            model
+                .terminals
+                .active
+                .as_ref()
+                .is_some_and(|t| t.is_visible()),
         ),
     ];
     let settings_y = area.bottom().saturating_sub(2);
@@ -103,11 +107,11 @@ fn draw_button(
             .add_modifier(Modifier::BOLD),
     );
     match action {
-        ActivityAction::Files => model.session.layout.files_tab = rect,
-        ActivityAction::Git => model.session.layout.git_tab = rect,
-        ActivityAction::Search => model.session.layout.search_tab = rect,
-        ActivityAction::Terminal => model.session.layout.terminal_activity = rect,
-        ActivityAction::Settings => model.session.layout.settings_tab = rect,
+        ActivityAction::Files => model.layout_state.geometry.files_tab = rect,
+        ActivityAction::Git => model.layout_state.geometry.git_tab = rect,
+        ActivityAction::Search => model.layout_state.geometry.search_tab = rect,
+        ActivityAction::Terminal => model.layout_state.geometry.terminal_activity = rect,
+        ActivityAction::Settings => model.layout_state.geometry.settings_tab = rect,
         ActivityAction::Collapse => {}
     }
 }
@@ -138,7 +142,7 @@ pub(super) fn draw_sidebar_heading(
     );
     if area.width >= 5 {
         let toggle = Rect::new(area.right() - 3, area.y, 3, 1);
-        model.session.layout.sidebar_toggle = toggle;
+        model.layout_state.geometry.sidebar_toggle = toggle;
         model.activity_hits.draw_text(
             frame,
             toggle,
@@ -185,10 +189,10 @@ pub(super) fn draw_workspace_tooltip(frame: &mut Frame<'_>, model: &App, p: Pale
             .shortcut(Some(&shortcut))
             .placement(forge_ui::TooltipPlacement::Right)
             .draw(frame, anchor, bounds, style, border);
-    } else if model.session.layout.open_file_tab.width > 0
+    } else if model.layout_state.geometry.open_file_tab.width > 0
         && model
             .activity_hits
-            .is_hovered(model.session.layout.open_file_tab)
+            .is_hovered(model.layout_state.geometry.open_file_tab)
     {
         // The Preview header already owns the clickable rectangle. The
         // Activity hover tracker also remembers the global pointer position;
@@ -198,7 +202,7 @@ pub(super) fn draw_workspace_tooltip(frame: &mut Frame<'_>, model: &App, p: Pale
             .shortcut(Some(&shortcut))
             .draw(
                 frame,
-                model.session.layout.open_file_tab,
+                model.layout_state.geometry.open_file_tab,
                 bounds,
                 style,
                 border,
@@ -319,7 +323,7 @@ mod tooltip_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = create_workspace_at(ColorMode::Ansi16, dir.path().to_owned());
         paint(&mut app, 90);
-        app.session.layout.open_file_tab = Rect::new(71, 1, 14, 1);
+        app.layout_state.geometry.open_file_tab = Rect::new(71, 1, 14, 1);
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column: 74,

@@ -1,6 +1,106 @@
 use super::*;
 use ratatui::layout::Rect;
 
+/// Perturb layout and input ownership on an assembled workbench, rather than
+/// only asserting the state-only helpers in isolation.
+#[tokio::test]
+async fn layout_and_terminal_perturbation_preserves_file_git_and_search_state() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    let terminal_id = app.terminals.active.as_ref().expect("PTY").id;
+    app.open_tools(PanelKind::Files);
+    finish(&mut app).await;
+
+    let root = app.files.root().to_path_buf();
+    let selection = app.selected_entry().map(|e| e.path.clone());
+    let branch = app.scm.branch.clone();
+    let git_before = app.scm.status().as_ref().unwrap().entries.clone();
+    let query = app.tools.panel.as_ref().unwrap().input.value().to_owned();
+    let generation = app.tools.search_generation;
+    let row_count = app.tools.panel.as_ref().unwrap().rows.len();
+    let index = app.tools.file_index.as_ref().unwrap().clone();
+    let preview = app.preview_state.preview.as_ref().map(|p| p.path.clone());
+    let scroll = app.preview_state.presentation.preview_scroll;
+    let bytes = std::fs::read(dir.path().join("a.rs")).unwrap();
+
+    app.layout_state.geometry.window = Rect::new(0, 0, 120, 43);
+    app.layout_state.geometry.activity = Rect::new(0, 0, 5, 43);
+    app.layout_state.geometry.footer = Rect::new(0, 40, 120, 3);
+    app.layout_state.resize_sidebar_at(60);
+    app.layout_state.resize_terminal_at(20);
+    app.layout_state.set_sidebar_visible(false);
+    for (width, height) in [(60, 20), (160, 50)] {
+        let _ = app
+            .layout_state
+            .plan(width, height, app.session.focus, true, false, 5);
+    }
+    assert_eq!(
+        app.key_owner(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        input_router::KeyOwner::Tools
+    );
+    // F8 is owned by the open search modal, not the background terminal.
+    app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    assert_eq!(app.terminals.active.as_ref().unwrap().id, terminal_id);
+    assert!(app.terminals.active.as_ref().unwrap().is_visible());
+    assert_eq!(app.files.root(), root);
+    assert_eq!(app.selected_entry().map(|e| e.path.clone()), selection);
+    assert_eq!(app.scm.branch, branch);
+    assert_eq!(app.scm.status().as_ref().unwrap().entries, git_before);
+    assert_eq!(app.tools.panel.as_ref().unwrap().input.value(), query);
+    assert_eq!(app.tools.panel.as_ref().unwrap().rows.len(), row_count);
+    assert_eq!(app.tools.search_generation, generation);
+    assert!(Arc::ptr_eq(app.tools.file_index.as_ref().unwrap(), &index));
+    assert_eq!(
+        app.preview_state.preview.as_ref().map(|p| p.path.clone()),
+        preview
+    );
+    assert_eq!(app.preview_state.presentation.preview_scroll, scroll);
+    assert!(app.scm.pending_write.is_none());
+    assert!(app.files.pending_lists.is_empty());
+    assert_eq!(std::fs::read(dir.path().join("a.rs")).unwrap(), bytes);
+
+    app.close_tools();
+    app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
+    assert!(!app.terminals.active.as_ref().unwrap().is_visible());
+    assert_eq!(app.terminals.active.as_ref().unwrap().id, terminal_id);
+    assert_eq!(app.scm.status().as_ref().unwrap().entries, git_before);
+    assert_eq!(app.selected_entry().map(|e| e.path.clone()), selection);
+    assert_eq!(
+        app.preview_state.preview.as_ref().map(|p| p.path.clone()),
+        preview
+    );
+}
+
+#[tokio::test]
+async fn search_cache_invalidation_preserves_workspace_git_layout_and_preview() {
+    let (_dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.open_tools(PanelKind::Files);
+    finish(&mut app).await;
+    app.close_tools();
+    let root = app.files.root().to_path_buf();
+    let selected = app.selected_entry().map(|e| e.path.clone());
+    let branch = app.scm.branch.clone();
+    let status = app.scm.status().as_ref().unwrap().entries.clone();
+    let preview = app.preview_state.preview.as_ref().map(|p| p.path.clone());
+    app.preview_state.presentation.preview_scroll = 13;
+    app.layout_state.adjust_sidebar(-2);
+    let width = app.layout_state.sidebar_width();
+    app.invalidate_search_cache();
+    assert!(app.tools.file_index.is_none());
+    assert_eq!(app.files.root(), root);
+    assert_eq!(app.selected_entry().map(|e| e.path.clone()), selected);
+    assert_eq!(app.scm.branch, branch);
+    assert_eq!(app.scm.status().as_ref().unwrap().entries, status);
+    assert_eq!(
+        app.preview_state.preview.as_ref().map(|p| p.path.clone()),
+        preview
+    );
+    assert_eq!(app.preview_state.presentation.preview_scroll, 13);
+    assert_eq!(app.layout_state.sidebar_width(), width);
+}
+
 #[tokio::test]
 async fn transient_write_notice_expires_without_erasing_newer_context() {
     let (_dir, mut app) = fixture();
@@ -60,7 +160,7 @@ async fn current_branch_is_no_op_and_key_menu_has_file_local_actions_only() {
     app.close_tools();
 
     app.files.selected = 0;
-    app.session.layout.list_inner = Rect::new(0, 3, 42, 15);
+    app.layout_state.geometry.list_inner = Rect::new(0, 3, 42, 15);
     app.handle_key(KeyEvent::new(KeyCode::F(10), KeyModifiers::SHIFT));
     assert!(
         app.session.context_menu.is_some(),
@@ -156,11 +256,11 @@ async fn worktree_switch_restores_per_workspace_directory_navigation() {
         .position(|r| r.entry.path == selected)
         .unwrap();
     app.files.scroll = 2;
-    app.tools.filter.show_hidden = true;
+    app.workspace_filter.show_hidden = true;
 
     app.switch_workspace(other_root.clone());
     finish(&mut app).await;
-    assert_eq!(app.files.tree_root, other_root);
+    assert_eq!(app.files.root(), other_root);
     assert!(app.files.expanded.is_empty());
     assert_eq!(app.files.selected, 0);
     assert!(app.tools.marks.is_empty());
@@ -180,7 +280,7 @@ async fn worktree_switch_restores_per_workspace_directory_navigation() {
     finish(&mut app).await;
     assert_eq!(app.selected_entry().unwrap().path, selected);
     assert!(app.files.expanded.contains(&root.join("folder/nested")));
-    assert!(app.tools.filter.show_hidden);
+    assert!(app.workspace_filter.show_hidden);
     assert!(app.files.scroll <= app.files.selected);
     app.switch_workspace(other_root.clone());
     finish(&mut app).await;
@@ -291,7 +391,8 @@ fn fixture() -> (tempfile::TempDir, App) {
         std::fs::write(root.join(path), "changed\n").unwrap();
     }
     let mut app = create_workspace_at(ColorMode::Ansi16, root.to_owned());
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     (dir, app)
 }
 
@@ -304,6 +405,8 @@ async fn finish(app: &mut App) {
             app.poll_pending_preview();
             app.poll_pending_diff();
             app.poll_pending_write();
+            app.flush_workspace_changes();
+            app.try_reveal();
             if app.tools.pending_task.is_none()
                 && app.tools.pending_read.is_none()
                 && app.tools.pending_index.is_none()
@@ -622,8 +725,8 @@ async fn files_menu_creates_files_and_folders_in_clicked_directory_and_at_root()
         assert!(root.join("folder").join(name).exists());
         app.close_tools();
     }
-    app.session.layout.list = ratatui::layout::Rect::new(0, 2, 30, 20);
-    app.session.layout.list_inner = ratatui::layout::Rect::new(0, 3, 30, 19);
+    app.layout_state.geometry.list = ratatui::layout::Rect::new(0, 2, 30, 20);
+    app.layout_state.geometry.list_inner = ratatui::layout::Rect::new(0, 3, 30, 19);
     app.handle_mouse_content(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Right),
         column: 3,
@@ -801,6 +904,22 @@ async fn deletion_requires_confirmation_and_cancel_preserves_files() {
 }
 
 #[tokio::test]
+async fn saved_file_invalidates_search_index_without_watcher() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.open_tools(PanelKind::Files);
+    finish(&mut app).await;
+    assert!(app.tools.file_index.is_some());
+    app.close_tools();
+
+    let path = dir.path().join("a.rs");
+    std::fs::write(&path, "saved content").unwrap();
+    app.on_workspace_change(workspace_changes::WorkspaceChange::FileSaved { path });
+    assert!(app.tools.file_index.is_none());
+    finish(&mut app).await;
+}
+
+#[tokio::test]
 async fn filename_queries_reuse_index_and_refresh_on_filesystem_changes() {
     let (dir, mut app) = fixture();
     finish(&mut app).await;
@@ -908,10 +1027,115 @@ async fn filename_debounce_coalesces_rapid_input_without_stale_results() {
 }
 
 #[tokio::test]
+async fn git_scope_changes_do_not_modify_raw_file_tree_or_open_document() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.files.selected = app
+        .files
+        .visible
+        .iter()
+        .position(|row| row.entry.path == dir.path().join("a.rs"))
+        .unwrap();
+    app.request_preview_for_selection();
+    finish(&mut app).await;
+    let raw = app.files.raw_listings().clone();
+    let expanded = app.files.expanded.clone();
+    let document = app.preview_state.preview.clone().unwrap();
+    app.preview_state.presentation.preview_scroll = 12;
+    let root = dir.path().to_owned();
+    let snapshot = app.scm.status().clone().unwrap();
+    app.apply_status_result(root.clone(), Ok(Ok(None)));
+    assert_eq!(app.files.raw_listings(), &raw);
+    assert_eq!(app.files.expanded, expanded);
+    assert_eq!(app.preview_state.preview.as_ref(), Some(&document));
+    assert_eq!(app.preview_state.presentation.preview_scroll, 12);
+    app.workspace_filter.status = 1;
+    app.rebuild_visible_preserving_selection();
+    assert!(app.files.visible.is_empty());
+    app.apply_status_result(root.clone(), Ok(Ok(Some(snapshot))));
+    assert!(!app.files.visible.is_empty());
+    assert_eq!(app.files.raw_listings(), &raw);
+    assert_eq!(app.files.expanded, expanded);
+    assert_eq!(app.preview_state.preview.as_ref(), Some(&document));
+    assert_eq!(app.preview_state.presentation.preview_scroll, 12);
+    assert!(app.files.pending_lists.is_empty());
+}
+
+#[tokio::test]
+async fn sidebar_and_periodic_git_status_do_not_reset_unrelated_diff() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.enter_git_sidebar();
+    finish(&mut app).await;
+    let entry = app
+        .selected_scm_entry()
+        .cloned()
+        .expect("working diff selected");
+    assert!(app.preview_state.file_diff.is_some());
+    app.preview_state.presentation.preview_scroll = 3;
+    let before = app.scm.status().as_ref().unwrap().entries.clone();
+    for visible in [false, true, false, true] {
+        app.set_sidebar_visible(visible);
+        assert!(app.scm.pending_status.is_none());
+        assert_eq!(app.scm.status().as_ref().unwrap().entries, before);
+    }
+    app.session.focus = PaneFocus::Preview;
+    app.tick_git_status_at(Instant::now() + Duration::from_secs(16));
+    assert!(app.scm.pending_status.is_some());
+    finish(&mut app).await;
+    assert_eq!(app.preview_state.presentation.preview_scroll, 3);
+    assert_eq!(app.session.focus, PaneFocus::Preview);
+    assert_eq!(app.selected_scm_entry(), Some(&entry));
+    std::fs::write(dir.path().join("000-new.txt"), "new").unwrap();
+    app.tick_git_status_at(Instant::now() + Duration::from_secs(16));
+    finish(&mut app).await;
+    assert!(app
+        .scm
+        .status()
+        .as_ref()
+        .unwrap()
+        .entries
+        .contains_key("000-new.txt"));
+    assert_eq!(app.selected_scm_entry(), Some(&entry));
+    assert_eq!(
+        app.preview_state.file_diff.as_ref().unwrap().path,
+        entry.path
+    );
+    assert_eq!(app.preview_state.presentation.preview_scroll, 3);
+}
+
+#[tokio::test]
+async fn git_scope_changes_are_the_only_status_driven_search_invalidation() {
+    let (dir, mut app) = fixture();
+    finish(&mut app).await;
+    let root = dir.path().to_owned();
+    let snapshot = app.scm.status().clone().unwrap();
+    app.workspace_filter.status = 1;
+    app.rebuild_visible_preserving_selection();
+    app.open_tools(PanelKind::Files);
+    finish(&mut app).await;
+    assert!(!app.files.visible.is_empty());
+    let generation = app.tools.search_generation;
+    let index = app.tools.file_index.as_ref().unwrap().clone();
+    app.apply_status_result(root.join("previous-root"), Ok(Ok(None)));
+    app.apply_status_result(root.clone(), Err(JobError::Cancelled));
+    app.apply_status_result(root.clone(), Ok(Ok(Some(snapshot))));
+    assert_eq!(app.tools.search_generation, generation);
+    assert!(Arc::ptr_eq(app.tools.file_index.as_ref().unwrap(), &index));
+    assert!(!app.files.visible.is_empty());
+
+    app.apply_status_result(root, Ok(Ok(None)));
+    assert!(app.files.visible.is_empty());
+    finish(&mut app).await;
+    assert!(app.tools.panel.as_ref().unwrap().rows.is_empty());
+    assert!(!Arc::ptr_eq(app.tools.file_index.as_ref().unwrap(), &index));
+}
+
+#[tokio::test]
 async fn status_filtered_search_refreshes_after_the_new_git_snapshot_arrives() {
     let (dir, mut app) = fixture();
     finish(&mut app).await;
-    app.tools.filter.status = 2;
+    app.workspace_filter.status = 2;
     app.open_tools(PanelKind::Files);
     finish(&mut app).await;
     assert!(app.tools.panel.as_ref().unwrap().rows.is_empty());
@@ -927,7 +1151,7 @@ async fn status_filtered_search_refreshes_after_the_new_git_snapshot_arrives() {
 async fn content_debounce_retains_rows_then_latest_query_wins_and_regex_errors_show() {
     let (_dir, mut app) = fixture();
     finish(&mut app).await;
-    app.tools.filter.excluded = "custom".into();
+    app.workspace_filter.excluded = "custom".into();
     let options = app.search_options(true, false);
     assert!(options.excluded.contains("node_modules"));
     assert!(options.excluded.contains("custom"));
@@ -991,12 +1215,12 @@ async fn incremental_content_hits_show_searching_before_completion_and_modes_cle
     app.tools.streamed = false;
     app.tools.panel.as_mut().unwrap().rows.push(ToolRow {
         label: "previous query".into(),
-        value: RowValue::File(app.files.tree_root.join("old"), 1),
+        value: RowValue::File(app.files.root().join("old"), 1),
     });
     tx.send((
         generation,
         forge_fs::workspace::SearchHit {
-            path: app.files.tree_root.join("new.rs"),
+            path: app.files.root().join("new.rs"),
             line: 17,
             text: "current query".into(),
             score: 0,
@@ -1019,7 +1243,7 @@ async fn incremental_content_hits_show_searching_before_completion_and_modes_cle
 #[tokio::test]
 async fn sorted_content_results_default_to_first_unless_user_selected_a_hit() {
     async fn settle_with_sorted_results(app: &mut App) {
-        let root = app.files.tree_root.clone();
+        let root = app.files.root().to_path_buf();
         let generation = app.tools.search_generation;
         let hits = vec![
             search_row(
@@ -1062,7 +1286,7 @@ async fn sorted_content_results_default_to_first_unless_user_selected_a_hit() {
     finish(&mut app).await;
     app.open_tools(PanelKind::Content);
     app.cancel_tool_read();
-    let root = app.files.tree_root.clone();
+    let root = app.files.root().to_path_buf();
     // The first parallel worker returned outside.txt. The final sorted
     // response begins with a.rs: the automatic selection must move to it.
     {
@@ -1123,7 +1347,7 @@ async fn stale_search_generations_cannot_publish_rows_or_status() {
     tx.send((
         old_generation,
         forge_fs::workspace::SearchHit {
-            path: app.files.tree_root.join("stale.rs"),
+            path: app.files.root().join("stale.rs"),
             line: 12,
             text: "stale".into(),
             score: 0,
@@ -1166,7 +1390,7 @@ async fn search_jumps_to_nested_result_line_and_stale_results_are_cancelled() {
     app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     finish(&mut app).await;
     assert!(app.current_path().unwrap().ends_with("folder/nested/b.rs"));
-    assert_eq!(app.preview_state.preview_scroll, 2);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 2);
     assert_eq!(app.session.focus, PaneFocus::Preview);
     app.open_tools(PanelKind::Files);
     app.close_tools();
@@ -1196,7 +1420,7 @@ async fn filters_preserve_parent_paths_and_hide_build_and_git_metadata() {
     assert_eq!(app.files.visible.len(), 1);
     assert_eq!(app.files.visible[0].entry.name, "fresh.rs");
     app.run_command(Command::All);
-    app.tools.filter.extension = "rs".into();
+    app.workspace_filter.extension = "rs".into();
     app.rebuild_visible();
     assert!(app
         .files
@@ -1308,7 +1532,8 @@ async fn filters_keep_selected_path_expansion_and_focus() {
     let mut app = create_workspace_at(ColorMode::Ansi16, root.to_owned());
     app.files.pending_lists.clear();
     app.scm.pending_status = None;
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     app.reveal_file(root.join("crates/forge-app/src/view.rs"), 1);
     finish(&mut app).await;
     assert_eq!(
@@ -1355,7 +1580,7 @@ async fn editor_resume_restores_file_and_git_diff_locations() {
         finish(&mut app).await;
         if git_mode {
             app.enter_git_sidebar();
-            app.tools.resume_diff = Some(DiffResume {
+            app.navigation.request_diff_resume(DiffResume {
                 path: "a.rs".into(),
                 side: DiffSide::Unstaged,
                 scroll: 1,
@@ -1369,14 +1594,14 @@ async fn editor_resume_restores_file_and_git_diff_locations() {
             finish(&mut app).await;
         }
         app.session.focus = PaneFocus::Preview;
-        app.preview_state.preview_scroll = 1;
+        app.preview_state.presentation.preview_scroll = 1;
         app.open_editor(app.current_path(), 2);
         let captured = EditorResume::capture(&mut app).unwrap();
         let mut resumed = captured.restore(ColorMode::Ansi16, Ok(()));
         finish(&mut resumed).await;
         assert_eq!(resumed.session.focus, PaneFocus::Preview);
         assert_eq!(
-            resumed.preview_state.preview_scroll, 1,
+            resumed.preview_state.presentation.preview_scroll, 1,
             "git_mode={git_mode}"
         );
         if git_mode {
@@ -1478,7 +1703,7 @@ async fn preview_focus_does_not_change_git_sidebar_selection() {
         .position(|r| matches!(r, ScmRow::Change { .. }))
         .expect("git change row available");
     let selected = app.scm.scm_selected;
-    let expanded = app.scm.scm_expanded_unstaged.clone();
+    let expanded = app.scm.expanded(StagingColumn::Unstaged).clone();
     app.session.focus = PaneFocus::Preview;
     for key in [
         KeyCode::Enter,
@@ -1489,7 +1714,7 @@ async fn preview_focus_does_not_change_git_sidebar_selection() {
     ] {
         app.handle_key(KeyEvent::new(key, KeyModifiers::NONE));
         assert_eq!(app.scm.scm_selected, selected);
-        assert_eq!(app.scm.scm_expanded_unstaged, expanded);
+        assert_eq!(app.scm.expanded(StagingColumn::Unstaged), &expanded);
         assert!(app.tools.marks.is_empty(), "{key:?} marked Git list");
         assert_eq!(app.session.focus, PaneFocus::Preview);
     }
@@ -1519,19 +1744,19 @@ async fn home_end_follow_preview_focus_without_moving_file_selection() {
     });
     app.preview_state.preview_mode = PreviewMode::File;
     app.preview_state.preview_loading = false;
-    app.session.layout.preview_inner.height = 5;
+    app.layout_state.geometry.preview_inner.height = 5;
     let selected = app.files.selected;
     let expanded = app.files.expanded.clone();
     app.session.focus = PaneFocus::Preview;
-    app.preview_state.preview_scroll = 12;
+    app.preview_state.presentation.preview_scroll = 12;
 
     app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.session.focus, PaneFocus::Preview);
-    assert_eq!(app.preview_state.preview_scroll, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     assert_eq!(app.files.selected, selected);
     app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(app.session.focus, PaneFocus::Preview);
-    assert_eq!(app.preview_state.preview_scroll, 25);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 25);
     assert_eq!(app.files.selected, selected);
     assert_eq!(app.files.expanded, expanded);
 
@@ -1556,22 +1781,22 @@ async fn home_end_follow_git_diff_focus_without_moving_sidebar_selection() {
     app.request_diff_for_scm_selection();
     finish(&mut app).await;
     assert!(app.preview_state.file_diff.is_some());
-    app.preview_state.diff_row_count = 35;
-    app.session.layout.preview_inner.height = 8;
+    app.preview_state.set_test_diff_row_count(35);
+    app.layout_state.geometry.preview_inner.height = 8;
     app.session.focus = PaneFocus::Preview;
-    app.preview_state.preview_scroll = 15;
+    app.preview_state.presentation.preview_scroll = 15;
     let selected = app.scm.scm_selected;
-    let expanded = app.scm.scm_expanded_unstaged.clone();
+    let expanded = app.scm.expanded(StagingColumn::Unstaged).clone();
 
     app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
     assert_eq!(app.session.focus, PaneFocus::Preview);
-    assert_eq!(app.preview_state.preview_scroll, 0);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 0);
     assert_eq!(app.scm.scm_selected, selected);
     app.handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
     assert_eq!(app.session.focus, PaneFocus::Preview);
-    assert_eq!(app.preview_state.preview_scroll, 27);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 27);
     assert_eq!(app.scm.scm_selected, selected);
-    assert_eq!(app.scm.scm_expanded_unstaged, expanded);
+    assert_eq!(app.scm.expanded(StagingColumn::Unstaged), &expanded);
 
     app.handle_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     app.handle_key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
@@ -1585,9 +1810,9 @@ async fn home_end_follow_git_diff_focus_without_moving_sidebar_selection() {
 async fn mouse_wheel_scrolls_hovered_files_pane_without_changing_keyboard_focus() {
     let (_dir, mut app) = fixture();
     finish(&mut app).await;
-    app.session.layout.list = Rect::new(0, 0, 20, 20);
-    app.session.layout.preview = Rect::new(21, 0, 60, 20);
-    app.session.layout.preview_inner = Rect::new(21, 0, 60, 5);
+    app.layout_state.geometry.list = Rect::new(0, 0, 20, 20);
+    app.layout_state.geometry.preview = Rect::new(21, 0, 60, 20);
+    app.layout_state.geometry.preview_inner = Rect::new(21, 0, 60, 5);
     let wheel = |kind, column| MouseEvent {
         kind,
         column,
@@ -1596,7 +1821,7 @@ async fn mouse_wheel_scrolls_hovered_files_pane_without_changing_keyboard_focus(
     };
     let selected = app.files.selected;
     app.preview_state.preview = Some(Preview {
-        path: app.files.tree_root.join("a.rs"),
+        path: app.files.root().join("a.rs"),
         content: PreviewContent::Text {
             lines: (0..35).map(|i| format!("line {i}")).collect(),
             truncated: false,
@@ -1608,7 +1833,7 @@ async fn mouse_wheel_scrolls_hovered_files_pane_without_changing_keyboard_focus(
 
     // Hovered preview scrolls, but keyboard keys must still target Files.
     app.handle_mouse_content(wheel(MouseEventKind::ScrollDown, 30));
-    assert_eq!(app.preview_state.preview_scroll, 3);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 3);
     assert_eq!(app.files.selected, selected);
     assert_eq!(app.session.focus, PaneFocus::List);
     app.handle_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
@@ -1642,9 +1867,9 @@ async fn mouse_wheel_scrolls_hovered_git_pane_without_changing_keyboard_focus() 
     finish(&mut app).await;
     app.enter_git_sidebar();
     finish(&mut app).await;
-    app.session.layout.list = Rect::new(0, 0, 20, 20);
-    app.session.layout.preview = Rect::new(21, 0, 60, 20);
-    app.session.layout.preview_inner = Rect::new(21, 0, 60, 5);
+    app.layout_state.geometry.list = Rect::new(0, 0, 20, 20);
+    app.layout_state.geometry.preview = Rect::new(21, 0, 60, 20);
+    app.layout_state.geometry.preview_inner = Rect::new(21, 0, 60, 5);
     let wheel = |kind, column| MouseEvent {
         kind,
         column,
@@ -1652,13 +1877,13 @@ async fn mouse_wheel_scrolls_hovered_git_pane_without_changing_keyboard_focus() 
         modifiers: KeyModifiers::NONE,
     };
     assert!(app.scm_rows().len() > 1);
-    app.preview_state.diff_row_count = 40;
+    app.preview_state.set_test_diff_row_count(40);
     app.session.focus = PaneFocus::List;
     let selected = app.scm.scm_selected;
 
     // Wheel over Diff must not turn a subsequent Git shortcut into a hunk action.
     app.handle_mouse_content(wheel(MouseEventKind::ScrollDown, 30));
-    assert_eq!(app.preview_state.preview_scroll, 3);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 3);
     assert_eq!(app.scm.scm_selected, selected);
     assert_eq!(app.session.focus, PaneFocus::List);
     assert!(app.git_sync_shortcut_enabled());
@@ -1824,15 +2049,15 @@ async fn directory_navigation_preserves_file_preview_and_pending_reads() {
     );
     assert!(!app.preview_state.preview_loading);
     let previous = app.preview_state.preview.clone();
-    app.preview_state.preview_scroll = 3;
+    app.preview_state.presentation.preview_scroll = 3;
     app.toggle_expand_at(app.files.selected);
     finish(&mut app).await;
     assert_eq!(app.preview_state.preview, previous);
-    assert_eq!(app.preview_state.preview_scroll, 3);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 3);
     app.toggle_expand_at(app.files.selected);
     finish(&mut app).await;
     assert_eq!(app.preview_state.preview, previous);
-    assert_eq!(app.preview_state.preview_scroll, 3);
+    assert_eq!(app.preview_state.presentation.preview_scroll, 3);
     // Another file still replaces the viewer normally.
     select(&mut app, &dir.path().join("outside.txt"));
     finish(&mut app).await;
@@ -1869,12 +2094,12 @@ async fn git_folder_navigation_keeps_diff_and_scroll_including_pending_read() {
         .expect("pending diff retained")
         .path
         .clone();
-    app.preview_state.preview_scroll = 3;
+    app.preview_state.presentation.preview_scroll = 3;
     for _ in 0..2 {
         app.toggle_scm_expand_at(app.scm.scm_selected);
         app.request_diff_for_scm_selection();
         assert_eq!(app.preview_state.file_diff.as_ref().unwrap().path, path);
-        assert_eq!(app.preview_state.preview_scroll, 3);
+        assert_eq!(app.preview_state.presentation.preview_scroll, 3);
     }
     // Folder selection must not authorize a hunk operation on the retained file.
     assert!(app
@@ -1888,15 +2113,15 @@ async fn open_changed_file_switches_from_git_diff_to_files_view() {
     finish(&mut app).await;
     app.enter_git_sidebar();
     let target = "folder/nested/b.rs";
-    expand_ancestors_for_path(&mut app.scm.scm_expanded_unstaged, target);
+    expand_ancestors_for_path(app.scm.expanded_mut(StagingColumn::Unstaged), target);
     let idx = app
         .scm_rows()
         .iter()
         .position(|row| {
             scm_entry(
                 row,
-                &app.scm.git_status.as_ref().unwrap().unstaged,
-                &app.scm.git_status.as_ref().unwrap().staged,
+                &app.scm.status().as_ref().unwrap().unstaged,
+                &app.scm.status().as_ref().unwrap().staged,
             )
             .is_some_and(|e| e.path == target && e.side == DiffSide::Unstaged)
         })
@@ -1943,16 +2168,15 @@ async fn open_changed_file_switches_from_git_diff_to_files_view() {
         .position(|row| {
             scm_entry(
                 row,
-                &app.scm.git_status.as_ref().unwrap().unstaged,
-                &app.scm.git_status.as_ref().unwrap().staged,
+                &app.scm.status().as_ref().unwrap().unstaged,
+                &app.scm.status().as_ref().unwrap().staged,
             )
             .is_some_and(|entry| entry.path == target && entry.side == DiffSide::Unstaged)
         })
         .unwrap();
     app.scm.scm_selected = reselected;
     app.open_selected_worktree_file();
-    assert!(app.tools.reveal.is_none());
-    assert!(app.tools.return_focus.is_none());
+    assert!(!app.navigation.has_pending());
     assert_eq!(app.session.focus, PaneFocus::List);
 
     // A deleted tracked file must not be recreated or navigated to.
@@ -1971,26 +2195,27 @@ async fn open_file_reveals_cold_nested_directory_through_filters_and_keeps_tree_
     finish(&mut app).await;
 
     // Only the root is cached; children must be asynchronously listed.
-    app.files.children.retain(|path, _| path == root);
+    app.files.test_listings_mut().retain(|path, _| path == root);
     app.files.expanded.clear();
     app.rebuild_visible();
-    app.files.external_anchor = Some((root.join("outside.txt"), 50));
+    app.files
+        .restore_workspace_anchor(Some((root.join("outside.txt"), 50)));
     app.files.scroll = 25;
     // This user filter normally hides the changed .rs file.
-    app.tools.filter.extension = "txt".into();
-    app.session.layout.list_inner = Rect::new(0, 3, 29, 9);
+    app.workspace_filter.extension = "txt".into();
+    app.layout_state.geometry.list_inner = Rect::new(0, 3, 29, 9);
 
     app.enter_git_sidebar();
     let target = "folder/nested/b.rs";
-    expand_ancestors_for_path(&mut app.scm.scm_expanded_unstaged, target);
+    expand_ancestors_for_path(app.scm.expanded_mut(StagingColumn::Unstaged), target);
     let idx = app
         .scm_rows()
         .iter()
         .position(|row| {
             scm_entry(
                 row,
-                &app.scm.git_status.as_ref().unwrap().unstaged,
-                &app.scm.git_status.as_ref().unwrap().staged,
+                &app.scm.status().as_ref().unwrap().unstaged,
+                &app.scm.status().as_ref().unwrap().staged,
             )
             .is_some_and(|entry| entry.path == target && entry.side == DiffSide::Unstaged)
         })
@@ -2013,9 +2238,9 @@ async fn open_file_reveals_cold_nested_directory_through_filters_and_keeps_tree_
     assert_eq!(app.preview_state.preview.as_ref().unwrap().path, expected);
     assert_eq!(app.session.activity, ActivityTab::Files);
     assert_eq!(app.session.focus, PaneFocus::List);
-    assert_eq!(app.tools.filter.extension, "txt");
-    assert_eq!(app.files.revealed_path.as_deref(), Some(expected.as_path()));
-    assert!(app.files.external_anchor.is_none());
+    assert_eq!(app.workspace_filter.extension, "txt");
+    assert_eq!(app.files.revealed_path(), Some(expected.as_path()));
+    assert!(app.files.refresh_anchor_path().is_none());
 }
 
 #[tokio::test]
@@ -2026,17 +2251,17 @@ async fn open_file_from_narrowed_worktree_re_roots_to_reach_external_repository_
 
     app.switch_workspace(root.join("folder"));
     finish(&mut app).await;
-    assert_eq!(app.files.tree_root, root.join("folder"));
+    assert_eq!(app.files.root(), root.join("folder"));
     app.enter_git_sidebar();
-    expand_ancestors_for_path(&mut app.scm.scm_expanded_unstaged, "a.rs");
+    expand_ancestors_for_path(app.scm.expanded_mut(StagingColumn::Unstaged), "a.rs");
     let idx = app
         .scm_rows()
         .iter()
         .position(|row| {
             scm_entry(
                 row,
-                &app.scm.git_status.as_ref().unwrap().unstaged,
-                &app.scm.git_status.as_ref().unwrap().staged,
+                &app.scm.status().as_ref().unwrap().unstaged,
+                &app.scm.status().as_ref().unwrap().staged,
             )
             .is_some_and(|entry| entry.path == "a.rs" && entry.side == DiffSide::Unstaged)
         })
@@ -2044,7 +2269,7 @@ async fn open_file_from_narrowed_worktree_re_roots_to_reach_external_repository_
     app.scm.scm_selected = idx;
     app.open_selected_worktree_file();
     finish(&mut app).await;
-    assert_eq!(app.files.tree_root, root);
+    assert_eq!(app.files.root(), root);
     assert_eq!(app.selected_entry().unwrap().path, root.join("a.rs"));
     assert_eq!(
         app.preview_state.preview.as_ref().unwrap().path,
@@ -2065,30 +2290,30 @@ async fn stale_git_status_from_previous_folder_in_same_repo_is_ignored() {
     app.switch_workspace(new_root.clone());
     // Even though the repository root contains the new workspace, its
     // previous root-specific snapshot must not overwrite the new view.
-    assert!(app.scm.git_status.is_none());
+    assert!(app.scm.status().is_none());
     app.apply_status_result(old_root.clone(), Ok(Ok(Some(old_snapshot))));
     assert!(
-        app.scm.git_status.is_none(),
+        app.scm.status().is_none(),
         "old status leaked across workspace roots"
     );
     assert!(app.scm.branch.is_empty());
 
     // The old no-repository/error result must also be ignored.
     app.apply_status_result(old_root.clone(), Ok(Ok(None)));
-    assert!(app.scm.git_status.is_none());
+    assert!(app.scm.status().is_none());
 
     finish(&mut app).await;
     let new_snapshot = app
         .scm
-        .git_status
+        .status()
         .clone()
         .expect("new workspace never loaded status");
     let new_branch = app.scm.branch.clone();
-    assert_eq!(app.files.tree_root, new_root);
+    assert_eq!(app.files.root(), new_root);
     // Late responses must not reset a successfully loaded new snapshot.
     app.apply_status_result(old_root.clone(), Ok(Ok(None)));
     assert_eq!(
-        app.scm.git_status.as_ref().unwrap().repo_root,
+        app.scm.status().as_ref().unwrap().repo_root,
         new_snapshot.repo_root
     );
     assert_eq!(app.scm.branch, new_branch);
@@ -2097,7 +2322,7 @@ async fn stale_git_status_from_previous_folder_in_same_repo_is_ignored() {
         Ok(Err(GitReadError::Status("outdated worker error".into()))),
     );
     assert_eq!(
-        app.scm.git_status.as_ref().unwrap().repo_root,
+        app.scm.status().as_ref().unwrap().repo_root,
         new_snapshot.repo_root
     );
     assert_eq!(app.scm.branch, new_branch);
@@ -2137,7 +2362,7 @@ async fn directory_listing_deduplicates_pending_paths_and_refresh_replaces_gener
     assert_eq!(app.files.pending_lists.len(), 1);
     assert_ne!(app.files.pending_lists[0].id, second_id);
     finish(&mut app).await;
-    assert!(app.files.children.contains_key(&root));
+    assert!(app.files.has_listing(&root));
 }
 
 #[tokio::test]
@@ -2148,7 +2373,8 @@ async fn discard_directory_only_affects_tracked_unstaged_files_under_clicked_sco
     git(root, &["add", "--", "folder/nested/b.rs"]);
     std::fs::write(root.join("folder/nested/b.rs"), "second worktree edit\n").unwrap();
     std::fs::write(root.join("folder/nested/keep-untracked.tmp"), "KEEP\n").unwrap();
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
 
     app.enter_git_sidebar();
     let idx = app
@@ -2265,8 +2491,8 @@ async fn compact_git_folder_click_expands_entire_single_child_chain_once() {
         })
         .unwrap();
     // This is a mouse click, not a second click on an already selected row.
-    app.session.layout.list = Rect::new(0, 2, 40, 20);
-    app.session.layout.list_inner = Rect::new(0, 2, 40, 20);
+    app.layout_state.geometry.list = Rect::new(0, 2, 40, 20);
+    app.layout_state.geometry.list_inner = Rect::new(0, 2, 40, 20);
     app.scm.scroll_scm = 0;
     app.scm.sticky_headers.clear();
     app.scm.scm_selected = 0;
@@ -2277,8 +2503,11 @@ async fn compact_git_folder_click_expands_entire_single_child_chain_once() {
         modifiers: KeyModifiers::NONE,
     });
     let rows = app.scm_rows();
-    assert!(app.scm.scm_expanded_unstaged.contains("folder"));
-    assert!(app.scm.scm_expanded_unstaged.contains("folder/nested"));
+    assert!(app.scm.expanded(StagingColumn::Unstaged).contains("folder"));
+    assert!(app
+        .scm
+        .expanded(StagingColumn::Unstaged)
+        .contains("folder/nested"));
     let compressed = rows
         .iter()
         .position(|row| {
@@ -2288,7 +2517,7 @@ async fn compact_git_folder_click_expands_entire_single_child_chain_once() {
         .unwrap();
     assert_eq!(app.scm.scm_selected, compressed);
     assert!(rows.iter().any(
-        |row| app.scm.git_status.as_ref().is_some_and(|status| scm_entry(
+        |row| app.scm.status().as_ref().is_some_and(|status| scm_entry(
             row,
             &status.unstaged,
             &status.staged
@@ -2298,7 +2527,10 @@ async fn compact_git_folder_click_expands_entire_single_child_chain_once() {
     // The next click collapses the one visible compact row, not another
     // hidden segment.
     app.toggle_scm_expand_at(compressed);
-    assert!(!app.scm.scm_expanded_unstaged.contains("folder/nested"));
+    assert!(!app
+        .scm
+        .expanded(StagingColumn::Unstaged)
+        .contains("folder/nested"));
     assert!(!app.scm_rows().iter().any(|row| matches!(
         row,
         ScmRow::Change {
@@ -2307,8 +2539,8 @@ async fn compact_git_folder_click_expands_entire_single_child_chain_once() {
         }
     ) && scm_entry(
         row,
-        &app.scm.git_status.as_ref().unwrap().unstaged,
-        &app.scm.git_status.as_ref().unwrap().staged
+        &app.scm.status().as_ref().unwrap().unstaged,
+        &app.scm.status().as_ref().unwrap().staged
     )
     .is_some_and(|entry| entry.path == "folder/nested/b.rs")));
 }
@@ -2337,7 +2569,8 @@ async fn compact_staged_folder_expands_to_file_in_one_action() {
     let (dir, mut app) = fixture();
     finish(&mut app).await;
     git(dir.path(), &["add", "--", "folder/nested/b.rs"]);
-    app.scm.git_status = Some(app.services.git.status(dir.path()).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(dir.path()).unwrap()));
     app.enter_git_sidebar();
     let first = app
         .scm_rows()
@@ -2349,7 +2582,10 @@ async fn compact_staged_folder_expands_to_file_in_one_action() {
         })
         .unwrap();
     app.toggle_scm_expand_at(first);
-    assert!(app.scm.scm_expanded_staged.contains("folder/nested"));
+    assert!(app
+        .scm
+        .expanded(StagingColumn::Staged)
+        .contains("folder/nested"));
     assert!(app.scm_rows().iter().any(|row| {
         let (unstaged, staged) = app.scm_slices();
         scm_entry(row, unstaged, staged).is_some_and(|entry| {
@@ -2374,8 +2610,11 @@ async fn compact_folders_disabled_keeps_one_level_per_action() {
         })
         .unwrap();
     app.toggle_scm_expand_at(first);
-    assert!(app.scm.scm_expanded_unstaged.contains("folder"));
-    assert!(!app.scm.scm_expanded_unstaged.contains("folder/nested"));
+    assert!(app.scm.expanded(StagingColumn::Unstaged).contains("folder"));
+    assert!(!app
+        .scm
+        .expanded(StagingColumn::Unstaged)
+        .contains("folder/nested"));
 }
 
 #[tokio::test]
@@ -2392,12 +2631,12 @@ async fn compact_files_folder_one_click_loads_uncached_chain_async() {
         .iter()
         .position(|row| row.entry.path == root.join("forge-config"))
         .unwrap();
-    assert!(!app.files.children.contains_key(&root.join("forge-config")));
+    assert!(!app.files.has_listing(&root.join("forge-config")));
     app.toggle_expand_at(first);
     finish(&mut app).await;
     assert!(app.files.expanded.contains(&root.join("forge-config")));
     assert!(app.files.expanded.contains(&root.join("forge-config/src")));
-    assert!(app.files.compact_expand_pending.is_none());
+    assert!(!app.files.compact_expansion_pending());
     let rows = &app.files.visible;
     let merged = rows
         .iter()
@@ -2430,14 +2669,14 @@ async fn git_double_click_opens_worktree_file_but_single_click_keeps_diff() {
         .position(|row| {
             scm_entry(
                 row,
-                &app.scm.git_status.as_ref().unwrap().unstaged,
-                &app.scm.git_status.as_ref().unwrap().staged,
+                &app.scm.status().as_ref().unwrap().unstaged,
+                &app.scm.status().as_ref().unwrap().staged,
             )
             .is_some_and(|e| e.path == "a.rs")
         })
         .unwrap();
-    app.session.layout.list = Rect::new(0, 2, 40, 20);
-    app.session.layout.list_inner = Rect::new(0, 2, 40, 20);
+    app.layout_state.geometry.list = Rect::new(0, 2, 40, 20);
+    app.layout_state.geometry.list_inner = Rect::new(0, 2, 40, 20);
     app.scm.scroll_scm = 0;
     app.scm.sticky_headers.clear();
     let click = MouseEvent {
@@ -2492,9 +2731,9 @@ async fn mouse_wheel_scrolls_files_without_changing_selection_or_preview() {
     app.files.selected = 0;
     app.files.scroll = 0;
     app.session.focus = PaneFocus::List;
-    app.session.layout.list = Rect::new(0, 2, 32, 9);
-    app.session.layout.list_inner = Rect::new(0, 2, 32, 9);
-    app.session.layout.preview = Rect::new(34, 2, 45, 9);
+    app.layout_state.geometry.list = Rect::new(0, 2, 32, 9);
+    app.layout_state.geometry.list_inner = Rect::new(0, 2, 32, 9);
+    app.layout_state.geometry.preview = Rect::new(34, 2, 45, 9);
     let preview_before = app.preview_state.preview.as_ref().map(|p| p.path.clone());
     for _ in 0..4 {
         app.handle_mouse_content(MouseEvent {
@@ -2535,9 +2774,9 @@ async fn mouse_wheel_scrolls_git_tree_without_changing_selected_diff() {
     finish(&mut app).await;
     app.enter_git_sidebar();
     assert!(app.scm_rows().len() > 4);
-    app.session.layout.list = Rect::new(0, 2, 40, 8);
-    app.session.layout.list_inner = Rect::new(0, 2, 40, 8);
-    app.session.layout.preview = Rect::new(42, 2, 55, 8);
+    app.layout_state.geometry.list = Rect::new(0, 2, 40, 8);
+    app.layout_state.geometry.list_inner = Rect::new(0, 2, 40, 8);
+    app.layout_state.geometry.preview = Rect::new(42, 2, 55, 8);
     let selected = app.scm.scm_selected;
     let pending = app.preview_state.pending_diff.as_ref().map(|p| p.id);
     app.handle_mouse_content(MouseEvent {
@@ -2564,7 +2803,7 @@ async fn tool_list_navigation_separates_selection_detail_and_mouse_scroll() {
     panel.rows = (0..50)
         .map(|i| ToolRow {
             label: format!("file_{i:02}.rs"),
-            value: RowValue::File(app.files.tree_root.join(format!("file_{i:02}.rs")), 1),
+            value: RowValue::File(app.files.root().join(format!("file_{i:02}.rs")), 1),
         })
         .collect();
     panel.list_area = Rect::new(0, 3, 35, 8);
@@ -2701,12 +2940,12 @@ async fn search_drafts_remain_per_worktree_and_parent_command_back_is_stable() {
     app.close_tools();
 
     let other = tempfile::tempdir().unwrap();
-    app.files.tree_root = other.path().to_path_buf();
+    app.switch_workspace(other.path().to_path_buf());
     app.open_tools(PanelKind::Content);
     assert_eq!(app.tools.panel.as_ref().unwrap().input.value(), "");
     assert!(!app.tools.panel.as_ref().unwrap().regex);
     app.close_tools();
-    app.files.tree_root = dir.path().to_path_buf();
+    app.switch_workspace(dir.path().to_path_buf());
     app.open_tools(PanelKind::Content);
     assert_eq!(app.tools.panel.as_ref().unwrap().input.value(), "needle");
     assert!(app.tools.panel.as_ref().unwrap().regex);
@@ -2783,7 +3022,8 @@ async fn scm_section_stage_all_then_unstage_all_preserves_worktree() {
     let root = dir.path();
     app.session.activity = ActivityTab::Git;
     std::fs::write(root.join("untracked-file"), "new\n").unwrap();
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     let section = app
         .scm_rows()
         .iter()
@@ -2815,7 +3055,8 @@ async fn scm_section_stage_all_then_unstage_all_preserves_worktree() {
         .lines()
         .all(|line| !line.starts_with("??")));
 
-    app.scm.git_status = Some(app.services.git.status(root).unwrap());
+    app.scm
+        .set_status(Some(app.services.git.status(root).unwrap()));
     let staged = app
         .scm_rows()
         .iter()
@@ -2857,8 +3098,8 @@ async fn scm_section_stage_all_then_unstage_all_preserves_worktree() {
 async fn scm_section_right_click_and_keyboard_open_same_menu() {
     let (_dir, mut app) = fixture();
     app.session.activity = ActivityTab::Git;
-    app.session.layout.list = Rect::new(0, 0, 45, 25);
-    app.session.layout.list_inner = Rect::new(0, 0, 45, 25);
+    app.layout_state.geometry.list = Rect::new(0, 0, 45, 25);
+    app.layout_state.geometry.list_inner = Rect::new(0, 0, 45, 25);
     app.scm.scroll_scm = 0;
     app.handle_mouse_content(MouseEvent {
         kind: MouseEventKind::Down(MouseButton::Right),
@@ -2912,9 +3153,9 @@ async fn workspace_switcher_opens_non_git_directory_and_restores_recent_roots() 
         tui_input::Input::new(plain_root.to_string_lossy().to_string());
     app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     finish(&mut app).await;
-    assert_eq!(app.files.tree_root, plain_root);
+    assert_eq!(app.files.root(), plain_root);
     assert!(
-        app.scm.git_status.is_none(),
+        app.scm.status().is_none(),
         "plain workspace must not inherit Git"
     );
     assert!(app
@@ -2937,8 +3178,8 @@ async fn workspace_switcher_opens_non_git_directory_and_restores_recent_roots() 
         .clone();
     app.activate_tool_row(PanelKind::Workspaces, recent);
     finish(&mut app).await;
-    assert_eq!(app.files.tree_root, original);
-    assert!(app.scm.git_status.is_some());
+    assert_eq!(app.files.root(), original);
+    assert!(app.scm.status().is_some());
     assert_eq!(app.config.recent_workspaces.first(), Some(&original));
     assert_eq!(app.config.recent_workspaces.get(1), Some(&plain_root));
 }
@@ -2952,7 +3193,7 @@ async fn workspace_prompt_rejects_missing_directory_without_switching() {
     app.tools.panel.as_mut().unwrap().input =
         tui_input::Input::new(original.join("not-a-directory").to_string_lossy().into());
     app.handle_tools_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
-    assert_eq!(app.files.tree_root, original);
+    assert_eq!(app.files.root(), original);
     assert!(matches!(
         app.tools.panel.as_ref().unwrap().kind,
         PanelKind::Prompt(PromptAction::OpenWorkspace)
@@ -2971,33 +3212,122 @@ async fn workspace_prompt_rejects_missing_directory_without_switching() {
 async fn embedded_terminal_tabs_keep_sessions_and_close_independently() {
     let (_dir, mut app) = fixture();
     app.handle_key(KeyEvent::new(KeyCode::F(8), KeyModifiers::NONE));
-    assert!(app.terminal.as_ref().unwrap().visible);
-    let first_revision = app.terminal.as_ref().unwrap().revision.clone();
-    let first_id = app.terminal.as_ref().unwrap().id;
+    assert!(app.terminals.active.as_ref().unwrap().is_visible());
+    let first_revision = app.terminals.active.as_ref().unwrap().revision.clone();
+    let first_id = app.terminals.active.as_ref().unwrap().id;
     let shift_ctrl = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
     app.handle_key(KeyEvent::new(KeyCode::Char('N'), shift_ctrl));
-    assert_eq!(app.terminal_tabs.len(), 1);
-    assert_ne!(first_id, app.terminal.as_ref().unwrap().id);
+    assert_eq!(app.terminals.inactive().len(), 1);
+    assert!(!app.terminals.inactive()[0].is_visible());
+    assert!(!app.terminals.inactive()[0].is_focused());
+    assert!(app.terminals.active.as_ref().unwrap().is_focused());
+    assert_ne!(first_id, app.terminals.active.as_ref().unwrap().id);
     assert!(!std::sync::Arc::ptr_eq(
         &first_revision,
-        &app.terminal.as_ref().unwrap().revision
+        &app.terminals.active.as_ref().unwrap().revision
     ));
     app.handle_key(KeyEvent::new(KeyCode::Left, shift_ctrl));
+    assert!(!app.terminals.inactive()[0].is_visible());
+    assert!(!app.terminals.inactive()[0].is_focused());
+    assert!(app.terminals.active.as_ref().unwrap().is_focused());
     assert!(std::sync::Arc::ptr_eq(
         &first_revision,
-        &app.terminal.as_ref().unwrap().revision
+        &app.terminals.active.as_ref().unwrap().revision
     ));
     app.handle_key(KeyEvent::new(KeyCode::Right, shift_ctrl));
     assert!(!std::sync::Arc::ptr_eq(
         &first_revision,
-        &app.terminal.as_ref().unwrap().revision
+        &app.terminals.active.as_ref().unwrap().revision
     ));
     app.handle_key(KeyEvent::new(KeyCode::Char('W'), shift_ctrl));
-    assert_eq!(app.terminal_tabs.len(), 0);
+    assert_eq!(app.terminals.inactive().len(), 0);
     assert!(std::sync::Arc::ptr_eq(
         &first_revision,
-        &app.terminal.as_ref().unwrap().revision
+        &app.terminals.active.as_ref().unwrap().revision
     ));
     app.handle_key(KeyEvent::new(KeyCode::Char('W'), shift_ctrl));
-    assert!(app.terminal.is_none());
+    assert!(app.terminals.active.is_none());
+}
+
+#[tokio::test]
+async fn files_p0_keyboard_clipboard_and_conflict() {
+    let (dir, mut app) = fixture();
+    let root = dir.path();
+    finish(&mut app).await;
+    app.session.focus = PaneFocus::List;
+    let a = app
+        .files
+        .visible
+        .iter()
+        .position(|r| r.entry.path == root.join("a.rs"))
+        .unwrap();
+    let folder = app
+        .files
+        .visible
+        .iter()
+        .position(|r| r.entry.path == root.join("folder"))
+        .unwrap();
+    app.files.selected = a;
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(app.file_paste_available());
+    app.files.selected = folder;
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    finish(&mut app).await;
+    assert_eq!(
+        std::fs::read(root.join("a.rs")).unwrap(),
+        std::fs::read(root.join("folder/a.rs")).unwrap()
+    );
+    app.close_tools();
+    app.files.selected = app
+        .files
+        .visible
+        .iter()
+        .position(|r| r.entry.path == root.join("folder"))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL));
+    let Some(PanelKind::Prompt(action @ PromptAction::PasteConflict { .. })) =
+        app.tools.panel.as_ref().map(|p| p.kind.clone())
+    else {
+        panic!("missing conflict prompt");
+    };
+    app.submit_prompt(action, "keep".into());
+    finish(&mut app).await;
+    assert!(root.join("folder/a (1).rs").exists());
+    app.close_tools();
+    app.files.selected = app
+        .files
+        .visible
+        .iter()
+        .position(|r| r.entry.path == root.join("a.rs"))
+        .unwrap();
+    app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+    assert!(matches!(
+        app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Confirm(Operation::Files(FileOperation::Trash(
+            _
+        ))))
+    ));
+    app.close_tools();
+    app.handle_key(KeyEvent::new(KeyCode::Delete, KeyModifiers::SHIFT));
+    assert!(matches!(
+        app.tools.panel.as_ref().map(|p| &p.kind),
+        Some(PanelKind::Confirm(Operation::Files(FileOperation::Delete(
+            _
+        ))))
+    ));
+}
+
+#[tokio::test]
+async fn files_p0_shift_range_and_preview_copy_is_not_file_copy() {
+    let (_dir, mut app) = fixture();
+    finish(&mut app).await;
+    app.session.focus = PaneFocus::List;
+    app.files.selected = 0;
+    app.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
+    assert_eq!(app.tools.marks.files.len(), 2);
+    app.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT));
+    assert_eq!(app.tools.marks.files.len(), 1);
+    app.session.focus = PaneFocus::Preview;
+    app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+    assert!(!app.file_paste_available());
 }
