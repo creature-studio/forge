@@ -22,6 +22,7 @@ PAGES = {
     "guide/index.html": {"lang": "zh-CN", "canonical": BASE + "guide/"},
     "releases/index.html": {"lang": "zh-CN", "canonical": BASE + "releases/"},
     "en/releases/index.html": {"lang": "en", "canonical": BASE + "en/releases/"},
+    "en/engineering/git-refresh/index.html": {"lang": "en", "canonical": BASE + "en/engineering/git-refresh/"},
 }
 
 for entry in json.loads((ROOT / "web/src/data/seo-pages.json").read_text()):

@@ -152,6 +152,7 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forg
       <nav class="shell seo-links" aria-label={english ? 'Features and workflows' : '功能与使用场景（英文）'}>
         <strong>{english ? 'Features, comparisons & workflows' : '功能与使用场景（英文）'}</strong>
         {seoPages.map(page => <a href={root + 'en/' + page.slug + '/'} lang="en">{page.title}</a>)}
+        <a href="/en/engineering/git-refresh/" lang="en">Engineering: bounded filesystem events</a>
       </nav>
     </footer>
 
