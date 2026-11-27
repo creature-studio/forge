@@ -10,13 +10,20 @@ This change targets failure integrity and external-state correctness. It does no
 - **Special files:** FIFO, socket, device and other non-regular entries are rejected for copying, rather than opening a potentially blocking FIFO. Moving them uses normal filesystem rename semantics.
 - **Batch Copy/Move/Delete:** validate all selected paths before starting. On error, report the count completed, failed source, underlying error, and count not attempted. Do not imply preceding changes were rolled back. A failed Delete directory might itself have been partially deleted by the OS.
 
-**Remaining limitations:** No system trash/recycle-bin backend, no atomic transaction across multiple files, and no forced cancellation of a blocking filesystem operation. Esc closes the panel, not the underlying work. The current permanent-delete confirmation is unchanged.
+**Remaining limitations:** System trash/recycle-bin uses the platform backend and may be unavailable on some mounts; failures never trigger permanent deletion. No atomic transaction across multiple files, and no forced cancellation of a blocking filesystem operation. Esc closes the panel, not the underlying work. The current permanent-delete confirmation is unchanged.
 
 ## Git metadata and linked worktrees
 
 The watcher resolves either a .git directory or a .git pointer file (gitdir: path) plus its commondir. It watches the current worktree's HEAD/index and common refs (recursive only inside refs), packed-refs and config. Metadata events outside the workspace root now trigger an ordinary Git status refresh. The object store and reflogs are not recursively watched.
 
 This addresses external branch switches in a linked worktree leaving the status bar stale until manual refresh. Watcher failures and unsupported filesystems may still require manual refresh.
+
+Known repositories also receive a non-overlapping periodic status reconciliation
+with a minimum 15-second interval, independent of sidebar visibility. Explicit
+Git activity/refresh commands and watched changes still request immediate
+refreshes. The open file or working-tree Diff has its own shallow parent watch
+so collapsing a folder or filtering the tree does not disable document-change
+notifications. Large-repository polling overhead is not yet benchmarked.
 
 ## Search result provenance
 

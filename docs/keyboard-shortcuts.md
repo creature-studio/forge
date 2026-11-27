@@ -9,6 +9,9 @@ the focused editor, search panel, terminal or dialog may own a key instead.
 | Command palette | Ctrl+k / Ctrl+Shift+p |
 | Refresh workspace | Ctrl+r |
 | Edit file | Ctrl+e |
+| Files: copy / cut / paste files | Ctrl+c / Ctrl+x / Ctrl+v |
+| Files: select all visible / range | Ctrl+a / Shift+Up or Down |
+| Files: trash / permanent delete | Delete / Shift+Delete |
 | Stage / unstage in Git | Alt+a / Alt+u |
 | Push / pull | Alt+p / Alt+r |
 | Git history | Alt+g |
@@ -49,3 +52,14 @@ Press **F9** to open Settings directly. The `F9 Settings` footer hint is
 visible on the workspace screen, and the command palette also lists Settings.
 F5 opens workspace Help. F4 opens the shortcut editor in the workspace and
 editor; when the embedded terminal has focus, F4 opens Terminal help instead.
+
+
+File shortcuts are local to the Files tree; text editing, preview selection,
+Git and embedded terminals retain their own input ownership. Ctrl-click
+toggles file selection; Shift-click selects a visible range. Paste targets the
+selected directory (or the selected file's parent); the root context menu can
+paste directly at the workspace root. Conflicts offer skip, keep both, or
+confirmed replacement of distinct regular files. Directory replacement is
+not supported. Delete moves items to the OS trash when supported and never
+falls back to permanent deletion. Shift+Delete requires permanent-delete
+confirmation. The clipboard remains scoped to its originating workspace.
