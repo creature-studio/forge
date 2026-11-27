@@ -22,6 +22,8 @@ PAGES = {
     "guide/index.html": {"lang": "zh-CN", "canonical": BASE + "guide/"},
     "releases/index.html": {"lang": "zh-CN", "canonical": BASE + "releases/"},
     "en/releases/index.html": {"lang": "en", "canonical": BASE + "en/releases/"},
+    "blog/index.html": {"lang": "zh-CN", "canonical": BASE + "blog/"},
+    "en/blog/index.html": {"lang": "en", "canonical": BASE + "en/blog/"},
     "en/engineering/git-refresh/index.html": {"lang": "en", "canonical": BASE + "en/engineering/git-refresh/"},
 }
 

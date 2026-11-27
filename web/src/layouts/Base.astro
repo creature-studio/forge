@@ -4,7 +4,7 @@ interface Props {
   description: string;
   lang?: 'zh-CN' | 'en';
   path?: string;
-  kind?: 'home' | 'article';
+  kind?: 'home' | 'article' | 'collection';
   hasTranslation?: boolean;
 }
 import '../styles/main.css';
@@ -40,8 +40,8 @@ const structured = kind === 'home' ? {
   license: 'https://opensource.org/licenses/MIT',
 } : {
   '@context': 'https://schema.org',
-  '@type': 'TechArticle',
-  headline: title,
+  '@type': kind === 'collection' ? 'CollectionPage' : 'TechArticle',
+  ...(kind === 'collection' ? { name: title } : { headline: title }),
   description,
   url: canonical,
   publisher: {
@@ -105,6 +105,9 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forg
           <a href={`${english ? enRoot : zhRoot}releases/`} aria-current={path.endsWith('/releases/') ? 'page' : undefined}>
             {english ? 'Releases' : '发布说明'}
           </a>
+          <a href={`${english ? enRoot : zhRoot}blog/`} aria-current={path.endsWith('/blog/') || path.startsWith('/en/engineering/') ? 'page' : undefined}>
+            {english ? 'Blog' : '技术博客'}
+          </a>
           <a href="https://github.com/creature-studio/forge/issues">
             {english ? 'Issues' : '反馈'}
           </a>
@@ -133,6 +136,7 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forg
               <a href={english ? enRoot : zhRoot}>{english ? 'Overview' : '概览'}</a>
               <a href={`${english ? enRoot : zhRoot}guide/`}>{english ? 'Guide' : '操作文档'}</a>
               <a href={`${english ? enRoot : zhRoot}releases/`}>{english ? 'Releases' : '发布说明'}</a>
+              <a href={`${english ? enRoot : zhRoot}blog/`}>{english ? 'Blog' : '技术博客'}</a>
               <a href="https://github.com/creature-studio/forge">{english ? 'GitHub Repository' : 'GitHub 仓库'}</a>
               <a href="https://github.com/creature-studio/forge/issues">{english ? 'Community & Issues' : '社区与反馈'}</a>
               <a href={localTranslatedPath} lang={english ? 'zh-CN' : 'en'}>{english ? '切换到中文' : 'Switch to English'}</a>
@@ -154,6 +158,7 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forg
         <div class="footer-links">
           <a href={`${english ? enRoot : zhRoot}guide/`}>{english ? 'Documentation' : '操作文档'}</a>
           <a href={`${english ? enRoot : zhRoot}releases/`}>{english ? 'Release notes' : '发布说明'}</a>
+          <a href={`${english ? enRoot : zhRoot}blog/`}>{english ? 'Blog' : '技术博客'}</a>
           <a href="https://github.com/creature-studio/forge">{english ? "Forge TUI on GitHub" : "Forge TUI 官方 GitHub 仓库"}</a>
           <a href="https://github.com/creature-studio/forge/issues">{english ? 'Issues' : '问题反馈'}</a>
         </div>

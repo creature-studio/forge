@@ -13,7 +13,7 @@ const reproduce = 'cargo test -p forge-app auto_refresh::tests --locked';
 ---
 <Base title="Bounded filesystem events in a Rust Git TUI | Forge TUI" description="A source-backed engineering note on keeping a Git TUI responsive with bounded watcher queues, overflow invalidation and linked worktree metadata." lang="en" path="/en/engineering/git-refresh/" hasTranslation={false}>
   <main id="main" class="seo-article shell">
-    <nav aria-label="Breadcrumb"><a href="/en/">Forge TUI</a> / Engineering</nav>
+    <nav aria-label="Breadcrumb"><a href="/en/">Forge TUI</a> / <a href="/en/blog/">Blog</a> / Engineering</nav>
     <h1>When a Git TUI must catch up: bounded filesystem events</h1>
     <p class="lead">A terminal Git workspace has two jobs: respond to input and stay consistent with a working tree that other processes can change. A file watcher helps, but processing every notification is not the same as keeping the displayed state correct.</p>
     <p><small>Engineering note based on Forge revision <a href={'https://github.com/creature-studio/forge/commit/' + revision}>{revision}</a>. Prepared with AI assistance. This is a source-based design explanation, not an application performance benchmark.</small></p>

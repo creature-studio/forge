@@ -1,0 +1,46 @@
+---
+import Base from '../layouts/Base.astro';
+import posts from '../data/blog-posts.json';
+import { ArrowUpRight } from '@lucide/astro';
+interface Props { lang: 'en' | 'zh-CN' }
+const { lang } = Astro.props;
+const en = lang === 'en';
+---
+<Base title={en ? 'Engineering Blog | Forge TUI' : '技术博客 | Forge TUI'} description={en ? 'Engineering notes from Forge TUI: Rust terminal interfaces, Git workflows, architecture and practical development.' : 'Forge TUI 技术博客：Rust 终端界面、Git 工作流、架构设计与实际开发经验。'} lang={lang} path={en ? '/en/blog/' : '/blog/'} kind="collection">
+  <main id="main" class="shell blog-page">
+    <header class="blog-heading">
+      <span class="blog-eyebrow">FORGE / ENGINEERING</span>
+      <h1>{en ? 'Engineering Blog' : '技术博客'}</h1>
+      <p>{en ? 'Implementation notes, design decisions and lessons from building Forge. Grounded in real source code and reproducible examples.' : '记录 Forge 的实现原理、设计决策与开发经验，以实际源码和可复现的示例为依据。'}</p>
+    </header>
+    <section aria-label={en ? 'Articles' : '文章列表'} class="blog-list">
+      {posts.map(post => (
+        <article class="blog-entry">
+          <div class="blog-meta">
+            {post.tags.map(tag => <span>{tag}</span>)}
+            <span>{en ? 'English' : '英文原文'}</span>
+          </div>
+          <h2><a href={post.url} hreflang={post.lang}>{en ? post.title : post.titleZh}<ArrowUpRight size={18} aria-hidden="true" /></a></h2>
+          <p>{en ? post.summary : post.summaryZh}</p>
+          <a class="blog-read" href={post.url} hreflang={post.lang}>{en ? 'Read article' : '阅读英文原文'} <ArrowUpRight size={14} aria-hidden="true" /></a>
+        </article>
+      ))}
+    </section>
+  </main>
+</Base>
+<style>
+  .blog-page { max-width: 960px; padding: 76px 0 96px; min-height: 62vh; }
+  .blog-heading { margin-bottom: 46px; }
+  .blog-eyebrow { font-family: var(--font-mono); font-size: 12px; color: var(--accent); letter-spacing: .08em; }
+  h1 { font-size: clamp(32px, 5vw, 48px); line-height: 1.2; margin: 14px 0; }
+  .blog-heading p, .blog-entry p { color: var(--ink-secondary); line-height: 1.75; max-width: 76ch; }
+  .blog-list { border-top: 1px solid var(--border-mid); }
+  .blog-entry { padding: 28px 0; border-bottom: 1px solid var(--border-mid); }
+  .blog-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; color: var(--ink-secondary); font: 12px var(--font-mono); }
+  .blog-entry h2 { font-size: clamp(20px, 3vw, 26px); line-height: 1.4; margin: 14px 0 8px; }
+  .blog-entry h2 a { color: var(--ink); }
+  .blog-entry h2 svg { display: inline-block; vertical-align: middle; margin-left: 8px; color: var(--accent); }
+  .blog-entry h2 a:hover, .blog-read { color: var(--accent); }
+  .blog-read { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; font-size: 14px; }
+  @media (max-width: 760px) { .blog-page { padding: 48px 0 64px; } .blog-heading { margin-bottom: 30px; } }
+</style>
