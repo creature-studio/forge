@@ -1,7 +1,7 @@
 # Forge Website (Astro)
 
 The official Forge site is statically generated with Astro and published at
-`https://creature-studio.github.io/forge/` on GitHub Pages.
+`https://forge.runs-on.dev/` on GitHub Pages.
 
 ## Local development
 
@@ -21,7 +21,7 @@ python3 scripts/check-site-seo.py
 `install.sh` is copied to `web/public/install.sh` before each production build,
 so the download stays in sync. The public directory also contains `robots.txt`.
 Astro's sitemap integration generates `sitemap-index.xml` and
-`sitemap-0.xml`. All links preserve the `/forge/` base path.
+`sitemap-0.xml`. All links preserve the `/` base path.
 
 - `src/pages/` owns `/`, `/en/`, `/guide/`, `/en/guide/`, `/releases/`, and `/en/releases/`.
 - `src/layouts/Base.astro` provides shared navigation, SEO metadata, canonical

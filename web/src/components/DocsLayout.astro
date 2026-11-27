@@ -38,11 +38,11 @@ const menuTitle = english ? 'Jump to section' : '浏览章节目录';
       ))}
     </nav>
     <div class="docs-sidebar-footer">
-      <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>
+      <a href={english ? '/en/releases/' : '/releases/'}>
         <span>{english ? 'Release notes' : '版本发布说明'}</span>
         <ArrowUpRight size={13} strokeWidth={1.9} aria-hidden="true" />
       </a>
-      <a href={english ? '/forge/guide/' : '/forge/en/guide/'} lang={english ? 'zh-CN' : 'en'}>
+      <a href={english ? '/guide/' : '/en/guide/'} lang={english ? 'zh-CN' : 'en'}>
         <span>{english ? '中文操作文档' : 'English Guide'}</span>
         <ArrowUpRight size={13} strokeWidth={1.9} aria-hidden="true" />
       </a>
@@ -69,11 +69,11 @@ const menuTitle = english ? 'Jump to section' : '浏览章节目录';
     <div class="docs-topbar">
       <span class="docs-breadcrumb">FORGE / {english ? 'USER GUIDE' : '使用指南'} · {FORGE_TAG}</span>
       <div class="docs-topbar-links">
-        <a href={english ? '/forge/guide/' : '/forge/en/guide/'} lang={english ? 'zh-CN' : 'en'}>
+        <a href={english ? '/guide/' : '/en/guide/'} lang={english ? 'zh-CN' : 'en'}>
           {english ? '阅读中文版' : 'Read in English'}
         </a>
         <span>·</span>
-        <a href={english ? '/forge/en/releases/' : '/forge/releases/'}>
+        <a href={english ? '/en/releases/' : '/releases/'}>
           {english ? 'Changelog' : '更新日志'}
         </a>
       </div>

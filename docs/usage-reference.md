@@ -9,7 +9,7 @@
 Windows 10/11 x64（PowerShell）同样提供原生预编译发布目标：
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.txt | iex
+irm https://forge.runs-on.dev/install.txt | iex
 ```
 
 Windows 安装器校验 SHA-256 后写入当前用户的 `%LOCALAPPDATA%\Programs\Forge\bin`；升级需要关闭 Forge 并重新执行脚本，`forge update` 暂不支持 Windows。
@@ -17,7 +17,7 @@ Windows 安装器校验 SHA-256 后写入当前用户的 `%LOCALAPPDATA%\Program
 Linux（x86_64 / aarch64）与 macOS（Intel / Apple Silicon）使用 GitHub Release 的预编译包，不需要 Rust 工具链：
 
 ```bash
-curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+curl -fsSL https://forge.runs-on.dev/install.sh | sh
 ```
 
 安装脚本会下载 `forge-<target>.tar.gz`，用同一版本的 `SHA256SUMS` 校验后安装到 `~/.local/bin`。可用 `FORGE_INSTALL_DIR` 指定目录，用 `FORGE_VERSION=v0.2.0` 固定版本。也可以直接下载 <https://github.com/creature-studio/forge/releases/latest> 里的压缩包自行放置。
@@ -222,7 +222,7 @@ Files、Git Changes / Staged 以及 History 的树形列表默认启用 **Tree S
 
 ## 键位（Forge v0.3.4）
 
-以 [Astro 网站的 Markdown 图文指南](https://creature-studio.github.io/forge/guide/) 为主要操作说明（对应源码 `web/src/content/guide.zh.md`，配有 19 张真实界面截图）。以下是当前实际绑定的速查；用户自定义键位以 `F4` 列表为准。
+以 [Astro 网站的 Markdown 图文指南](https://forge.runs-on.dev/guide/) 为主要操作说明（对应源码 `web/src/content/guide.zh.md`，配有 19 张真实界面截图）。以下是当前实际绑定的速查；用户自定义键位以 `F4` 列表为准。
 
 | 按键 | 操作 |
 |---|---|

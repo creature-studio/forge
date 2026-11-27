@@ -1,7 +1,7 @@
 #!/bin/sh
 # Install Forge from a GitHub release.
 #
-#   curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+#   curl -fsSL https://forge.runs-on.dev/install.sh | sh
 #
 # Environment overrides:
 #   FORGE_VERSION      release tag to install (default: latest, e.g. v0.1.0)

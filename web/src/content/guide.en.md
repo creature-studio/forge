@@ -14,13 +14,13 @@ A practical, screenshot-driven guide to the **current Forge v0.4.0 development v
 On supported Linux and macOS targets, install the latest release:
 
 ```bash
-curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+curl -fsSL https://forge.runs-on.dev/install.sh | sh
 ```
 
 On **Windows 10/11 x64**, install a native `forge.exe` from PowerShell (no WSL needed):
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.txt | iex
+irm https://forge.runs-on.dev/install.txt | iex
 ```
 
 The Windows installer verifies SHA-256, installs under the user profile, and updates the user PATH. Open a fresh terminal after installation. Close Forge and rerun the installer to upgrade; `forge update` currently works only on Linux/macOS. Install Git for Windows for Git actions.
@@ -36,7 +36,7 @@ Run `forge update` for self-update or obtain a package from [GitHub Releases](ht
 
 ## 2. Workspace layout and navigation
 
-[![Real Forge Files workspace with a source preview](/forge/assets/guide/files.webp)](/forge/assets/guide/files.webp "View full-size screenshot")
+[![Real Forge Files workspace with a source preview](/assets/guide/files.webp)](/assets/guide/files.webp "View full-size screenshot")
 
 The Activity Bar contains Files, Source Control, Search, Terminal and Settings. The collapsible sidebar lists your files or Git changes; the preview area shows the selected file or diff; the footer lists the actions available in the current focus. Use `Tab` / `Shift+Tab` to move focus and `Ctrl+B` to collapse or reopen the sidebar.
 
@@ -44,71 +44,71 @@ In a file tree, use `j/k` or arrow keys to move, `Enter` / `l` to open or expand
 
 ## 3. Find files and search content
 
-[![Fuzzy file-name search with Ctrl+P](/forge/assets/guide/file-finder-filtered.webp)](/forge/assets/guide/file-finder-filtered.webp "View full-size screenshot")
+[![Fuzzy file-name search with Ctrl+P](/assets/guide/file-finder-filtered.webp)](/assets/guide/file-finder-filtered.webp "View full-size screenshot")
 
 `Ctrl+P` opens the fuzzy file finder. Type part of the name, use `↑/↓` to choose a result, then `Enter` to open it. Forge also reveals the corresponding path in the file tree. Use `Esc` to close the finder.
 
-[![Global content search with file results and matching context](/forge/assets/guide/search-global.webp)](/forge/assets/guide/search-global.webp "View full-size screenshot")
+[![Global content search with file results and matching context](/assets/guide/search-global.webp)](/assets/guide/search-global.webp "View full-size screenshot")
 
 For **global content search**, click Search in the Activity Bar, or press `Ctrl+K` and select **Search file contents / regex**. Some terminals can send `Ctrl+Shift+F` directly. Search results list file paths and matching lines; selecting a result previews its context, and `Enter` opens the exact line. Toggle regular expressions with `Alt+R` inside the search panel. `Ctrl+R` refreshes files, Git status and the current search results by default; check `F4` if you have rebound Refresh. File-name search and content search are separate operations.
 
 ## 4. Search within the current file
 
-[![Inline find toolbar showing search matches](/forge/assets/guide/search-in-file.webp)](/forge/assets/guide/search-in-file.webp "View full-size screenshot")
+[![Inline find toolbar showing search matches](/assets/guide/search-in-file.webp)](/assets/guide/search-in-file.webp "View full-size screenshot")
 
 Open a code file, focus its preview with `Tab`, and press `Ctrl+F` to search **within that file**. Enter a keyword, then use `Enter` / `Shift+Enter` to move through matches; `Esc` closes the toolbar. `Ctrl+F` behaves according to focus—use the Commands palette for global search if in doubt.
 
 ## 5. Code, Markdown and change markers
 
-[![Rendered Markdown preview](/forge/assets/guide/markdown.webp)](/forge/assets/guide/markdown.webp "View full-size screenshot")
+[![Rendered Markdown preview](/assets/guide/markdown.webp)](/assets/guide/markdown.webp "View full-size screenshot")
 
 For Markdown files, `F3` toggles **Preview** (rendered) and **Code** (source). Code previews support line numbers and syntax highlighting. `F6` opens blame/commit details for supported source contexts. `F7` shows a Git Change Peek near changed lines without pushing the source text down. The optional Focus Overview provides a compact map of noteworthy locations rather than a full code minimap.
 
 ## 6. Git changes and full-file diff
 
-[![Source Control sidebar with Changes, Staged and History](/forge/assets/guide/git-status.webp)](/forge/assets/guide/git-status.webp "View full-size screenshot")
+[![Source Control sidebar with Changes, Staged and History](/assets/guide/git-status.webp)](/assets/guide/git-status.webp "View full-size screenshot")
 
 Press `F2` to open Source Control. The sidebar separates **CHANGES** (working tree), **STAGED** (Git index) and **HISTORY** (commits). Expand folders with `Enter`, select a changed file and inspect its diff on the right.
 
-[![Git diff with side-by-side change views](/forge/assets/guide/git-diff.webp)](/forge/assets/guide/git-diff.webp "View full-size screenshot")
+[![Git diff with side-by-side change views](/assets/guide/git-diff.webp)](/assets/guide/git-diff.webp "View full-size screenshot")
 
 Forge supports full-file diff context, including unchanged lines where available. Use `Tab` to change focus; `Alt+Left` / `Alt+Right` or the horizontal scrollbar to view long lines. Click `[Open file]` in the diff heading or press `o` to locate the current working-tree file in Files. A single file may appear in both CHANGES and STAGED when it has both indexed and unindexed modifications.
 
 ## 7. Stage, unstage and commit
 
-[![Changes and Staged areas after staging one file](/forge/assets/guide/git-stage.webp)](/forge/assets/guide/git-stage.webp "View full-size screenshot")
+[![Changes and Staged areas after staging one file](/assets/guide/git-stage.webp)](/assets/guide/git-stage.webp "View full-size screenshot")
 
 Select an unstaged file in Git and press `Alt+A` to stage it. Select a staged file and press `Alt+U` to unstage it. With the left pane focused, selection can apply to files, folders or explicitly marked items; in a diff, it can target the current hunk. Verify the staged list before committing. Discarding a change (`x`) is separate and destructive.
 
-[![Commit Composer with staged files, Subject and Body fields](/forge/assets/guide/commit.webp)](/forge/assets/guide/commit.webp "View full-size screenshot")
+[![Commit Composer with staged files, Subject and Body fields](/assets/guide/commit.webp)](/assets/guide/commit.webp "View full-size screenshot")
 
 Press `c` from Git to open the **Commit Composer**. Verify the staged file count, enter a concise subject and optionally a longer body. Use `Tab` to switch fields. `Ctrl+S` / `Ctrl+Enter` leads to the review/confirmation action; `Enter` while editing is not an immediate commit. `Esc` cancels the dialog. Only indexed changes are included in the commit.
 
 ## 8. Commit history, blame and branches
 
-[![Commit History with commit hash, author and changed paths](/forge/assets/guide/git-history.webp)](/forge/assets/guide/git-history.webp "View full-size screenshot")
+[![Commit History with commit hash, author and changed paths](/assets/guide/git-history.webp)](/assets/guide/git-history.webp "View full-size screenshot")
 
 The Git sidebar's **HISTORY** section shows committed revisions, including local commits not yet pushed. Select a commit to see its metadata and file list, or expand its changed-file tree. `Alt+G` focuses repository history, `Alt+L` opens the commit history dialog and `Alt+H` opens file history. Use `F6` for blame details when examining supported source lines.
 
-[![Branches dialog showing the current branch](/forge/assets/guide/branches.webp)](/forge/assets/guide/branches.webp "View full-size screenshot")
+[![Branches dialog showing the current branch](/assets/guide/branches.webp)](/assets/guide/branches.webp "View full-size screenshot")
 
 `Alt+B` opens **Branches**. The current branch is marked with `*`. The on-screen actions include `A` create, `r` rename, `X` delete a merged branch and `D` compare to HEAD. `Alt+W` opens Worktrees. `Alt+S` opens remote synchronization; clicking the status chip does **not** blindly push. In the right Git context, `Alt+P` pushes and `Alt+R` pulls. Verify your remote, upstream and dirty working tree before synchronizing.
 
 ## 9. Stashes
 
-[![Stashes dialog with keyboard action hints](/forge/assets/guide/stashes.webp)](/forge/assets/guide/stashes.webp "View full-size screenshot")
+[![Stashes dialog with keyboard action hints](/assets/guide/stashes.webp)](/assets/guide/stashes.webp "View full-size screenshot")
 
 Press `Alt+Z` to manage Git Stashes. Use `A` to save the current work, `Enter` to inspect a stash diff, `a` to Apply while keeping the stash, `p` to Pop, or `X` to Drop. Read the dialog's currently displayed help before making destructive changes. A stash is not a replacement for a committed backup.
 
 ## 10. Built-in text editor
 
-[![Forge's built-in text editor](/forge/assets/guide/editor.webp)](/forge/assets/guide/editor.webp "View full-size screenshot")
+[![Forge's built-in text editor](/assets/guide/editor.webp)](/assets/guide/editor.webp "View full-size screenshot")
 
 Select an editable file and press `Ctrl+E`. The lightweight editor supports selection, clipboard actions, line editing and undo/redo. Main keys: `Ctrl+S` Save, `Ctrl+C` Copy, `Ctrl+X` Cut, `Ctrl+V` Paste, `Ctrl+A` Select All, `Ctrl+Z` Undo, `Ctrl+Y` Redo. `Esc` exits or, if modified, opens a decision about saving, discarding or continuing editing. Unsaved edits are **not** silently saved.
 
 ## 11. Embedded Terminal and tabs
 
-[![Embedded shell with tabs and contextual key hints](/forge/assets/guide/terminal.webp)](/forge/assets/guide/terminal.webp "View full-size screenshot")
+[![Embedded shell with tabs and contextual key hints](/assets/guide/terminal.webp)](/assets/guide/terminal.webp "View full-size screenshot")
 
 `F8` opens or hides an embedded local Shell without destroying its session. `F11` maximizes/restores it. Up to eight tabs can be opened with `Shift+F8` or `Ctrl+Shift+N` and selected using `Alt+1` through `Alt+8`. `F12` switches to the next tab, while `Ctrl+Shift+W` closes the current one. The bar's `+`, `‹`, `›`, `□`, `?`, and `−` buttons create, switch, maximize, show help and hide; middle-clicking a tab closes it.
 
@@ -116,21 +116,21 @@ When the Shell has focus, **Esc and normal text belong to the Shell**. Use `Ctrl
 
 ## 12. Commands, Help and settings
 
-[![Searchable Commands palette](/forge/assets/guide/commands.webp)](/forge/assets/guide/commands.webp "View full-size screenshot")
+[![Searchable Commands palette](/assets/guide/commands.webp)](/assets/guide/commands.webp "View full-size screenshot")
 
 `Ctrl+K` opens the Commands palette to discover available operations such as search, file management, Git tools and editing. Filter by name, navigate with arrows and run with `Enter`; `Esc` cancels. `F5` opens the full user help.
 
-[![Appearance and navigation settings](/forge/assets/guide/settings.webp)](/forge/assets/guide/settings.webp "View full-size screenshot")
+[![Appearance and navigation settings](/assets/guide/settings.webp)](/assets/guide/settings.webp "View full-size screenshot")
 
 `F9` opens Settings: Tree Sticky Scroll, Compact Folders, Show hidden files, Color theme, Code auto wrap, Focus Overview, staged/unstaged Git Gutter, and keyboard shortcut configuration. Use `↑/↓` to select and `Enter` or `Space` to apply a setting. Configuration persists across restarts.
 
-[![Keyboard shortcuts management screen](/forge/assets/guide/shortcuts.webp)](/forge/assets/guide/shortcuts.webp "View full-size screenshot")
+[![Keyboard shortcuts management screen](/assets/guide/shortcuts.webp)](/assets/guide/shortcuts.webp "View full-size screenshot")
 
 `F4` opens the shortcut manager. Filter by Files, Git, Editor or Navigation, view effective bindings and reassign non-fixed shortcuts. The contextual footer reflects the active panel. Older one-character shortcuts advertised by earlier guides may no longer be valid defaults.
 
 ## 13. Mouse hover and compact layout
 
-[![Activity Bar hover tooltip showing icon explanation and shortcut](/forge/assets/guide/hover.webp)](/forge/assets/guide/hover.webp "View full-size screenshot")
+[![Activity Bar hover tooltip showing icon explanation and shortcut](/assets/guide/hover.webp)](/assets/guide/hover.webp "View full-size screenshot")
 
 Activity Bar icons, Terminal controls and Git Diff's `[Open file]` display tooltips on mouse hover. Hover is **presentation-only**: movement must never change active panels or run a command. The sidebar divider can be dragged to resize; scrollbars support quick positioning. Narrow terminals switch to a single-pane-oriented workflow so use `Tab` to alternate list and preview. Built-in Unicode icons work without Nerd Font; optional Nerd or ASCII mode is available.
 

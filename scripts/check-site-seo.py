@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / "web" / "dist"
-ORIGIN = "https://creature-studio.github.io"
-BASE = ORIGIN + "/forge/"
+ORIGIN = "https://forge.runs-on.dev"
+BASE = ORIGIN + "/"
 PAGES = {
     "index.html": {"lang": "zh-CN", "canonical": BASE},
     "en/index.html": {"lang": "en", "canonical": BASE + "en/"},
@@ -88,19 +88,14 @@ def resolve_local(href: str, source: Path) -> Path | None:
     parts = urlsplit(href)
     if parts.scheme not in ("", "https", "http"):
         return None
-    if parts.netloc:
-        if parts.netloc != "creature-studio.github.io":
-            return None
-        if not parts.path.startswith("/forge/"):
-            return None
-        candidate = SITE / unquote(parts.path.removeprefix("/forge/"))
+    if parts.netloc and parts.netloc != urlsplit(ORIGIN).netloc:
+        return None
+    if not parts.path:
+        return None
+    if parts.netloc or parts.path.startswith("/"):
+        candidate = SITE / unquote(parts.path.lstrip("/"))
     else:
-        if not parts.path:
-            return None
-        if parts.path.startswith("/forge/"):
-            candidate = SITE / unquote(parts.path.removeprefix("/forge/"))
-        else:
-            candidate = source.parent / unquote(parts.path)
+        candidate = source.parent / unquote(parts.path)
     if candidate.is_dir():
         candidate = candidate / "index.html"
     return candidate.resolve()
@@ -126,6 +121,8 @@ def main():
         if not p.schema:
             errors.append(f"{name}: missing JSON-LD")
         for ref in p.resources:
+            if ref.startswith("https://creature-studio.github.io/forge/") or ref.startswith("/forge/"):
+                errors.append(f"{name}: legacy site path {ref}")
             parts = urlsplit(ref)
             if ref.startswith("#") and ref[1:] and ref[1:] not in p.ids:
                 errors.append(f"{name}: missing anchor {ref}")
@@ -155,7 +152,7 @@ def main():
         version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["package"]["version"]
         if len(apps) != 1 or apps[0].get("softwareVersion") != version:
             errors.append(f"{name}: wrong software schema version")
-    # Keep the previously submitted /forge/sitemap.xml usable after the
+    # Keep the previously submitted sitemap.xml usable after the
     # migration to Astro, and ensure it contains the live, full index.
     alias = SITE / "sitemap.xml"
     index = SITE / "sitemap-index.xml"

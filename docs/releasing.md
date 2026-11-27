@@ -29,7 +29,7 @@ Forge 的二进制通过 GitHub Release 分发，安装脚本和 `forge update` 
 ## 安装
 
 ```bash
-curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+curl -fsSL https://forge.runs-on.dev/install.sh | sh
 ```
 
 脚本也可以从 release 资产直接取：`https://github.com/creature-studio/forge/releases/latest/download/install.sh`。

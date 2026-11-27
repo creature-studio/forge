@@ -14,8 +14,8 @@ import { Terminal, Download, Menu, ArrowUpRight } from '@lucide/astro';
 
 const { title, description, lang = 'zh-CN', path = '/', kind = 'article', hasTranslation = true } = Astro.props;
 const english = lang === 'en';
-const root = '/forge/';
-const canonical = `https://creature-studio.github.io${root}${path.replace(/^\//, '')}`;
+const root = '/';
+const canonical = `https://forge.runs-on.dev${root}${path.replace(/^\//, '')}`;
 
 const structured = kind === 'home' ? {
   '@context': 'https://schema.org',
@@ -45,8 +45,8 @@ const structured = kind === 'home' ? {
 const zhRoot = root;
 const enRoot = `${root}en/`;
 const translationPath = english ? (path.replace(/^\/en\//, '/') || '/') : ('/en' + path);
-const translatedUrl = 'https://creature-studio.github.io/forge' + (translationPath.startsWith('/') ? translationPath : '/' + translationPath);
-const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://creature-studio.github.io', '') : zhRoot;
+const translatedUrl = 'https://forge.runs-on.dev' + (translationPath.startsWith('/') ? translationPath : '/' + translationPath);
+const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forge.runs-on.dev', '') : zhRoot;
 ---
 <!doctype html>
 <html lang={lang}>
@@ -61,12 +61,12 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://crea
     <link rel="manifest" href={`${root}site.webmanifest`} />
     <link rel="alternate" hreflang={lang} href={canonical} />
     {hasTranslation && <link rel="alternate" hreflang={english ? 'zh-CN' : 'en'} href={translatedUrl} />}
-    {kind === 'home' && <link rel="alternate" hreflang="x-default" href="https://creature-studio.github.io/forge/en/" />}
+    {kind === 'home' && <link rel="alternate" hreflang="x-default" href="https://forge.runs-on.dev/en/" />}
     <meta property="og:type" content="website" />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />
-    <meta property="og:image" content="https://creature-studio.github.io/forge/assets/og-cover.png" />
+    <meta property="og:image" content="https://forge.runs-on.dev/assets/og-cover.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <script type="application/ld+json" set:html={JSON.stringify(structured)} />
   </head>

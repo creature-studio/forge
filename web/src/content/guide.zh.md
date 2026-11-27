@@ -14,13 +14,13 @@ description: Forge v0.4.0 中文图文教程，基于真实运行界面、实际
 Linux（x86_64 / aarch64）与 macOS（Intel / Apple Silicon）可使用官方安装脚本：
 
 ```bash
-curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+curl -fsSL https://forge.runs-on.dev/install.sh | sh
 ```
 
 Windows 10/11 x64 可直接在 PowerShell / Windows Terminal 中安装原生 `forge.exe`（无需 WSL）：
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.txt | iex
+irm https://forge.runs-on.dev/install.txt | iex
 ```
 
 安装到当前用户的 `%LOCALAPPDATA%\Programs\Forge\bin`，校验 Release ZIP 的 SHA-256 并添加用户 PATH。请新开终端执行 `forge`；升级时先关闭 Forge，再重复执行安装命令。Windows 暂不支持 `forge update`。需要 Git for Windows 以使用 Git 操作。
@@ -52,7 +52,7 @@ cargo run -p forge
 
 ## 2. 认识 Forge 工作区
 
-[![Forge Files 工作区，左侧文件树与右侧源码预览](/forge/assets/guide/files.webp)](/forge/assets/guide/files.webp "打开高清截图")
+[![Forge Files 工作区，左侧文件树与右侧源码预览](/assets/guide/files.webp)](/assets/guide/files.webp "打开高清截图")
 
 *Files：真实演示仓库的文件树、Git 状态标识和右侧代码预览。*
 
@@ -85,13 +85,13 @@ cargo run -p forge
 
 ### 按文件名定位：Ctrl+P
 
-[![Forge 文件名模糊搜索](/forge/assets/guide/file-finder-filtered.webp)](/forge/assets/guide/file-finder-filtered.webp "打开高清截图")
+[![Forge 文件名模糊搜索](/assets/guide/file-finder-filtered.webp)](/assets/guide/file-finder-filtered.webp "打开高清截图")
 
 按 `Ctrl+P`，输入文件名的一部分（如 `app.ts`），候选项会动态过滤。`↑/↓` 选择，`Enter` 打开；Forge 会展开文件树并定位相应文件。`Esc` 关闭搜索。
 
 ### 跨项目搜索：搜索图标或命令面板
 
-[![Forge 全局搜索结果和右侧代码上下文](/forge/assets/guide/search-global.webp)](/forge/assets/guide/search-global.webp "打开高清截图")
+[![Forge 全局搜索结果和右侧代码上下文](/assets/guide/search-global.webp)](/assets/guide/search-global.webp "打开高清截图")
 
 点击 Activity Bar 的搜索图标，或者 `Ctrl+K` 搜索并执行 **Search file contents / regex**；若终端能区分 `Ctrl+Shift+F`，也可使用该组合键。输入关键字后左侧展示文件和命中位置，右侧展示上下文。`↑/↓` 选择结果、`Enter` 跳到对应文件及行。搜索框内 `Alt+R` 切换正则表达式；`Ctrl+R` 默认刷新文件、Git 状态和当前搜索结果。如果重绑过刷新操作，请以 `F4` 显示的按键为准。
 
@@ -99,13 +99,13 @@ cargo run -p forge
 
 ## 5. 当前文件内查找
 
-[![Forge 当前文件内查找条和命中计数](/forge/assets/guide/search-in-file.webp)](/forge/assets/guide/search-in-file.webp "打开高清截图")
+[![Forge 当前文件内查找条和命中计数](/assets/guide/search-in-file.webp)](/assets/guide/search-in-file.webp "打开高清截图")
 
 先选中一个代码文件，并通过 `Tab` 把焦点放到右侧预览，再按 `Ctrl+F`。输入关键字后，界面显示命中数量及当前命中位置；`Enter` / `Shift+Enter` 逐项跳转，`Esc` 关闭查找。这里的 `Ctrl+F` 是**文件内查找**，与命令面板中的**全局内容搜索**不同；优先看底部当前焦点提示即可判断。
 
 ## 6. 代码阅读、Markdown 与变更标记
 
-[![Forge Markdown 渲染预览](/forge/assets/guide/markdown.webp)](/forge/assets/guide/markdown.webp "打开高清截图")
+[![Forge Markdown 渲染预览](/assets/guide/markdown.webp)](/assets/guide/markdown.webp "打开高清截图")
 
 Markdown 文件有两种模式：**Preview** 展示渲染后的内容，**Code** 展示源文本。`F3` 或预览栏顶部的 Preview / Code 标签可以切换。普通代码文件可以显示行号、语法高亮、变更标记和 Blame 信息。
 
@@ -113,11 +113,11 @@ Markdown 文件有两种模式：**Preview** 展示渲染后的内容，**Code**
 
 ## 7. Git Changes 与完整文件 Diff
 
-[![Forge Git 工作区，Changes 与 Staged 区域](/forge/assets/guide/git-status.webp)](/forge/assets/guide/git-status.webp "打开高清截图")
+[![Forge Git 工作区，Changes 与 Staged 区域](/assets/guide/git-status.webp)](/assets/guide/git-status.webp "打开高清截图")
 
 按 `F2` 进入 Source Control。左侧按 **CHANGES（未暂存）**、**STAGED（已暂存）** 和 **HISTORY（历史）** 分区显示。选择更改文件后，右侧展示 Diff；目录可能先显示折叠状态，可用 `Enter` 展开后选择文件。
 
-[![Forge 真实文件差异对比，含修改前后的行号](/forge/assets/guide/git-diff.webp)](/forge/assets/guide/git-diff.webp "打开高清截图")
+[![Forge 真实文件差异对比，含修改前后的行号](/assets/guide/git-diff.webp)](/assets/guide/git-diff.webp "打开高清截图")
 
 右侧 Diff 不局限于补丁的几行：在支持的文件和可用上下文中能展示完整文件，未修改行也可随之浏览。普通宽度使用并排对比；较窄布局可以通过焦点切换与滚动阅读。更改行的标记与行号帮助区分旧内容、新内容以及暂存状态。
 
@@ -131,7 +131,7 @@ Markdown 文件有两种模式：**Preview** 展示渲染后的内容，**Code**
 
 ## 8. 暂存、取消暂存与选择范围
 
-[![Forge 暂存后，Git 界面分别显示一项未暂存和一项已暂存更改](/forge/assets/guide/git-stage.webp)](/forge/assets/guide/git-stage.webp "打开高清截图")
+[![Forge 暂存后，Git 界面分别显示一项未暂存和一项已暂存更改](/assets/guide/git-stage.webp)](/assets/guide/git-stage.webp "打开高清截图")
 
 一次标准暂存操作：在 `F2` 中选择 **CHANGES** 下的文件，按 `Alt+A`；该文件移动到 **STAGED**，顶部计数随之变化。选择 **STAGED** 下的文件再按 `Alt+U`，则取消暂存。
 
@@ -146,7 +146,7 @@ Markdown 文件有两种模式：**Preview** 展示渲染后的内容，**Code**
 
 ## 9. 撰写并确认 Git Commit
 
-[![Forge Commit Composer，显示已暂存文件、Subject 和 Body](/forge/assets/guide/commit.webp)](/forge/assets/guide/commit.webp "打开高清截图")
+[![Forge Commit Composer，显示已暂存文件、Subject 和 Body](/assets/guide/commit.webp)](/assets/guide/commit.webp "打开高清截图")
 
 先暂存需要提交的改动，然后在 Git 界面按 `c` 打开 **Commit Composer**。弹窗会显示已暂存文件数量与清单，并将提交消息拆分为 Subject 和可选的 Body。
 
@@ -160,7 +160,7 @@ Markdown 文件有两种模式：**Preview** 展示渲染后的内容，**Code**
 
 ## 10. Commit History、文件历史与 Blame
 
-[![Forge Git 历史及选中的提交详情](/forge/assets/guide/git-history.webp)](/forge/assets/guide/git-history.webp "打开高清截图")
+[![Forge Git 历史及选中的提交详情](/assets/guide/git-history.webp)](/assets/guide/git-history.webp "打开高清截图")
 
 Git Sidebar 下方的 **HISTORY** 展示近期提交。选择某次提交，右侧可查看提交 Hash、标题、作者、时间和修改文件。按 `Enter` 可按层级展开该提交的文件记录，继续查看对应文件差异。
 
@@ -173,7 +173,7 @@ Git Sidebar 下方的 **HISTORY** 展示近期提交。选择某次提交，右�
 
 ## 11. 分支、Worktree 与远端同步
 
-[![Forge Branches 窗口展示当前分支及操作提示](/forge/assets/guide/branches.webp)](/forge/assets/guide/branches.webp "打开高清截图")
+[![Forge Branches 窗口展示当前分支及操作提示](/assets/guide/branches.webp)](/assets/guide/branches.webp "打开高清截图")
 
 在 Git 上下文中按 `Alt+B` 打开 **Branches**：列表中的 `*` 表示当前分支。根据界面底部实时提示，选择分支后可进行切换、创建、重命名和删除等操作；例如 Branches 窗口中有 `A` 创建、`r` 重命名、`X` 删除已合并分支、`D` 与 HEAD 对比。
 
@@ -185,7 +185,7 @@ Git Sidebar 下方的 **HISTORY** 展示近期提交。选择某次提交，右�
 
 ## 12. Stash 暂存工作现场
 
-[![Forge Stashes 管理界面及按键提示](/forge/assets/guide/stashes.webp)](/forge/assets/guide/stashes.webp "打开高清截图")
+[![Forge Stashes 管理界面及按键提示](/assets/guide/stashes.webp)](/assets/guide/stashes.webp "打开高清截图")
 
 当你要先处理其他分支而不准备提交当前工作区时，可以用 `Alt+Z` 打开 **Stashes**。`A` 保存当前工作；列表选中已有 Stash 后，`Enter` 查看 Diff，`a` Apply（应用但保留记录），`p` Pop（应用并移除），`X` Drop（丢弃记录）。部分场景可选择恢复 staged 状态，具体以弹窗当前提示为准。
 
@@ -193,7 +193,7 @@ Git Sidebar 下方的 **HISTORY** 展示近期提交。选择某次提交，右�
 
 ## 13. 内置代码编辑器
 
-[![Forge 内置编辑器，显示代码行号与可编辑区域](/forge/assets/guide/editor.webp)](/forge/assets/guide/editor.webp "打开高清截图")
+[![Forge 内置编辑器，显示代码行号与可编辑区域](/assets/guide/editor.webp)](/assets/guide/editor.webp "打开高清截图")
 
 在 Files 中选中可编辑文件后，按 `Ctrl+E` 进入编辑器。它提供基础文本编辑、插入与删除、光标移动、选择与复制、剪切、粘贴、撤销和重做，面向终端内的轻量修改，而不是完整替代 IDE。
 
@@ -211,7 +211,7 @@ Git Sidebar 下方的 **HISTORY** 展示近期提交。选择某次提交，右�
 
 ## 14. 内嵌 Terminal 与多标签
 
-[![Forge 嵌入式 Terminal，文件预览和 Shell 同屏显示](/forge/assets/guide/terminal.webp)](/forge/assets/guide/terminal.webp "打开高清截图")
+[![Forge 嵌入式 Terminal，文件预览和 Shell 同屏显示](/assets/guide/terminal.webp)](/assets/guide/terminal.webp "打开高清截图")
 
 `F8` 打开底部 Terminal，Shell 在 Forge 中运行。再次按 `F8` 隐藏 Terminal **不会结束 Shell 会话**；重新打开可继续之前的输出。支持最多 8 个本地 Shell 标签页，标签栏右侧按钮 `+`、`‹/›`、`□`、`?`、`−` 分别为新建、切换、最大化、帮助、隐藏。标签右侧 `×` 或鼠标中键可关闭对应会话。
 
@@ -231,17 +231,17 @@ Terminal 有焦点时，普通按键以及 `Esc` 通常先交给 Shell 或 Shell
 
 ## 15. 命令面板与功能发现
 
-[![Forge 命令面板，列出可搜索操作及快捷键](/forge/assets/guide/commands.webp)](/forge/assets/guide/commands.webp "打开高清截图")
+[![Forge 命令面板，列出可搜索操作及快捷键](/assets/guide/commands.webp)](/assets/guide/commands.webp "打开高清截图")
 
 不记得快捷键时按 `Ctrl+K` 打开 **Commands**，输入操作名进行过滤，`↑/↓` 选择，`Enter` 执行，`Esc` 取消。面板包含文件编辑、模糊文件搜索、内容搜索、文件操作和 Git 工具入口；界面还能显示当前筛选信息。
 
-[![Forge 内置 Help 帮助界面](/forge/assets/guide/help.webp)](/forge/assets/guide/help.webp "打开高清截图")
+[![Forge 内置 Help 帮助界面](/assets/guide/help.webp)](/assets/guide/help.webp "打开高清截图")
 
 `F5` 打开系统帮助，适合第一次了解功能分区；`F4` 打开可查看和修改的完整快捷键列表。命令面板、帮助页与当前焦点的 Footer 提示各有分工：**查能力用命令面板，查用法用帮助，查实时按键看 Footer。**
 
 ## 16. Settings、主题与快捷键
 
-[![Forge 设置面板，显示外观、文件树和 Diff 配置](/forge/assets/guide/settings.webp)](/forge/assets/guide/settings.webp "打开高清截图")
+[![Forge 设置面板，显示外观、文件树和 Diff 配置](/assets/guide/settings.webp)](/assets/guide/settings.webp "打开高清截图")
 
 按 `F9` 或点击 Activity Bar 底部齿轮进入设置。`↑/↓` 选择配置项，`Enter` / `Space` 切换或选择，`Esc` 返回。当前设置界面包含：
 
@@ -256,13 +256,13 @@ Terminal 有焦点时，普通按键以及 `Esc` 通常先交给 Shell 或 Shell
 
 配置会保存并在重启后沿用。`Code auto wrap` 与水平滚动会相互影响；如果需要逐字符对照长行，可暂时关闭自动换行。
 
-[![Forge 快捷键管理器：按功能组筛选并查看绑定](/forge/assets/guide/shortcuts.webp)](/forge/assets/guide/shortcuts.webp "打开高清截图")
+[![Forge 快捷键管理器：按功能组筛选并查看绑定](/assets/guide/shortcuts.webp)](/assets/guide/shortcuts.webp "打开高清截图")
 
 在 **Keyboard shortcuts** 中可以按 Files、Git、Editor、Navigation 分类过滤，找到具体动作后进行重绑；固定绑定会以 fixed 等标签标识，不能任意覆盖。已调整的键位以 `F4` 中的当前绑定为准。Forge 为降低终端输入误判，已经减少危险的单字符全局快捷键，不要依赖早期指南中的旧映射。
 
 ## 17. 鼠标、Hover 与窄屏布局
 
-[![Forge Activity Bar 的 Hover 说明与快捷键提示](/forge/assets/guide/hover.webp)](/forge/assets/guide/hover.webp "打开高清截图")
+[![Forge Activity Bar 的 Hover 说明与快捷键提示](/assets/guide/hover.webp)](/assets/guide/hover.webp "打开高清截图")
 
 鼠标移到 Activity Bar 图标、Terminal 标签栏按钮和 Git Diff 标题栏的 `[Open file]` 时，会弹出统一样式的说明和快捷键提示。**Hover 只显示提示，不会激活面板**；只有明确点击才执行动作。点击和 Hover 复用相同的控件命中区域。
 

@@ -5,18 +5,18 @@ export function getStaticPaths() {
   return pages.map(page => ({ params: { slug: page.slug }, props: { page } }));
 }
 const { page } = Astro.props;
-const image = '/forge/assets/guide/' + page.image;
+const image = '/assets/guide/' + page.image;
 ---
 <Base title={page.title} description={page.description} lang="en" path={'/en/' + page.slug + '/'} hasTranslation={false}>
   <main id="main" class="seo-article shell">
-    <nav aria-label="Breadcrumb"><a href="/forge/en/">Forge TUI</a> / {page.slug.startsWith('compare/') ? 'Comparisons' : page.slug.startsWith('features/') ? 'Features' : 'Use cases'}</nav>
+    <nav aria-label="Breadcrumb"><a href="/en/">Forge TUI</a> / {page.slug.startsWith('compare/') ? 'Comparisons' : page.slug.startsWith('features/') ? 'Features' : 'Use cases'}</nav>
     <h1>{page.title.replace(' | Forge TUI','')}</h1>
     <p class="lead">{page.lead}</p>
     <figure><a href={image}><img src={image} alt={page.alt} decoding="async" /></a><figcaption>{page.alt} — real Forge workspace screenshot.</figcaption></figure>
     {page.sections.map(([heading, content]) => <section><h2>{heading}</h2><p>{content}</p></section>)}
     {page.source && <p>Reference: <a href={page.source}>{page.sourceLabel}</a>.</p>}
-    <section><h2>Get started</h2><p><a href="/forge/en/guide/">Read the practical guide</a> · <a href="https://github.com/creature-studio/forge/releases/latest">Download Forge</a> · <a href="https://github.com/creature-studio/forge">Source code</a></p></section>
-    <section><h2>Explore related workflows</h2><ul>{pages.filter(other => other.slug !== page.slug).map(other => <li><a href={'/forge/en/' + other.slug + '/'}>{other.title}</a></li>)}</ul></section>
+    <section><h2>Get started</h2><p><a href="/en/guide/">Read the practical guide</a> · <a href="https://github.com/creature-studio/forge/releases/latest">Download Forge</a> · <a href="https://github.com/creature-studio/forge">Source code</a></p></section>
+    <section><h2>Explore related workflows</h2><ul>{pages.filter(other => other.slug !== page.slug).map(other => <li><a href={'/en/' + other.slug + '/'}>{other.title}</a></li>)}</ul></section>
   </main>
 </Base>
 <style>

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://creature-studio.github.io/forge/sitemap-index.xml
+Sitemap: https://forge.runs-on.dev/sitemap-index.xml

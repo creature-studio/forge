@@ -1,7 +1,7 @@
 import { copyFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-// Google Search Console has an existing /forge/sitemap.xml submission.
+// Google Search Console has an existing /sitemap.xml submission.
 // Astro's sitemap integration emits sitemap-index.xml instead. Preserve
 // the original entrypoint as an identical, current sitemap index rather than
 // maintaining an independent hand-written list of URLs.
@@ -12,4 +12,4 @@ if (!xml.includes('<sitemapindex') || !xml.includes('<loc>')) {
   throw new Error('Astro sitemap index is missing or malformed; refusing to publish a stale alias');
 }
 copyFileSync(current, legacy);
-console.log('Generated /forge/sitemap.xml compatibility alias from sitemap-index.xml');
+console.log('Generated /sitemap.xml compatibility alias from sitemap-index.xml');

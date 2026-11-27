@@ -4,11 +4,11 @@
 
 Forge TUI is an open-source terminal file manager, Git client and integrated terminal built in Rust, with mouse and keyboard control on Linux, macOS and Windows. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
 
-[Website](https://creature-studio.github.io/forge/en/) · [Practical guide](https://creature-studio.github.io/forge/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://creature-studio.github.io/forge/) · [Issues](https://github.com/creature-studio/forge/issues)
+[Website](https://forge.runs-on.dev/en/) · [Practical guide](https://forge.runs-on.dev/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://forge.runs-on.dev/) · [Issues](https://github.com/creature-studio/forge/issues)
 
 ![Forge TUI live terminal demo: browse files, fuzzy search, review Git diffs, stage changes, and run tests in the integrated terminal](docs/assets/forge-tour.gif)
 
-*29-second recording of a real Forge terminal session: browse, search, review a diff, stage a change, and run tests. [View full-resolution screenshots](https://creature-studio.github.io/forge/en/#features).*
+*29-second recording of a real Forge terminal session: browse, search, review a diff, stage a change, and run tests. [View full-resolution screenshots](https://forge.runs-on.dev/en/#features).*
 
 ## Why Forge?
 
@@ -28,13 +28,13 @@ Forge is intentionally **both** a file workspace and a Git interface. Tools such
 **Linux** (x86_64 / aarch64, glibc), **macOS** (Intel / Apple Silicon), and **Windows x64** have prebuilt release targets. A Rust toolchain is not needed once the matching release is published.
 
 ```sh
-curl -fsSL https://creature-studio.github.io/forge/install.sh | sh
+curl -fsSL https://forge.runs-on.dev/install.sh | sh
 ```
 
 **Windows 10/11 x64** (PowerShell or Windows Terminal):
 
 ```powershell
-irm https://creature-studio.github.io/forge/install.txt | iex
+irm https://forge.runs-on.dev/install.txt | iex
 ```
 
 The Windows installer verifies the ZIP checksum and installs `forge.exe` to `%LOCALAPPDATA%\Programs\Forge\bin`, adding it to your user PATH. Open a new terminal and run `forge` from a project directory. Windows upgrades use the same installer (close Forge before reinstalling); `forge update` remains Linux/macOS-only. Requires Git for Git actions. To inspect the installer, see [install.ps1](install.ps1).
@@ -57,7 +57,7 @@ Installation options: `FORGE_INSTALL_DIR=/your/bin` changes the destination and 
 
 ## See it in action
 
-Every image below was captured from a **running Forge TUI**, using an isolated demo Git repository. The [illustrated Chinese guide](https://creature-studio.github.io/forge/guide/) now includes 19 updated screenshots and step-by-step workflows.
+Every image below was captured from a **running Forge TUI**, using an isolated demo Git repository. The [illustrated Chinese guide](https://forge.runs-on.dev/guide/) now includes 19 updated screenshots and step-by-step workflows.
 
 | Files & source preview | Full Git diff |
 | --- | --- |
@@ -111,9 +111,9 @@ The executable is produced at `target/release/forge`.
 
 ## Docs & community
 
-- [中文操作文档](https://creature-studio.github.io/forge/guide/)
-- [发布说明 / Release notes](https://creature-studio.github.io/forge/releases/)
-- [Practical guide: file browsing, Git staging, comparison and limits](https://creature-studio.github.io/forge/en/guide/)
+- [中文操作文档](https://forge.runs-on.dev/guide/)
+- [发布说明 / Release notes](https://forge.runs-on.dev/releases/)
+- [Practical guide: file browsing, Git staging, comparison and limits](https://forge.runs-on.dev/en/guide/)
 - [Detailed usage and developer reference](docs/usage-reference.md)
 - [Releases and self-update](docs/releasing.md)
 - [Themes](docs/themes.md)

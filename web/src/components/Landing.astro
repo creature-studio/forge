@@ -17,9 +17,9 @@ interface Props {
   english?: boolean;
 }
 const { english = false } = Astro.props;
-const base = english ? '/forge/en/' : '/forge/';
-const installCmd = 'curl -fsSL https://creature-studio.github.io/forge/install.sh | sh';
-const windowsInstallCmd = 'irm https://creature-studio.github.io/forge/install.txt | iex';
+const base = english ? '/en/' : '/';
+const installCmd = 'curl -fsSL https://forge.runs-on.dev/install.sh | sh';
+const windowsInstallCmd = 'irm https://forge.runs-on.dev/install.txt | iex';
 
 const copy = english
   ? {
@@ -392,9 +392,9 @@ const copy = english
       </div>
 
       <figure class="modality-visual">
-        <a class="modality-frame" href="/forge/assets/guide/hover.webp" target="_blank" rel="noopener" aria-label={copy.mouseCaption}>
+        <a class="modality-frame" href="/assets/guide/hover.webp" target="_blank" rel="noopener" aria-label={copy.mouseCaption}>
           <img
-            src="/forge/assets/guide/hover.webp"
+            src="/assets/guide/hover.webp"
             width="1366"
             height="837"
             loading="lazy"
