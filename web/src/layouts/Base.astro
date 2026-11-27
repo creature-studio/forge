@@ -6,13 +6,14 @@ interface Props {
   path?: string;
   kind?: 'home' | 'article' | 'collection';
   hasTranslation?: boolean;
+  articleMeta?: { published: string; author: string; headline: string };
 }
 import '../styles/main.css';
 import seoPages from '../data/seo-pages.json';
 import { FORGE_VERSION, FORGE_TAG } from '../utils/version';
 import { Terminal, Download, Menu, ArrowUpRight } from '@lucide/astro';
 
-const { title, description, lang = 'zh-CN', path = '/', kind = 'article', hasTranslation = true } = Astro.props;
+const { title, description, lang = 'zh-CN', path = '/', kind = 'article', hasTranslation = true, articleMeta } = Astro.props;
 const english = lang === 'en';
 const root = '/';
 const canonical = `https://forge.runs-on.dev${root}${path.replace(/^\//, '')}`;
@@ -41,7 +42,8 @@ const structured = kind === 'home' ? {
 } : {
   '@context': 'https://schema.org',
   '@type': kind === 'collection' ? 'CollectionPage' : 'TechArticle',
-  ...(kind === 'collection' ? { name: title } : { headline: title }),
+  ...(kind === 'collection' ? { name: title } : { headline: articleMeta?.headline ?? title }),
+  ...(articleMeta ? { datePublished: articleMeta.published, author: { '@type': 'Organization', name: articleMeta.author }, mainEntityOfPage: canonical } : {}),
   description,
   url: canonical,
   publisher: {
@@ -55,7 +57,7 @@ const zhRoot = root;
 const enRoot = `${root}en/`;
 const translationPath = english ? (path.replace(/^\/en\//, '/') || '/') : ('/en' + path);
 const translatedUrl = 'https://forge.runs-on.dev' + (translationPath.startsWith('/') ? translationPath : '/' + translationPath);
-const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forge.runs-on.dev', '') : zhRoot;
+const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forge.runs-on.dev', '') : articleMeta ? '/blog/' : zhRoot;
 ---
 <!doctype html>
 <html lang={lang}>
@@ -71,7 +73,7 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forg
     <link rel="alternate" hreflang={lang} href={canonical} />
     {hasTranslation && <link rel="alternate" hreflang={english ? 'zh-CN' : 'en'} href={translatedUrl} />}
     {kind === 'home' && <link rel="alternate" hreflang="x-default" href="https://forge.runs-on.dev/en/" />}
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={articleMeta ? "article" : "website"} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:url" content={canonical} />

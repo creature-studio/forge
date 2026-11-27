@@ -5,6 +5,7 @@ import { ArrowUpRight } from '@lucide/astro';
 interface Props { lang: 'en' | 'zh-CN' }
 const { lang } = Astro.props;
 const en = lang === 'en';
+const sortedPosts = [...posts].sort((a, b) => b.published.localeCompare(a.published));
 ---
 <Base title={en ? 'Engineering Blog | Forge TUI' : '技术博客 | Forge TUI'} description={en ? 'Engineering notes from Forge TUI: Rust terminal interfaces, Git workflows, architecture and practical development.' : 'Forge TUI 技术博客：Rust 终端界面、Git 工作流、架构设计与实际开发经验。'} lang={lang} path={en ? '/en/blog/' : '/blog/'} kind="collection">
   <main id="main" class="shell blog-page">
@@ -14,9 +15,10 @@ const en = lang === 'en';
       <p>{en ? 'Implementation notes, design decisions and lessons from building Forge. Grounded in real source code and reproducible examples.' : '记录 Forge 的实现原理、设计决策与开发经验，以实际源码和可复现的示例为依据。'}</p>
     </header>
     <section aria-label={en ? 'Articles' : '文章列表'} class="blog-list">
-      {posts.map(post => (
+      {sortedPosts.map(post => (
         <article class="blog-entry">
           <div class="blog-meta">
+            <time datetime={post.published}>{post.published}</time>
             {post.tags.map(tag => <span>{tag}</span>)}
             <span>{en ? 'English' : '英文原文'}</span>
           </div>

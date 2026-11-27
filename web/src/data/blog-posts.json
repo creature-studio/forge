@@ -6,6 +6,15 @@
     "titleZh": "Git TUI 如何追赶文件变化：有界文件系统事件队列",
     "summary": "How Forge handles bursts of filesystem notifications, explicit queue overflow, Git worktree metadata, and authoritative state refresh. Includes source references and a focused test command.",
     "summaryZh": "从实际源码出发，介绍 Forge 如何处理突发文件变更、有界事件队列溢出、Git worktree 元数据及状态刷新，并提供源码引用与测试复现命令。",
-    "tags": ["Rust", "Git", "Architecture"]
+    "tags": [
+      "Rust",
+      "Git",
+      "Architecture"
+    ],
+    "slug": "git-refresh",
+    "published": "2026-11-27",
+    "author": "Creature Studio",
+    "seoTitle": "Bounded filesystem events in a Rust Git TUI | Forge TUI",
+    "description": "A source-backed engineering note on keeping a Git TUI responsive with bounded watcher queues, overflow invalidation and linked worktree metadata."
   }
 ]

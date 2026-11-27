@@ -24,8 +24,11 @@ PAGES = {
     "en/releases/index.html": {"lang": "en", "canonical": BASE + "en/releases/"},
     "blog/index.html": {"lang": "zh-CN", "canonical": BASE + "blog/"},
     "en/blog/index.html": {"lang": "en", "canonical": BASE + "en/blog/"},
-    "en/engineering/git-refresh/index.html": {"lang": "en", "canonical": BASE + "en/engineering/git-refresh/"},
 }
+
+for post in json.loads((ROOT / "web/src/data/blog-posts.json").read_text()):
+    slug = post["url"].lstrip("/")
+    PAGES[slug + "index.html"] = {"lang": post["lang"], "canonical": BASE + slug}
 
 for entry in json.loads((ROOT / "web/src/data/seo-pages.json").read_text()):
     slug = "en/" + entry["slug"] + "/"

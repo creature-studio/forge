@@ -1,0 +1,44 @@
+---
+import Base from '../layouts/Base.astro';
+import { ArrowLeft } from '@lucide/astro';
+interface Props {
+  post: { title: string; seoTitle: string; description: string; url: string; published: string; author: string; tags: string[]; lang: string };
+  headings: { depth: number; slug: string; text: string }[];
+}
+const { post, headings } = Astro.props;
+const sections = headings.filter(h => h.depth === 2 || h.depth === 3);
+---
+<Base title={post.seoTitle} description={post.description} lang="en" path={post.url} hasTranslation={false} articleMeta={{published: post.published, author: post.author, headline: post.title}}>
+  <main id="main" class="shell article-page">
+    <nav class="article-back" aria-label="Breadcrumb"><a href="/en/blog/"><ArrowLeft size={15} aria-hidden="true" /> All articles</a></nav>
+    <header class="article-heading">
+      <p class="article-meta"><time datetime={post.published}>{post.published}</time><span>{post.author}</span>{post.tags.map(tag => <span>{tag}</span>)}</p>
+      <h1>{post.title}</h1>
+      <p class="article-summary">{post.description}</p>
+    </header>
+    <div class="article-grid">
+      <article class="guide-body guide-markdown article-body"><slot /></article>
+      {sections.length > 0 && <aside class="article-toc"><nav aria-label="On this page"><strong>On this page</strong>{sections.map(h => <a href={`#${h.slug}`} class:list={[h.depth === 3 && 'nested']}>{h.text}</a>)}</nav></aside>}
+    </div>
+    <div class="article-end"><a href="/en/blog/"><ArrowLeft size={15} aria-hidden="true" /> Back to blog</a></div>
+  </main>
+</Base>
+<style>
+  .article-page { max-width: 1120px; padding: 52px 0 88px; }
+  .article-back a, .article-end a { display: inline-flex; align-items: center; gap: 8px; color: var(--accent); font-size: 14px; }
+  .article-heading { max-width: 880px; margin: 30px 0 40px; padding-bottom: 25px; border-bottom: 1px solid var(--border-mid); }
+  .article-heading h1 { font-size: clamp(30px, 4.5vw, 46px); line-height: 1.22; margin: 14px 0; }
+  .article-meta { display: flex; gap: 10px 18px; flex-wrap: wrap; font-size: 12px; color: var(--ink-secondary); }
+  .article-summary { color: var(--ink-secondary); line-height: 1.7; }
+  .article-grid { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 52px; align-items: start; }
+  .article-body { min-width: 0; max-width: 76ch; line-height: 1.8; }
+  .article-body :global(h2), .article-body :global(h3) { scroll-margin-top: 90px; }
+  .article-body :global(pre) { max-width: 100%; overflow-x: auto; padding: 16px; border: 1px solid var(--border-mid); border-radius: 6px; }
+  .article-toc { position: sticky; top: 90px; }
+  .article-toc nav { display: grid; gap: 12px; font-size: 13px; line-height: 1.55; border-left: 1px solid var(--border-mid); padding-left: 18px; }
+  .article-toc a { color: var(--ink-secondary); }
+  .article-toc a:hover { color: var(--accent); }
+  .article-toc .nested { padding-left: 12px; }
+  .article-end { margin-top: 40px; border-top: 1px solid var(--border-mid); padding-top: 24px; }
+  @media(max-width: 850px) { .article-grid { display: flex; flex-direction: column; gap: 24px; } .article-toc { position: static; order: -1; } .article-page { padding: 32px 0 60px; } }
+</style>

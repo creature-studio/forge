@@ -1,0 +1,18 @@
+---
+import BlogArticle from '../../../components/BlogArticle.astro';
+import posts from '../../../data/blog-posts.json';
+import type { MarkdownInstance } from 'astro';
+export function getStaticPaths() {
+  return posts.filter(post => post.lang === 'en').map(post => ({
+    params: { slug: post.slug }, props: { post }
+  }));
+}
+const { post } = Astro.props;
+const articles = import.meta.glob<MarkdownInstance<Record<string, unknown>>>('../../../content/blog/*.md', { eager: true });
+const article = articles[`../../../content/blog/${post.slug}.md`];
+if (!article) throw new Error(`Missing article: ${post.slug}`);
+const { Content } = article;
+---
+<BlogArticle post={post} headings={article.getHeadings()}>
+  <Content />
+</BlogArticle>
