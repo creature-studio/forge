@@ -71,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="forge-stage-select-") as temp:
         while time.monotonic() < deadline and not selected_file("CHANGES"):
             time.sleep(.15)
         assert selected_file("CHANGES"), "Could not select CHANGES/a.txt\n"+"\n".join(screen())
-        send("s")
+        send("M-a")
         deadline = time.monotonic() + 9
         while time.monotonic() < deadline:
             if "a.txt" in git("diff", "--cached", "--name-only") and selected_file("STAGED"):
@@ -80,9 +80,9 @@ with tempfile.TemporaryDirectory(prefix="forge-stage-select-") as temp:
         assert selected_file("STAGED"), (
             "Stage succeeded but selected file was lost when it moved to STAGED:\n"
             + "\n".join(screen()))
-        print("PASS: s moves a.txt to STAGED and keeps the same file selected")
+        print("PASS: Alt+a moves a.txt to STAGED and keeps the same file selected")
 
-        send("u")
+        send("M-u")
         deadline = time.monotonic() + 9
         while time.monotonic() < deadline:
             if "a.txt" not in git("diff", "--cached", "--name-only") and selected_file("CHANGES"):
@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="forge-stage-select-") as temp:
             "Unstage succeeded but did not return focus to CHANGES/a.txt:\n"
             + "\n".join(screen()))
         assert git("diff", "--cached", "--name-only") == "b.txt", "Other staged file changed"
-        print("PASS: u restores a.txt to CHANGES without touching other staged files")
+        print("PASS: Alt+u restores a.txt to CHANGES without touching other staged files")
         send("q")
     finally:
         sp.run(["tmux", "-L", sock, "kill-server"], capture_output=True)

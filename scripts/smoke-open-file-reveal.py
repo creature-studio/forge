@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix='forge-open-reveal-') as folder:
         narrow = snapshot()
         assert 'target.py' in narrow, narrow
         assert 'z_source' in narrow and 'leaf' in narrow and ('deep' in narrow or '…' in narrow), narrow
-        assert 'F1  Files' in narrow or 'F1 Files' in narrow, narrow
+        assert 'EXPLORER' in narrow, narrow
         print('PASS: narrow viewport retains Files tree focus and expanded ancestors')
         send('q')
     finally:

@@ -50,12 +50,14 @@ with tempfile.TemporaryDirectory(prefix="forge-compact-ui-") as d:
         time.sleep(.35)
         return tm("capture-pane", "-pt", "ui")
     def left():
-        return "\n".join(line[:49] for line in snap().splitlines())
+        return "\n".join(line[:72] for line in snap().splitlines())
 
     try:
         tm("-f", "/dev/null", "new-session", "-d", "-s", "ui", "-x", "145",
            "-y", "40", "-c", str(root), str(BINARY))
         time.sleep(1.3)
+        for _ in range(14):
+            send("C-M-Right")
         send("F2")
         send("Enter")  # expand manager (CHANGES)
         send("j")
@@ -65,7 +67,7 @@ with tempfile.TemporaryDirectory(prefix="forge-compact-ui-") as d:
         assert "frontend / src / views" in changes, "changes chain was not merged"
         assert "server / zenk-admin / src" in changes or "server" in changes
 
-        send("G")
+        send("M-g")
         send("Tab") # Return focus from commit detail preview to History tree.
         send("Enter")  # expand selected commit's files
         time.sleep(.9)
@@ -105,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="forge-compact-ui-") as d:
 
 
         # Settings toggles immediately and persists across restart.
-        send(",")
+        send("F9")
         settings = snap()
         assert "Compact Folders" in settings
         send("Down")
@@ -116,7 +118,7 @@ with tempfile.TemporaryDirectory(prefix="forge-compact-ui-") as d:
         send("Escape")
         uncompact = left()
         assert "frontend / src / views" not in uncompact, "compact mode did not disable"
-        send(",")
+        send("F9")
         send("Down")
         send("Space")
         send("Escape")

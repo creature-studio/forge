@@ -63,18 +63,19 @@ with tempfile.TemporaryDirectory(prefix="forge-preview-selection-") as d:
             event(0, x, y)
             event(32, x + min(len(text), 8), y)
             event(0, x + min(len(text), 8), y, up=True)
-            if "Preview selection ready" in "\n".join(screen()):
+            if "Esc Clear selection" in "\n".join(screen()):
                 break
         else:
             raise AssertionError("Preview did not accept mouse drag:\n" + "\n".join(screen()))
+        # Verify clipboard contents instead of a transient footer notification.
+        tm("set-buffer", "-b", "forge-before-copy", "sentinel")
         send("C-c")
-        updated = "\n".join(screen())
-        assert "characters" in updated and (
-            "clipboard" in updated or "OSC 52" in updated
-        ), updated
+        copied = tm("show-buffer")
+        assert copied.startswith(text[:min(len(text), 8)]), (copied, text)
     try:
         tm("-f", "/dev/null", "new-session", "-d", "-s", "ui",
            "-x", "114", "-y", "30", "-c", str(root), str(BINARY))
+        tm("set-option", "-g", "set-clipboard", "on")
         wait_for("README.md")
         send("Home")
         wait_for("AlphaPreview")
@@ -97,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix="forge-preview-selection-") as d:
         select("CodeSelection")
         print("PASS: Rust code preview mouse drag + Ctrl-C")
         send("Escape")
-        assert "Preview selection cleared" in "\n".join(screen())
+        assert "Esc Clear selection" not in "\n".join(screen())
         send("F2")
         wait_for("CHANGES")
         rows = wait_for("sample.rs")
