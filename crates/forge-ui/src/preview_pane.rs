@@ -231,6 +231,10 @@ impl TextRowsCache {
         self.max_code_columns
     }
 
+    pub fn wrap_enabled(&self) -> bool {
+        self.wrap_enabled
+    }
+
     pub fn width(&self) -> u16 {
         self.width
     }

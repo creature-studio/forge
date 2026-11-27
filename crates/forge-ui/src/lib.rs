@@ -46,9 +46,9 @@ pub use preview_pane::{
 pub use scrollbar::{HorizontalScrollbar, ScrollbarDrag, VerticalScrollbar};
 pub use staging::{
     build_scm_rows, build_scm_rows_with_compact, compact_scm_rows, draw_commit_modal,
-    draw_git_strip, draw_scm_sidebar, draw_staging, expand_ancestors_for_path, find_scm_parent_row,
-    scm_entry, scm_index_at, scm_jump_to_column, staging_index_at, HistoryView, ScmRow,
-    StagingColumn, StagingLayout, StagingState,
+    draw_git_strip, draw_scm_sidebar, draw_scm_sidebar_rows, draw_staging,
+    expand_ancestors_for_path, find_scm_parent_row, scm_entry, scm_index_at, scm_jump_to_column,
+    staging_index_at, HistoryView, ScmRow, StagingColumn, StagingLayout, StagingState,
 };
 pub use sticky::index_at as sticky_index_at;
 pub use style::rgb as to_color;

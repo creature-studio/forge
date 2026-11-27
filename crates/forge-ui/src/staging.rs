@@ -628,12 +628,6 @@ pub fn draw_scm_sidebar(
     theme: &Theme,
     state: &mut StagingState<'_>,
 ) -> StagingLayout {
-    if area.width == 0 || area.height == 0 {
-        return StagingLayout::default();
-    }
-
-    let body = area;
-
     let rows = build_scm_rows_with_compact(
         state.unstaged,
         state.staged,
@@ -642,6 +636,21 @@ pub fn draw_scm_sidebar(
         state.history,
         state.compact_folders,
     );
+    draw_scm_sidebar_rows(frame, area, theme, state, &rows)
+}
+
+/// Draw the owner's already-computed projection; no tree reconstruction.
+pub fn draw_scm_sidebar_rows(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    theme: &Theme,
+    state: &mut StagingState<'_>,
+    rows: &[ScmRow],
+) -> StagingLayout {
+    if area.width == 0 || area.height == 0 {
+        return StagingLayout::default();
+    }
+    let body = area;
     let count = rows.len();
     let selected = state.selected.min(count.saturating_sub(1));
 
@@ -653,7 +662,7 @@ pub fn draw_scm_sidebar(
         body.height as usize,
         state.sticky_scroll,
         state.follow_selection,
-        |i| find_scm_parent_row(&rows, i),
+        |i| find_scm_parent_row(rows, i),
     );
     *state.sticky_headers = viewport.pinned.clone();
     let focused = state.focused;
