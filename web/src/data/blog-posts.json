@@ -1,5 +1,24 @@
 [
   {
+    "url": "/en/engineering/terminal-unicode-wrapping/",
+    "lang": "en",
+    "title": "Why wide Unicode characters can escape a terminal pane",
+    "titleZh": "为什么终端双宽字符会越过面板边界",
+    "summary": "A real Forge rendering regression: CJK cell widths, styled grapheme reflow, visual rows and PTY smoke tests.",
+    "summaryZh": "基于 Forge 实际渲染故障，说明中文双宽字符、富文本安全换行、显示行与源文件行映射，以及真实 PTY 回归测试。",
+    "tags": [
+      "Rust",
+      "Ratatui",
+      "Unicode",
+      "Terminal"
+    ],
+    "slug": "terminal-unicode-wrapping",
+    "published": "2026-11-27",
+    "author": "Creature Studio",
+    "seoTitle": "Fixing wide Unicode character wrapping in a Rust TUI | Forge TUI",
+    "description": "A source-backed explanation of a CJK rendering boundary bug in Forge, safe grapheme reflow, visual-row mapping and real-PTY regression tests."
+  },
+  {
     "url": "/en/engineering/git-refresh/",
     "lang": "en",
     "title": "When a Git TUI must catch up: bounded filesystem events",
