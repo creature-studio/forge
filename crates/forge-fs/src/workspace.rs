@@ -93,6 +93,21 @@ pub enum FileOperation {
         destination: PathBuf,
     },
     Delete(Vec<PathBuf>),
+    Trash(Vec<PathBuf>),
+    Paste {
+        paths: Vec<PathBuf>,
+        destination: PathBuf,
+        copy: bool,
+        conflict: ConflictPolicy,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConflictPolicy {
+    Reject,
+    Skip,
+    KeepBoth,
+    Replace,
 }
 
 /// Validate the workspace boundary using resolved parent directories, without
@@ -169,6 +184,34 @@ pub fn operate(root: &Path, operation: FileOperation) -> Result<String> {
             fs::create_dir(&path)?;
             Ok(format!("Created {}", path.display()))
         }
+        FileOperation::Trash(paths) => {
+            let paths = unique_roots(&paths)
+                .iter()
+                .map(|p| checked_path(root, p))
+                .collect::<Result<Vec<_>>>()?;
+            for path in &paths {
+                fs::symlink_metadata(path)?;
+            }
+            for (index, path) in paths.iter().enumerate() {
+                if let Err(error) = trash::delete(path) {
+                    return Err(batch_failure(
+                        "Trash",
+                        &paths,
+                        index,
+                        path,
+                        &error,
+                        "No permanent-delete fallback was used.",
+                    ));
+                }
+            }
+            Ok(format!("Moved {} items to trash", paths.len()))
+        }
+        FileOperation::Paste {
+            paths,
+            destination,
+            copy,
+            conflict,
+        } => paste_many(root, &paths, &destination, copy, conflict),
         FileOperation::Delete(paths) => {
             let paths = unique_roots(&paths);
             let paths = paths
@@ -265,6 +308,140 @@ pub fn transfer_many(
         if copy { "Copied" } else { "Moved" },
         pairs.len()
     ))
+}
+
+/// Paste is explicitly scoped to the current workspace. Conflicts never
+/// silently overwrite; directory replacement is intentionally forbidden.
+pub fn paste_many(
+    root: &Path,
+    paths: &[PathBuf],
+    destination: &Path,
+    copy: bool,
+    conflict: ConflictPolicy,
+) -> Result<String> {
+    let root = root.canonicalize()?;
+    let destination = destination.canonicalize()?;
+    if !destination.is_dir() || !destination.starts_with(&root) {
+        bail!("destination must be a directory inside the workspace");
+    }
+    let sources = unique_roots(paths)
+        .iter()
+        .map(|p| checked_path(&root, p))
+        .collect::<Result<Vec<_>>>()?;
+    let mut pairs = Vec::new();
+    let mut reserved = HashSet::new();
+    let mut skipped = 0;
+    for from in &sources {
+        let meta = fs::symlink_metadata(from)?;
+        let mut to = checked_path(
+            &root,
+            &destination.join(from.file_name().context("missing filename")?),
+        )?;
+        if destination.starts_with(from) {
+            bail!("cannot paste a directory into itself");
+        }
+        if !copy && from == &to {
+            skipped += 1;
+            continue;
+        }
+        let mut replace = false;
+        if exists(&to) || reserved.contains(&to) {
+            match conflict {
+                ConflictPolicy::Reject => bail!("destination already exists: {}", to.display()),
+                ConflictPolicy::Skip => {
+                    skipped += 1;
+                    continue;
+                }
+                ConflictPolicy::KeepBoth => {
+                    let stem = from.file_stem().context("missing filename")?;
+                    let ext = if meta.is_dir() {
+                        None
+                    } else {
+                        from.extension()
+                    };
+                    let stem = if meta.is_dir() {
+                        from.file_name().unwrap()
+                    } else {
+                        stem
+                    };
+                    for number in 1.. {
+                        let mut name = stem.to_os_string();
+                        name.push(format!(" ({number})"));
+                        if let Some(ext) = ext {
+                            name.push(".");
+                            name.push(ext);
+                        }
+                        let candidate = destination.join(name);
+                        if !exists(&candidate) && !reserved.contains(&candidate) {
+                            to = candidate;
+                            break;
+                        }
+                    }
+                }
+                ConflictPolicy::Replace => {
+                    if reserved.contains(&to)
+                        || sources.contains(&to)
+                        || meta.is_dir()
+                        || !meta.is_file()
+                        || !fs::symlink_metadata(&to)?.file_type().is_file()
+                    {
+                        bail!("replace supports distinct regular files only; choose Keep both or Skip");
+                    }
+                    replace = true;
+                }
+            }
+        }
+        reserved.insert(to.clone());
+        pairs.push((from.clone(), to, replace));
+    }
+    let attempted = pairs.iter().map(|(p, _, _)| p.clone()).collect::<Vec<_>>();
+    for (index, (from, to, replace)) in pairs.iter().enumerate() {
+        let result = if *replace {
+            replace_file(from, to, copy)
+        } else {
+            transfer(from, to, copy)
+        };
+        if let Err(error) = result {
+            return Err(batch_failure(
+                "Paste",
+                &attempted,
+                index,
+                from,
+                &error,
+                "Earlier items remain changed; no automatic batch rollback.",
+            ));
+        }
+    }
+    Ok(format!(
+        "{} {} items · {} skipped",
+        if copy { "Copied" } else { "Moved" },
+        pairs.len(),
+        skipped
+    ))
+}
+
+fn replace_file(from: &Path, to: &Path, copy: bool) -> Result<()> {
+    // Preserve the old file in a private sibling directory until publication
+    // succeeds. On failure never delete a racing destination.
+    if !fs::symlink_metadata(to)?.file_type().is_file() {
+        bail!("destination changed type");
+    }
+    let backup = tempfile::Builder::new()
+        .prefix(".forge-replace-")
+        .tempdir_in(to.parent().context("missing destination parent")?)?;
+    let old = backup.path().join("original");
+    fs::rename(to, &old)?;
+    if let Err(error) = transfer(from, to, copy) {
+        if !exists(to) && fs::rename(&old, to).is_ok() {
+            return Err(error);
+        }
+        let retained = backup.keep();
+        bail!(
+            "{error}; original retained at {}",
+            retained.join("original").display()
+        );
+    }
+    Ok(())
 }
 
 /// Keep the fact of partial execution visible to callers. A failure cannot
@@ -706,5 +883,108 @@ mod tests {
             .is_symlink());
         operate(root, FileOperation::Delete(vec![root.join("escape")])).unwrap();
         assert!(outside.path().exists());
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+
+    #[test]
+    fn paste_conflicts_skip_keep_replace_and_reject() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = root.join("a.txt");
+        let dest = root.join("dest");
+        fs::create_dir(&dest).unwrap();
+        fs::write(&source, "new").unwrap();
+        fs::write(dest.join("a.txt"), "old").unwrap();
+        assert!(paste_many(root, &[source.clone()], &dest, true, ConflictPolicy::Reject).is_err());
+        assert!(
+            paste_many(root, &[source.clone()], &dest, true, ConflictPolicy::Skip)
+                .unwrap()
+                .contains("1 skipped")
+        );
+        assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "old");
+        paste_many(
+            root,
+            &[source.clone()],
+            &dest,
+            true,
+            ConflictPolicy::KeepBoth,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(dest.join("a (1).txt")).unwrap(), "new");
+        paste_many(
+            root,
+            &[source.clone()],
+            &dest,
+            false,
+            ConflictPolicy::Replace,
+        )
+        .unwrap();
+        assert!(!source.exists());
+        assert_eq!(fs::read_to_string(dest.join("a.txt")).unwrap(), "new");
+        assert!(!fs::read_dir(&dest).unwrap().any(|e| e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".forge-replace-")));
+    }
+
+    #[test]
+    fn paste_rejects_self_replace_and_directory_replace() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = root.join("a.txt");
+        fs::write(&source, "safe").unwrap();
+        assert!(paste_many(root, &[source.clone()], root, true, ConflictPolicy::Replace).is_err());
+        assert_eq!(fs::read_to_string(&source).unwrap(), "safe");
+        paste_many(
+            root,
+            &[source.clone()],
+            root,
+            true,
+            ConflictPolicy::KeepBoth,
+        )
+        .unwrap();
+        assert!(root.join("a (1).txt").exists());
+        let folder = root.join("folder");
+        let dest = root.join("dest");
+        fs::create_dir(&folder).unwrap();
+        fs::create_dir_all(dest.join("folder")).unwrap();
+        assert!(paste_many(
+            root,
+            &[folder.clone()],
+            &dest,
+            true,
+            ConflictPolicy::Replace
+        )
+        .is_err());
+        assert!(paste_many(
+            root,
+            &[folder.clone()],
+            &folder,
+            true,
+            ConflictPolicy::KeepBoth
+        )
+        .is_err());
+        assert!(folder.exists());
+    }
+
+    #[test]
+    fn trash_rejects_workspace_and_git_before_touching_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let safe = root.join("file");
+        fs::write(&safe, "safe").unwrap();
+        fs::create_dir(root.join(".git")).unwrap();
+        assert!(operate(
+            root,
+            FileOperation::Trash(vec![safe.clone(), root.join(".git")])
+        )
+        .is_err());
+        assert!(safe.exists());
+        assert!(root.join(".git").exists());
     }
 }

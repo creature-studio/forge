@@ -15,6 +15,7 @@ ignore = { workspace = true }
 regex = { workspace = true }
 anyhow = { workspace = true }
 tempfile = { workspace = true }
+trash = "5"
 
 [dev-dependencies]
 tempfile = { workspace = true }
