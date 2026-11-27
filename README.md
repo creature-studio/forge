@@ -1,10 +1,10 @@
-# Forge TUI
+# Forge TUI — Terminal File Manager & Git Workspace
 
-**A modern terminal workspace for files, code, and Git.**
+**Open-source terminal file manager with Git integration, visual diffs, and full mouse and keyboard interaction.**
 
-Forge TUI is an open-source terminal file manager, Git client and integrated terminal built in Rust, with mouse and keyboard control on Linux, macOS and Windows. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
+Forge TUI by Creature Studio (`creature-studio/forge`) is a Rust and Ratatui application for Linux, macOS and native Windows. It combines a TUI file manager, Git client, code search and integrated terminal. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
 
-[Website](https://forge.runs-on.dev/en/) · [Practical guide](https://forge.runs-on.dev/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://forge.runs-on.dev/) · [Issues](https://github.com/creature-studio/forge/issues)
+[Official website](https://forge.runs-on.dev/en/) · [Practical guide](https://forge.runs-on.dev/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://forge.runs-on.dev/) · [Issues](https://github.com/creature-studio/forge/issues)
 
 ![Forge TUI live terminal demo: browse files, fuzzy search, review Git diffs, stage changes, and run tests in the integrated terminal](docs/assets/forge-tour.gif)
 
@@ -21,7 +21,7 @@ When working over SSH, in tmux, or in a local terminal, switching between a file
 - **Manage the complete Git loop.** Stage/unstage, commit, push/pull, branches, stash, and worktrees.
 - **Make it yours.** Themes, color-depth options, customizable shortcuts, and Unicode/ASCII/Nerd Font icon modes.
 
-Forge is intentionally **both** a file workspace and a Git interface. Tools such as lazygit focus on Git; ranger/lf/nnn focus on files. Forge's goal is to connect those everyday workflows, not replace your favorite editor or the Git CLI.
+Forge is intentionally **both** a file workspace and a Git interface. If you are comparing terminal development tools, read our [Lazygit comparison](https://forge.runs-on.dev/en/compare/lazygit/) and [Yazi comparison](https://forge.runs-on.dev/en/compare/yazi/). Forge connects these everyday workflows rather than trying to replace your favorite editor or every Git CLI operation.
 
 ## Install
 
@@ -114,6 +114,7 @@ The executable is produced at `target/release/forge`.
 - [中文操作文档](https://forge.runs-on.dev/guide/)
 - [发布说明 / Release notes](https://forge.runs-on.dev/releases/)
 - [Practical guide: file browsing, Git staging, comparison and limits](https://forge.runs-on.dev/en/guide/)
+- [Engineering: bounded filesystem events in a Rust Git TUI](https://forge.runs-on.dev/en/engineering/git-refresh/)
 - [Detailed usage and developer reference](docs/usage-reference.md)
 - [Releases and self-update](docs/releasing.md)
 - [Themes](docs/themes.md)

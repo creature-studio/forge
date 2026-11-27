@@ -20,7 +20,16 @@ const canonical = `https://forge.runs-on.dev${root}${path.replace(/^\//, '')}`;
 const structured = kind === 'home' ? {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
+  '@id': 'https://forge.runs-on.dev/#forge-tui',
   name: 'Forge TUI',
+  alternateName: 'Creature Studio Forge',
+  sameAs: ['https://github.com/creature-studio/forge'],
+  publisher: {
+    '@type': 'Organization',
+    '@id': 'https://github.com/creature-studio#organization',
+    name: 'Creature Studio',
+    url: 'https://github.com/creature-studio',
+  },
   applicationCategory: 'DeveloperApplication',
   operatingSystem: 'Linux, macOS, Windows',
   softwareVersion: FORGE_VERSION,
@@ -145,7 +154,7 @@ const localTranslatedPath = hasTranslation ? translatedUrl.replace('https://forg
         <div class="footer-links">
           <a href={`${english ? enRoot : zhRoot}guide/`}>{english ? 'Documentation' : '操作文档'}</a>
           <a href={`${english ? enRoot : zhRoot}releases/`}>{english ? 'Release notes' : '发布说明'}</a>
-          <a href="https://github.com/creature-studio/forge">GitHub</a>
+          <a href="https://github.com/creature-studio/forge">{english ? "Forge TUI on GitHub" : "Forge TUI 官方 GitHub 仓库"}</a>
           <a href="https://github.com/creature-studio/forge/issues">{english ? 'Issues' : '问题反馈'}</a>
         </div>
       </div>
