@@ -130,7 +130,7 @@ When the Shell has focus, **Esc and normal text belong to the Shell**. Use `Ctrl
 
 ## 13. Mouse hover and compact layout
 
-[![Activity Bar hover tooltip showing icon explanation and shortcut](/assets/guide/hover.webp)](/assets/guide/hover.webp "View full-size screenshot")
+[![File-tree context menu showing mouse-accessible file actions](/assets/guide/hover.webp)](/assets/guide/hover.webp "View full-size screenshot")
 
 Activity Bar icons, Terminal controls and Git Diff's `[Open file]` display tooltips on mouse hover. Hover is **presentation-only**: movement must never change active panels or run a command. The sidebar divider can be dragged to resize; scrollbars support quick positioning. Narrow terminals switch to a single-pane-oriented workflow so use `Tab` to alternate list and preview. Built-in Unicode icons work without Nerd Font; optional Nerd or ASCII mode is available.
 

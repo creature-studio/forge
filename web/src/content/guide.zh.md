@@ -262,7 +262,7 @@ Terminal 有焦点时，普通按键以及 `Esc` 通常先交给 Shell 或 Shell
 
 ## 17. 鼠标、Hover 与窄屏布局
 
-[![Forge Activity Bar 的 Hover 说明与快捷键提示](/assets/guide/hover.webp)](/assets/guide/hover.webp "打开高清截图")
+[![Forge 文件树右键菜单，显示可通过鼠标执行的文件操作](/assets/guide/hover.webp)](/assets/guide/hover.webp "打开高清截图")
 
 鼠标移到 Activity Bar 图标、Terminal 标签栏按钮和 Git Diff 标题栏的 `[Open file]` 时，会弹出统一样式的说明和快捷键提示。**Hover 只显示提示，不会激活面板**；只有明确点击才执行动作。点击和 Hover 复用相同的控件命中区域。
 
