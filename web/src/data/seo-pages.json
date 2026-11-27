@@ -1,27 +1,31 @@
 [
   {
     "slug": "compare/lazygit",
-    "title": "Forge TUI vs Lazygit: Files and Git in One Terminal",
-    "description": "Compare Forge TUI and Lazygit for staging, reviewing diffs, navigating project files and running commands.",
+    "title": "Lazygit Alternative for Files and Git | Forge TUI",
+    "description": "Looking for a Lazygit alternative with a file tree, code search and embedded terminal? Compare workflows and choose a Git TUI for your project.",
     "image": "git-diff.webp",
     "alt": "Side-by-side diff in Forge Git panel",
-    "lead": "Lazygit is a dedicated Git interface. Forge TUI combines Git with a file tree, code preview, search and an embedded terminal.",
+    "lead": "Forge TUI is a Lazygit alternative for developers who need file navigation and code review alongside Git operations. Lazygit is a dedicated terminal Git UI; Forge brings a repository file tree, previews, search and shell tabs into the same workspace.",
     "sections": [
       [
-        "When to choose Lazygit",
-        "If your editor and file navigation already work well, Lazygit is a focused interface for Git operations. Its Git-specific workflows may be more familiar to experienced users."
+        "Choose based on your workflow",
+        "Choose Lazygit when the main job is Git and you already have a preferred editor or file manager. Consider Forge when a review sends you from a diff to another source file, then to a shell for a test. Forge keeps those activities in one interface rather than claiming to replace every Lazygit feature."
       ],
       [
-        "When to choose Forge",
-        "If you repeatedly move from a changed file to related source files, Forge lets you browse the tree, search for references, inspect full-file context and stage changes in one workspace."
+        "Review a change with source context",
+        "Open a repository with forge. Select a changed file in Git, inspect the full-file diff, and switch to Files to read neighboring implementation or search for callers. Return to Git to stage or unstage the intended changes. This is useful for a patch spanning several modules."
       ],
       [
-        "Try a review workflow",
-        "Launch forge in a repository. Open Git with F2, inspect a changed file, switch to Files with F1 to read related code, then return to Git to stage and commit. Open the terminal with F8 to run tests. Check F4 for effective shortcuts."
+        "Run tests alongside the review",
+        "Use an embedded terminal tab for project commands while keeping the file tree and Git review nearby. Run cargo test in a Rust project, or the existing test command in another project. After reviewing the result, inspect staged changes before committing."
       ],
       [
-        "Limits",
-        "Forge is not a drop-in clone of Lazygit and does not promise parity for advanced Git operations. The Git CLI remains available."
+        "Mouse and platform support",
+        "Forge offers clicks, context menus, resizable panels, scrollbars and keyboard shortcuts. Native Windows x64, Linux and macOS release packages are available. Check the current guide for effective controls; terminal behavior can vary."
+      ],
+      [
+        "When to keep Lazygit",
+        "Forge is not a drop-in clone of Lazygit. Advanced Git workflows may be better handled by a dedicated Git client or the Git CLI. Compare both on a real repository before switching; no comparative performance claim is made here."
       ]
     ],
     "source": "https://github.com/jesseduffield/lazygit",
@@ -29,27 +33,31 @@
   },
   {
     "slug": "compare/yazi",
-    "title": "Forge TUI vs Yazi: Terminal File Manager and Git Workspace",
-    "description": "Compare Yazi and Forge TUI for terminal file browsing, previews, mouse interaction and Git review.",
+    "title": "Yazi Alternative for Git-Focused Workflows | Forge TUI",
+    "description": "Compare Yazi and Forge TUI for file browsing, previews, mouse support and Git review. Choose a terminal file manager for your workflow.",
     "image": "files.webp",
     "alt": "Forge file tree with syntax-highlighted code preview",
-    "lead": "Yazi focuses on terminal file management. Forge TUI focuses on navigating a source repository and reviewing its Git changes.",
+    "lead": "If you are looking for a Yazi alternative because you spend most of your time reviewing code changes, Forge TUI offers a repository-focused workspace with file navigation, Git diffs, search and embedded terminals. Yazi remains a capable general-purpose terminal file manager.",
     "sections": [
       [
-        "File-manager-first workflow",
-        "Yazi is a terminal file manager with its own customization ecosystem. Choose it when general file management rather than source review is the priority."
+        "Choose Yazi for general file management",
+        "Yazi supports previews, bulk file operations, mouse interaction, Git integration and an extensible plugin ecosystem. Choose it when broad file-management capabilities and customization are the priority. Consult its upstream documentation for individual plugins and platform requirements."
       ],
       [
-        "Repository-first workflow",
-        "Forge provides a project tree, code previews, content search, lightweight editing, Git status, diffs and staging. Mouse users can resize panes and use context menus."
+        "Choose Forge for repository review",
+        "Forge connects source navigation and Git review. Inspect syntax-highlighted files, search across the project, open a changed file as a visual diff, stage changes and browse commit history. Run repository commands in the embedded shell."
       ],
       [
-        "Try both in a repository",
-        "Locate a modified source file in your preferred file manager. In Forge, open the same project with forge, locate the file, switch to Git and review the changes before committing."
+        "Try a repository-first workflow",
+        "Open a repository with uncommitted changes. In Forge, find a source file, inspect its preview, then switch to Git and review the corresponding diff. Search for related code and run the relevant test command in Terminal. Stage only changes you intend. This helps evaluate whether the integrated workflow reduces tool switching."
       ],
       [
-        "Limits",
-        "Forge does not promise Yazi plugin compatibility or an equivalent file-management ecosystem. The tools can complement each other."
+        "Mouse and platform support",
+        "Both tools offer mouse interaction. Forge provides clickable panels, context menus, draggable dividers and scrollbars. Native Windows x64 builds are available alongside Linux and macOS releases. Evaluate input and clipboard behavior in your own terminal."
+      ],
+      [
+        "What Forge does not replace",
+        "Forge does not claim Yazi plugin compatibility, equivalent support for every preview format, or superiority in general file operations. If you rely on Yazi-specific plugins or advanced file management, keep Yazi and use Forge for repository review when helpful."
       ]
     ],
     "source": "https://github.com/sxyazi/yazi",
@@ -113,12 +121,16 @@
   },
   {
     "slug": "features/git",
-    "title": "Terminal Git Client with Visual Diffs | Forge TUI",
-    "description": "Review Git status, side-by-side diffs, staging, commits, history, branches and stashes in a terminal Git client.",
+    "title": "Terminal Git Client for Windows, Linux and macOS | Forge TUI",
+    "description": "Use Forge as a terminal Git client with visual diffs, staging, commit history and file navigation. Native Windows x64, Linux and macOS builds.",
     "image": "git-stage.webp",
     "alt": "Forge Git staging interface",
-    "lead": "Forge TUI connects Git review to project navigation. Work with changed files without switching to a separate desktop application.",
+    "lead": "Forge is an open-source terminal Git client that combines visual diffs and staging with the project file tree, search and embedded shells. Native Windows x64 packages are available, so Windows users do not need WSL to run Forge.",
     "sections": [
+      [
+        "Install on Windows Terminal or PowerShell",
+        "Install Git for Windows, then use the Windows PowerShell installer on the Forge homepage or download the Windows x64 ZIP from GitHub Releases. The installer verifies the release checksum and adds Forge to your user PATH. Open a new terminal, change into a repository and run forge. WSL users can install the Linux build separately."
+      ],
       [
         "Review before staging",
         "Open Git with F2, select a changed file and inspect its diff with surrounding code. Navigate to Files to examine other source files and use search to locate references."
@@ -134,6 +146,10 @@
       [
         "Who it is for",
         "Useful for developers working over SSH, in WSL or locally who want visual Git review and file access in one TUI. Forge does not replace every Git command."
+      ],
+      [
+        "Review AI-generated changes before committing",
+        "If you run a coding assistant in a shell, inspect its changes in the Git panel before staging. Use the file preview and content search to read surrounding code, then run the project test command in Terminal. Forge provides the review workspace; the coding assistant itself is installed and run separately."
       ]
     ],
     "source": "",
@@ -141,11 +157,11 @@
   },
   {
     "slug": "features/file-manager",
-    "title": "Terminal File Manager with Mouse Support | Forge TUI",
-    "description": "Browse source files, preview code and Markdown, search content, resize panels and navigate with mouse or keyboard.",
+    "title": "Terminal File Manager with Mouse Support and Git | Forge TUI",
+    "description": "A terminal file manager with mouse support, Git integration, code previews and content search. Browse repositories on Windows, Linux and macOS.",
     "image": "files.webp",
     "alt": "Forge directory tree and code preview",
-    "lead": "Forge TUI is a repository-oriented terminal file manager for developers who want both keyboard navigation and pointer interaction.",
+    "lead": "Forge TUI is a terminal file manager with mouse support and Git integration for developers working inside source repositories. Its project tree, code preview, search and Git panel share a single workspace.",
     "sections": [
       [
         "Browse and preview",
@@ -162,6 +178,10 @@
       [
         "Connect files with Git",
         "Switch to Git to inspect changes to the same repository. Forge is designed for developer workflows rather than replacing every general-purpose file manager."
+      ],
+      [
+        "Use Forge on native Windows",
+        "The Windows x64 release runs in a modern Windows terminal without WSL. Use the same project-oriented file browsing and Git review workflow. Git must be installed separately for Git operations; the host terminal controls supported mouse reporting and clipboard features."
       ]
     ],
     "source": "",
