@@ -7,7 +7,7 @@ const { lang } = Astro.props;
 const en = lang === 'en';
 const sortedPosts = [...posts].sort((a, b) => b.published.localeCompare(a.published));
 ---
-<Base title={en ? 'Engineering Blog | Forge TUI' : '技术博客 | Forge TUI'} description={en ? 'Engineering notes from Forge TUI: Rust terminal interfaces, Git workflows, architecture and practical development.' : 'Forge TUI 技术博客：Rust 终端界面、Git 工作流、架构设计与实际开发经验。'} lang={lang} path={en ? '/en/blog/' : '/blog/'} kind="collection">
+<Base title={en ? 'Engineering Blog | Forge TUI' : '技术博客 | Forge TUI'} description={en ? 'Engineering notes from Forge TUI: Rust terminal interfaces, Git workflows, architecture and practical development.' : 'Forge TUI 技术博客：基于真实源码与测试记录，分享 Rust 终端界面、Git 工作流、架构设计、中文宽字符渲染和开发经验，帮助开发者理解开源终端工作区的实现。'} lang={lang} path={en ? '/en/blog/' : '/blog/'} kind="collection">
   <main id="main" class="shell blog-page">
     <header class="blog-heading">
       <span class="blog-eyebrow">FORGE / ENGINEERING</span>

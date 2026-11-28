@@ -15,7 +15,7 @@
     "slug": "terminal-unicode-wrapping",
     "published": "2026-11-27",
     "author": "Creature Studio",
-    "seoTitle": "Fixing wide Unicode character wrapping in a Rust TUI | Forge TUI",
+    "seoTitle": "Fixing Unicode wrapping in a Rust TUI | Forge TUI",
     "description": "A source-backed explanation of a CJK rendering boundary bug in Forge, safe grapheme reflow, visual-row mapping and real-PTY regression tests."
   },
   {
