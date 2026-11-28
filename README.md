@@ -1,8 +1,8 @@
-# Forge TUI — Terminal File Manager & Git Workspace
+# Forge TUI — Your project. One terminal.
 
-**Open-source terminal file manager with Git integration, visual diffs, and full mouse and keyboard interaction.**
+**A unified terminal workspace for files, Git, code, and shell.**
 
-Forge TUI by Creature Studio (`creature-studio/forge`) is a Rust and Ratatui application for Linux, macOS and native Windows. It combines a TUI file manager, Git client, code search and integrated terminal. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
+Forge TUI by Creature Studio (`creature-studio/forge`) is an open-source terminal workspace built with Rust and Ratatui for Linux, macOS and native Windows. It combines a terminal file manager, Git client, code search and integrated terminal. Browse files, preview and edit code, review full-file diffs, stage changes, and manage branches, history, and stashes without switching between tools.
 
 [Official website](https://forge.runs-on.dev/en/) · [Practical guide](https://forge.runs-on.dev/en/guide/) · [Download](https://github.com/creature-studio/forge/releases/latest) · [中文介绍](https://forge.runs-on.dev/) · [Issues](https://github.com/creature-studio/forge/issues)
 
@@ -12,7 +12,7 @@ Forge TUI by Creature Studio (`creature-studio/forge`) is a Rust and Ratatui app
 
 ## Why Forge?
 
-When working over SSH, in tmux, or in a local terminal, switching between a file manager, editor, and Git client interrupts your flow. Forge keeps your files and Git changes in one workspace.
+When working over SSH, in tmux, or in a local terminal, switching between a file manager, editor, and Git client interrupts your flow. Forge keeps files, Git changes, source search and shell sessions in one workspace so you can follow a project task without repeatedly switching tools.
 
 - **Files + Git, together.** Browse a tree with Git status, then switch to changes and staged files in the same app.
 - **Review before you commit.** Side-by-side diffs, full-file context, hunk/line staging, commit history and blame.
@@ -21,7 +21,7 @@ When working over SSH, in tmux, or in a local terminal, switching between a file
 - **Manage the complete Git loop.** Stage/unstage, commit, push/pull, branches, stash, and worktrees.
 - **Make it yours.** Themes, color-depth options, customizable shortcuts, and Unicode/ASCII/Nerd Font icon modes.
 
-Forge is intentionally **both** a file workspace and a Git interface. If you are comparing terminal development tools, read our [Lazygit comparison](https://forge.runs-on.dev/en/compare/lazygit/) and [Yazi comparison](https://forge.runs-on.dev/en/compare/yazi/). Forge connects these everyday workflows rather than trying to replace your favorite editor or every Git CLI operation.
+Forge is a **terminal workspace**, not a replacement for every specialized tool. If you are comparing terminal development tools, read our [Lazygit comparison](https://forge.runs-on.dev/en/compare/lazygit/) and [Yazi comparison](https://forge.runs-on.dev/en/compare/yazi/). Forge connects these everyday workflows rather than trying to replace your favorite editor or every Git CLI operation.
 
 ## Install
 
